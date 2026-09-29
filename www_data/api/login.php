@@ -77,7 +77,7 @@ try {
 				unset($user_account["totp_secret"]);
 				unset($_POST["code"]);
 				// AUTH SUCCESS
-				$output["outcome"] = sec_auth_succes($db, $user_account);
+				$output["auth_token"] = sec_auth_succes($db, $user_account);
 				$output["outcome"] = 101;
 				$output["no_user_account"] = $user_account["no_user_account"];
 			}

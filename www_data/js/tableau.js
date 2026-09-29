@@ -366,7 +366,7 @@ moncycle_app = {
 	cycle_option : function (c_date_str, c_date_fin_str, discri) {
 		let id_buts = c_date_str.replace("-", "_").replace("-", "_");
 		let c_action = $(`<div class='cycle_options c_options_${c_date_str}' style='display:none'></div>`);
-		c_action.append(`<a href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=nfp'><button>🚀 export NFP</button></a> `);
+		c_action.append(`<a href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=nfp'><button style='display:none'>🚀 export NFP</button></a> `);
 		c_action.append(`<a href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=csv'><button>&#x1F522; export CSV</button></a> `);
 		c_action.append(`<a id='pdf_but_${id_buts}_${discri}' href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=pdf&anonymous=0'><button>&#x1F4C4; export PDF</button></a> `);
 		let anonymiser_checkbox = $(`<input type='checkbox' value='1' id='anonymous_${id_buts}_${discri}' name="privacy" />`);

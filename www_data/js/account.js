@@ -114,7 +114,8 @@ $(document).ready(function(){
 			let html_form = $(this).closest('form');
 			let name = html_form.find(".del_data_name").val();
 			let count = parseInt(html_form.find(".del_data_count").val());
-			if (count>0 && !confirm(`Êtes-vous sûr de vouloir supprimer la description « ${name} » ?\n\nLes jours auxquels ${name} a été associé perdront cette information de manière irréversible. ${name} est actuellement associé à ${count} jours différents.`)) return;
+			if (count>1 && !confirm(`Êtes-vous sûr de vouloir supprimer la description « ${name} » ?\n\nLes jours auxquels ${name} a été associé perdront cette information de manière irréversible. La description « ${name} » est actuellement associé à ${count} dates différentes.`)) return;
+			else if (count>0 && !confirm(`Êtes-vous sûr de vouloir supprimer la description « ${name} » ?\n\nLes jours auxquels ${name} a été associé perdront cette information de manière irréversible. La description « ${name} » est actuellement associé à une date.`)) return;
 			$("#desc_net_stat").html('⏳');
 			$.ajax({type : 'DELETE', "url" : "api/description", "data" : $.param(html_form.serializeArray())}).done(function(ret){
 				$("#desc_net_stat").html('');

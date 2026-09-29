@@ -179,7 +179,7 @@ elseif($_SERVER['REQUEST_METHOD'] == "DELETE" && isset($_DELETE['date']) && preg
 }
 
 else {
-	$err = "date and action missing";
+	$err = "date and/or action missing";
 }
 
 $db = null;
