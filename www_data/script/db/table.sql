@@ -11,6 +11,7 @@ CREATE TABLE `user_account` (
   `totp_state` tinyint(1) unsigned DEFAULT NULL,
   `totp_secret` varchar(255) DEFAULT NULL,
   `nb_connection_attempts` smallint(5) unsigned NOT NULL DEFAULT 0,
+  `last_failed_attempt` timestamp NULL DEFAULT NULL,
   `timeline_asc` tinyint(1) unsigned NOT NULL DEFAULT 1,
   `sponsor` tinyint(1) unsigned NOT NULL DEFAULT 0,
   `research` tinyint(1) unsigned NOT NULL DEFAULT 0,
@@ -68,6 +69,14 @@ CREATE TABLE `auth_token` (
   KEY `no_user_account` (`no_user_account`),
   CONSTRAINT `day_timeline_ibfk_2` FOREIGN KEY (`no_user_account`) REFERENCES `user_account` (`no_user_account`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE `login_attempt_ip` (
+  `no_login_attempt_ip` mediumint(8) unsigned NOT NULL AUTO_INCREMENT,
+  `ip_address` varchar(45) COLLATE utf8mb4_bin NOT NULL,
+  `date_attempt` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`no_login_attempt_ip`),
+  KEY `ip_address_date_attempt` (`ip_address`,`date_attempt`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 CREATE TABLE `description` (
   `no_description` mediumint(8) unsigned NOT NULL AUTO_INCREMENT,

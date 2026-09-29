@@ -115,3 +115,15 @@ ALTER TABLE `user_account` ADD `last_write_db` TIMESTAMP NULL  DEFAULT CURRENT_T
 ALTER TABLE `auth_token` ADD `last_write_db` TIMESTAMP NULL  DEFAULT CURRENT_TIMESTAMP  ON UPDATE CURRENT_TIMESTAMP;
 
 ALTER TABLE `user_account` ADD `last_write_client_UTC` timestamp NULL AFTER `register_comment`;
+
+ALTER TABLE `user_account`
+ADD `last_failed_attempt` timestamp NULL DEFAULT NULL AFTER `nb_connection_attempts`;
+
+CREATE TABLE `login_attempt_ip` (
+  `no_login_attempt_ip` mediumint(8) unsigned NOT NULL AUTO_INCREMENT,
+  `ip_address` varchar(45) COLLATE utf8mb4_bin NOT NULL,
+  `date_attempt` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`no_login_attempt_ip`),
+  KEY `ip_address_date_attempt` (`ip_address`,`date_attempt`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+

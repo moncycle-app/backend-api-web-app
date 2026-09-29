@@ -85,6 +85,12 @@ paths:
           description: "Incorrect password or non-existent account."
         6 :
           description: "Missing data."
+        7 :
+          description: "Missing or incorrect captcha (required after repeated failed attempts on this account; see captcha_required in the response)."
+        8 :
+          description: "Account temporarily locked after too many failed attempts. A correct password (and TOTP if enabled) still succeeds."
+        9 :
+          description: "Too many attempts from this network (IP-based throttling), try again later."
         100 :
           description: "Account successfuly authentificated (password only)."
         101 :
@@ -217,11 +223,14 @@ paths:
         - HTTPtoken: []
 
 
-  /register_captcha:
+  /captcha:
     get:
       tags:
         - account
-      summary: create a captcha for account creation (this API enpoint should be called before 'register' endpoint)
+      summary: >-
+        create/refresh a captcha challenge image tied to the visitor's MONCYCLEAPP_TOKEN cookie.
+        Called before 'register', and before 'login' once its response comes back with
+        captcha_required = true.
       responses:
         200:
           description: OK
@@ -955,6 +964,12 @@ components:
         code:
           type: integer
           description: One time pass code (TOTP)
+        captcha:
+          type: string
+          description: >-
+            Answer to the image served by /captcha (same challenge/cookie mechanism
+            as account registration). Only required once the response to a previous /login
+            call came back with captcha_required = true.
 
 
   securitySchemes:

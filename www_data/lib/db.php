@@ -193,14 +193,46 @@ function db_update_user_account_connecte($db, $no_user_account){
 	return $statement->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// increments the failed-attempt counter, but restarts it at 1 instead of compounding when the
+// last failure is old (60 MINUTE, must match LOGIN_ATTEMPTS_DECAY_MINUTES in lib/sec.php)
 function db_update_co_echoue($db, $mail){
-	static $sql ="update user_account set nb_connection_attempts = nb_connection_attempts + 1 where email1 like :email1";
+	static $sql ="update user_account set nb_connection_attempts = IF(last_failed_attempt IS NULL OR last_failed_attempt < NOW() - INTERVAL 60 MINUTE, 1, nb_connection_attempts + 1), last_failed_attempt = now() where email1 like :email1";
 
 	$statement = $db->prepare($sql);
 	$statement->bindValue(":email1", $mail, PDO::PARAM_STR);
 	$statement->execute();
 
 	return $statement->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function db_insert_login_attempt_ip($db, $ip_address){
+	static $sql = "insert into login_attempt_ip (ip_address) values (:ip_address)";
+
+	static $statement = $db->prepare($sql);
+	$statement->bindValue(":ip_address", $ip_address, PDO::PARAM_STR);
+	$statement->execute();
+
+	return $statement->rowCount();
+}
+
+// number of failed login attempts recorded from this IP in the last 15 minutes, across all accounts
+function db_count_login_attempt_ip($db, $ip_address){
+	static $sql = "select count(*) from login_attempt_ip where ip_address = :ip_address and date_attempt > NOW() - INTERVAL 15 MINUTE";
+
+	static $statement = $db->prepare($sql);
+	$statement->bindValue(":ip_address", $ip_address, PDO::PARAM_STR);
+	$statement->execute();
+
+	return intval($statement->fetchColumn());
+}
+
+function db_delete_vieux_login_attempt_ip($db) {
+	static $sql = "DELETE FROM login_attempt_ip WHERE date_attempt < NOW() - INTERVAL 1 DAY";
+
+	static $statement = $db->prepare($sql);
+	$statement->execute();
+
+	return $statement->rowCount();
 }
 
 function db_select_user_account_existe($db, $mail) {

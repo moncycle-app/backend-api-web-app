@@ -54,6 +54,12 @@
 			<label for="i_code">Code:</label><br />
 			<input name="code" id="i_code" type="number" placeholder="authentification multifacteur (si activée)" value="" /><br />
 			<br />
+			<div id="captcha_wrapper" style="display:none">
+				<label for="i_captcha">Captcha:</label><br />
+				<input name="captcha" id="i_captcha" type="text" maxlength="6" placeholder="Entrer les lettres ou chiffres affichés ci-dessous." /><br />
+				<img src="api/captcha.php" class="captcha" id="l_captcha" /><br />
+				<br />
+			</div>
 			<input type="submit" value="Connexion 🔑" id="connexion_but"/></form>
 			<br /><br /><br />
 			<center><a class="register_commente" id="but_demo_bill" href="/auth">compte de démo <b>Billings</b> 🥸</a></center>
@@ -97,14 +103,24 @@
 								2 : "E-mail et/ou mot de passe manquant.",
 								3 : "Compte désactivé.",
 								4 : "Bon mot de passe, mais le code TOTP est incorrect ou manquant.",
-								5 : "Mauvais mot de passe ou compte inexistant."
+								5 : "Mauvais mot de passe ou compte inexistant.",
+								7 : "Captcha manquant ou incorrect.",
+								8 : "Compte temporairement bloqué après trop de tentatives échouées, réessayez plus tard.",
+								9 : "Trop de tentatives depuis ce réseau, réessayez plus tard."
 							};
+							if (ret.captcha_required) $("#captcha_wrapper").show();
 							if (ret.outcome >= 100) {
 								localStorage.auth = ret.no_user_account;
 								window.location.replace('..');
 							}
 							else if (ret.outcome in return_codes) $("#message_err").html(return_codes[ret.outcome] + "<br />");
 							else $("#message_err").html(ret.message + "<br />");
+
+							// the captcha is single-use server-side, refresh it whenever it was shown for this attempt
+							if ($("#captcha_wrapper").is(":visible")) {
+								$("#l_captcha").attr("src", "api/captcha.php?v=" + new Date().getTime());
+								$("#i_captcha").val('');
+							}
 						});
 					});
 					$("#reset_form").on("submit", function(event) {

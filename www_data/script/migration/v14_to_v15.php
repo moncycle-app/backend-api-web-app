@@ -9,6 +9,7 @@
 
 require_once "../../config.php";
 require_once "../../lib/db.php";
+require_once "../../lib/sec.php";
 
 header("Content-Type: text/plain");
 
@@ -160,6 +161,41 @@ try {
         }
 
         print(PHP_EOL);
+    }
+
+    print("DONE !");
+    print(PHP_EOL);
+    print("-----");
+    print(PHP_EOL);
+    print(PHP_EOL);
+    print("migrating auth tokens to hashed storage ...");
+    print(PHP_EOL);
+
+    // auth_token_str used to be stored in plaintext. Sessions belong to a user account
+    // (no_user_account IS NOT NULL); captcha challenges reuse the same column but have
+    // no_user_account NULL and are left alone, since their lookup (db_select_auth_token_captcha)
+    // still matches on the plain value. Re-running this script is safe: a row already
+    // hashed has strlen 64 (sha256 hex), not 256 (sec_password_aleatoire(256) output), so
+    // it gets skipped on a second pass.
+    $statement_select_tokens = $db->prepare("SELECT no_auth_token, auth_token_str FROM `auth_token` WHERE no_user_account IS NOT NULL");
+    $statement_hash_token = $db->prepare("UPDATE `auth_token` SET `auth_token_str` = :hashed_token WHERE `no_auth_token` = :no_auth_token");
+
+    $statement_select_tokens->execute();
+    $tokens_to_migrate = $statement_select_tokens->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($tokens_to_migrate as $token_row) {
+        if (strlen($token_row["auth_token_str"]) != 256) {
+            print("> auth_token " . $token_row["no_auth_token"] . " already migrated, skipping");
+            print(PHP_EOL);
+            continue;
+        }
+
+        print("> hashing auth_token " . $token_row["no_auth_token"]);
+        print(PHP_EOL);
+
+        $statement_hash_token->bindValue(":hashed_token", sec_hash_token($token_row["auth_token_str"]), PDO::PARAM_STR);
+        $statement_hash_token->bindValue(":no_auth_token", $token_row["no_auth_token"], PDO::PARAM_INT);
+        $statement_hash_token->execute();
     }
 
     print("DONE !");

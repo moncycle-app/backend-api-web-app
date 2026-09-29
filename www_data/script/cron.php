@@ -118,6 +118,10 @@ $ret = db_delete_vieux_auth_token($db);
 echo $ret . " vieux jettons supprimés";
 echo PHP_EOL;
 
+$ret = db_delete_vieux_login_attempt_ip($db);
+echo $ret . " vieilles tentatives de connexion (IP) supprimées";
+echo PHP_EOL;
+
 // RESET DES COMPTEURS DE STAT
 
 db_update_reset_key_value($db, "pub_visite_jour");
