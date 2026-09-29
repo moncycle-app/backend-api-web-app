@@ -82,7 +82,7 @@ foreach($cycles as $cyc) {
 
 			fclose($csv);
 
-			echo "cycle de $nb_j jours envoyé à {$cyc["email1"]} (et {$cyc["email2"]}).";
+			echo "cycle of $nb_j days sent to {$cyc["email1"]} (and {$cyc["email2"]}).";
 			echo PHP_EOL;
 		}
 	}
@@ -108,35 +108,67 @@ foreach($user_account as $com) {
 
 	db_update_is_inactive($db, $com["no_user_account"], 1);
 
-	echo "relance envoyée à {$com["email1"]} (et {$com["email2"]})";
+	echo "reminder sent to {$com["email1"]} (and {$com["email2"]})";
+	echo PHP_EOL;
+}
+
+// RGPD: WARN THEN DELETE ACCOUNTS INACTIVE FOR ACCOUNT_INACTIVITY_DELETE_YEARS
+
+$user_account_to_warn = db_select_user_account_to_warn_before_deletion($db, ACCOUNT_INACTIVITY_DELETE_YEARS, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE);
+
+foreach($user_account_to_warn as $account) {
+
+	$mail = mail_init();
+
+	$mail->addAddress($account["email1"], $account["email1"]);
+	if (!empty($account["email2"])) $mail->addAddress($account["email2"], $account["email2"]);
+
+	$mail->isHTML(true);
+	$mail->Subject = "Votre compte moncycle.app va être supprimé dans " . ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE . " jours";
+	$mail->Body = mail_body_account_deletion_warning($account["name"], $account["email1"], ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE);
+	$mail->AltBody = "Faute d'activité, votre compte moncycle.app sera supprimé dans " . ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE . " jours. Connectez-vous pour le conserver.";
+
+	$mail->send();
+
+	echo "deletion warning sent to {$account["email1"]} (and {$account["email2"]})";
+	echo PHP_EOL;
+}
+
+$user_account_to_delete = db_select_user_account_to_delete($db, ACCOUNT_INACTIVITY_DELETE_YEARS);
+
+foreach($user_account_to_delete as $account) {
+
+	db_delete_user_account($db, $account["no_user_account"]);
+
+	echo "account {$account["email1"]} deleted (" . ACCOUNT_INACTIVITY_DELETE_YEARS . " years without activity, RGPD)";
 	echo PHP_EOL;
 }
 
 // SUPPR DES TOKENS EXPIRES
 
 $ret = db_delete_vieux_auth_token($db);
-echo $ret . " vieux jettons supprimés";
+echo $ret . " old tokens deleted";
 echo PHP_EOL;
 
 $ret = db_delete_vieux_login_attempt_ip($db);
-echo $ret . " vieilles tentatives de connexion (IP) supprimées";
+echo $ret . " old login attempts (IP) deleted";
 echo PHP_EOL;
 
 // RESET DES COMPTEURS DE STAT
 
 db_update_reset_key_value($db, "pub_visite_jour");
-echo "stats du jour réinitialisées";
+echo "daily stats reset";
 
 $auj = getdate();
 
 if ($auj["wday"]==0) {
 	db_update_reset_key_value($db, "pub_visite_hebdo");
-	echo ", stats de la semaine réinitialisées";
+	echo ", weekly stats reset";
 }
 
 if ($auj["mday"]==1) {
 	db_update_reset_key_value($db, "pub_visite_mensuel");
-	echo ", stats du mois réinitialisées";
+	echo ", monthly stats reset";
 }
 
 echo PHP_EOL;

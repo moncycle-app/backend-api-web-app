@@ -106,4 +106,28 @@ function mail_body_relance ($name, $mail1) {
 	HTML;
 }
 
+function mail_body_account_deletion_warning ($name, $mail1, $jours) {
+	$app_url_var = APP_URL;
+	return <<<HTML
+	<div style='font-family: sans-serif;'>Bonjour {$name},<br />
+	<br />
+	Nous n'avons constaté aucune activité sur votre compte MONCYCLE.APP depuis longtemps.<br />
+	<br />
+	Conformément à notre politique de conservation des données (RGPD), votre compte et toutes les données associées seront <b>définitivement supprimés dans {$jours} jours</b> si aucune activité n'est détectée d'ici là.<br />
+	<br />
+	Pour conserver votre compte, il vous suffit de vous connecter:<br />
+	<a style='color: #1e824c' href='{$app_url_var}auth?email1={$mail1}'>connectez-vous</a><br />
+	<br />
+	Mot de passe oublié?<br /><a style='color: #1e824c' href='{$app_url_var}register?email1={$mail1}'>Réinitialisez-le</a><br />
+	<br />
+	Un problème? Besoin d'aide? Envoyez-nous un mail à <a style='color: #1e824c' href='mailto:bonjour@moncycle.app'>bonjour@moncycle.app</a><br />
+	<br />
+	À bientôt,<br />
+	<br />
+	<a href='https://www.moncycle.app' style='color: unset; text-decoration:none'>mon<span style='color: #1e824c;font-weight:bold'>cycle</span>.app</a><br />
+	<br />
+	<p style="color:gray;font-size:.85em;font-style: italic;">Merci d'utiliser MONCYCLE.APP! Ce mail a été envoyé automatiquement, merci de ne pas y répondre. Vous le recevez car vous possédez un compte inactif sur MONCYCLE.APP; ce mail est nécessaire pour vous informer, conformément au RGPD, de la suppression prochaine de vos données en l'absence d'activité.</p><br />
+	</div>
+	HTML;
+}
 

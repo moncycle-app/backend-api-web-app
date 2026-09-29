@@ -7,6 +7,15 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
+// RGPD data retention: an account gets erased after this many years with no sign of
+// activity (login, or any write tied to it); ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE sets how
+// long before that deletion the warning email goes out. Both are re-evaluated fresh on every
+// cron run, so there's no "warning already sent" flag to maintain: any real activity bumps
+// last_activity in db_select_user_account_to_warn_before_deletion() / _to_delete() and drops
+// the account out of both queries.
+define("ACCOUNT_INACTIVITY_DELETE_YEARS", 4);
+define("ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE", 10);
+
 function db_open() {
 	$db = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME, DB_ID, DB_PASSWORD);
 
@@ -311,24 +320,35 @@ function db_delete_user_account($db, $no_user_account){
 	return $statement->rowCount();
 }
 
-function db_delete_user_account_jamais_connecte($db, $month_without_connections=1){
-	static $sql = "SELECT * FROM user_account WHERE last_auth_date IS NULL AND inscription_date < NOW() - INTERVAL :month_without_connections MONTH";
+// last sign of life for an account: the latest of its registration date, its last login, any
+// day_timeline/description write, or any authenticated request (auth_token.date_use). Each of
+// those three tables is aggregated to one MAX(...) row per no_user_account in its own derived
+// table (dt/de/at below) and LEFT JOINed once, instead of a correlated subquery re-scanning the
+// table for every user_account row. no_user_account 2 is the demo account, excluded here as it
+// is from the stats/relance queries above.
+const DB_SQL_USER_ACCOUNT_LAST_ACTIVITY = "SELECT u.no_user_account, u.name, u.email1, u.email2, GREATEST(u.inscription_date, COALESCE(u.last_auth_date, u.inscription_date), COALESCE(dt.last_activity, u.inscription_date), COALESCE(de.last_activity, u.inscription_date), COALESCE(at.last_activity, u.inscription_date)) AS last_activity FROM user_account u LEFT JOIN (SELECT no_user_account, MAX(last_write_db) AS last_activity FROM day_timeline GROUP BY no_user_account) dt ON dt.no_user_account = u.no_user_account LEFT JOIN (SELECT no_user_account, MAX(last_write_db) AS last_activity FROM description GROUP BY no_user_account) de ON de.no_user_account = u.no_user_account LEFT JOIN (SELECT no_user_account, MAX(date_use) AS last_activity FROM auth_token GROUP BY no_user_account) at ON at.no_user_account = u.no_user_account WHERE u.no_user_account != 2";
+
+function db_select_user_account_to_warn_before_deletion($db, $years, $warning_days_before) {
+	static $sql = "SELECT * FROM (" . DB_SQL_USER_ACCOUNT_LAST_ACTIVITY . ") AS activity WHERE last_activity < NOW() - INTERVAL :years1 YEAR + INTERVAL :warning_days1 DAY AND last_activity >= NOW() - INTERVAL :years2 YEAR + INTERVAL :warning_days2 DAY - INTERVAL 1 DAY";
 
 	static $statement = $db->prepare($sql);
-	$statement->bindValue(":month_without_connections", $month_without_connections, PDO::PARAM_INT);
+	$statement->bindValue(":years1", $years, PDO::PARAM_INT);
+	$statement->bindValue(":years2", $years, PDO::PARAM_INT);
+	$statement->bindValue(":warning_days1", $warning_days_before, PDO::PARAM_INT);
+	$statement->bindValue(":warning_days2", $warning_days_before, PDO::PARAM_INT);
 	$statement->execute();
 
-	return $statement->rowCount();
+	return $statement->fetchAll(PDO::FETCH_ASSOC);
 }
 
-function db_delete_user_account_sans_connexions_recentes($db, $month_without_connections=48){
-	static $sql = "DELETE user_account FROM user_account WHERE last_auth_date IS NOT NULL AND last_auth_date < NOW() - INTERVAL :month_without_connections MONTH";
+function db_select_user_account_to_delete($db, $years) {
+	static $sql = "SELECT * FROM (" . DB_SQL_USER_ACCOUNT_LAST_ACTIVITY . ") AS activity WHERE last_activity < NOW() - INTERVAL :years YEAR";
 
 	static $statement = $db->prepare($sql);
-	$statement->bindValue(":month_without_connections", $month_without_connections, PDO::PARAM_INT);
+	$statement->bindValue(":years", $years, PDO::PARAM_INT);
 	$statement->execute();
 
-	return $statement->rowCount();
+	return $statement->fetchAll(PDO::FETCH_ASSOC);
 }
 
 function db_delete_auth_token($db, $no_auth_token, $no_user_account){
