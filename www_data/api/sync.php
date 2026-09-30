@@ -12,6 +12,8 @@ require_once "../lib/db.php";
 require_once "../lib/date.php";
 require_once "../lib/data.php";
 require_once "../lib/sec.php";
+require_once "../lib/http.php";
+require_once "../lib/day_format.php";
 
 header('Content-Type: application/json');
 
@@ -20,30 +22,31 @@ $db = db_open();
 $user_account = sec_auth_token($db);
 sec_exit_si_non_connecte($user_account);
 
-$result = [];
-
-
-if ($_SERVER['REQUEST_METHOD'] == "GET" && isset($_GET['fromTimestamp'])) {
-
-	$from_timestamp = trim($_GET['fromTimestamp']);
-    
-	if (date_validate_timestamp($from_timestamp)) {
-		$result["day_timeline"] = db_select_day_timelines_modified($db, $from_timestamp, $user_account["no_user_account"]);
-		$result["description"] = db_select_description_with_count_modified ($db, $from_timestamp, $user_account["no_user_account"]);
-		for ($i = 0; $i < count($result["day_timeline"]); $i+=1) {
-			$result["day_timeline"][$i] = data_construnct_day($db, $result["day_timeline"][$i]["date_obs"], $user_account["no_user_account"], $result["day_timeline"][$i]);
-		}
-	}
-	else {
-		$result["err"] = "fromTimestamp is not respecting YYYY-MM-DD hh:mm:ss or is not a valide date or time (it should be UTC).";
-	}
-
-}
-else {
-    $result["err"] = "please specify `fromTimestamp` parameter in URL with a UTC timestamp with format YYYY-MM-DD hh:mm:ss";
+if (!isset($_GET['fromTimestamp'])) {
+	http_error(400, "missing_parameter", "'fromTimestamp' query parameter (UTC, YYYY-MM-DD hh:mm:ss) is required.");
 }
 
-$db = null;
+$from_timestamp = http_from_iso8601(trim($_GET['fromTimestamp']));
 
-print(json_encode($result));
+if (!date_validate_timestamp($from_timestamp)) {
+	http_error(400, "invalid_timestamp", "'fromTimestamp' is not a valid UTC timestamp (YYYY-MM-DD hh:mm:ss).");
+}
 
+$days = db_select_day_timelines_modified($db, $from_timestamp, $user_account["no_user_account"]);
+for ($i = 0; $i < count($days); $i += 1) {
+	$days[$i] = day_to_json(data_construnct_day($db, $days[$i]["date_obs"], $user_account["no_user_account"], $days[$i]));
+}
+
+$name_by_type = [0 => "undefined", 1 => "observation", 2 => "sensation"];
+$descriptions = db_select_description_with_count_modified($db, $from_timestamp, $user_account["no_user_account"]);
+$descriptions = array_map(fn($row) => [
+	"id" => intval($row["no_description"]),
+	"name" => $row["name"],
+	"type" => $name_by_type[intval($row["type"])] ?? "undefined",
+	"useCount" => intval($row["use_count"] ?? 0),
+], $descriptions);
+
+http_data(200, [
+	"days" => $days,
+	"descriptions" => $descriptions,
+]);

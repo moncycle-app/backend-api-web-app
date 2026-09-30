@@ -5,10 +5,18 @@ info:
     Documentation de l'API REST de moncycle.app! L'application fonctionne sur la base d'une timeline d'observations. 1 observation => 1 jour.
     Ainsi la lecture d'un cycle ou sa modification se fait via le call API observation.
     Un nouveau cycle est caracterisé par un attribut lié au premier jour du cycle en question.
+
+    All endpoints below speak JSON: request bodies for POST/PUT/DELETE are `application/json`
+    (not form-urlencoded), every response is either `{"data": ...}` on success or
+    `{"error": {"code", "message", "details"?}}` on failure, and real HTTP status codes are
+    used throughout (see the `Error` schema for the stable `code` values). `/export` and
+    `/import` are the exception: they speak the separate, versioned NFP file format
+    (`schemaVersion`/`source_app`/...), not this envelope, since that's a portable file
+    format rather than a live resource.
   license:
     name: CC BY-NC-SA
     url: https://creativecommons.org/licenses/by-nc-sa/4.0
-  version: "1.0"
+  version: "2.0"
 externalDocs:
   description: www.moncycle.app
   url: hhttps://www.moncycle.app
@@ -51,10 +59,25 @@ paths:
         - general
       summary: Server health status for monitoring
       responses:
-        "oookkk":
-          description: Server is responding and connection to back-end DB is running.
-        "kkkooo":
-          description: Houston we have a problem (error).
+        200:
+          description: Server is responding and the database connection is working.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum: [ok]
+        503:
+          description: "`database_unreachable`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
 
 
@@ -66,37 +89,60 @@ paths:
       requestBody:
         description: Identification data (email, password, TOTP)
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
-              $ref: '#/components/schemas/auth'
+              $ref: '#/components/schemas/LoginRequest'
         required: true
       responses:
-        0 :
-          description: "Unknown error."
-        1 :
-          description: "Login is disabled."
-        2 :
-          description: "Email and/or password missing."
-        3 :
-          description: "Account deactivated."
-        4 :
-          description: "Correct password but TOTP code is incorrect or missing."
-        5 :
-          description: "Incorrect password or non-existent account."
-        6 :
-          description: "Missing data."
-        7 :
-          description: "Missing or incorrect captcha (required after repeated failed attempts on this account; see captcha_required in the response)."
-        8 :
-          description: "Account temporarily locked after too many failed attempts. A correct password (and TOTP if enabled) still succeeds."
-        9 :
-          description: "Too many attempts from this network (IP-based throttling), try again later."
-        100 :
-          description: "Account successfuly authentificated (password only)."
-        101 :
-          description: "Account successfuly authentificated (password + TOTP)."
-        102 :
-          description : "Account already authentificated."
+        200:
+          description: >-
+            Authenticated (password only, password + TOTP, or already authenticated via the
+            existing cookie/bearer token). See `totpUsed`/`alreadyAuthenticated` in the body to
+            tell which.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      token:
+                        type: string
+                        description: Auth token (also set as the MONCYCLEAPP_TOKEN cookie). Absent when alreadyAuthenticated is true.
+                      userId:
+                        type: integer
+                      totpUsed:
+                        type: boolean
+                      alreadyAuthenticated:
+                        type: boolean
+                      captchaRequired:
+                        type: boolean
+                        description: Hint that the *next* login attempt on this account will require a captcha, regardless of whether this one succeeded.
+        400:
+          description: "`missing_credentials`: email and/or password missing or empty."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        401:
+          description: "`invalid_credentials` | `totp_required` | `totp_invalid`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        403:
+          description: "`login_disabled` | `captcha_required` | `account_disabled` | `account_locked`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        429:
+          description: "`rate_limited`: too many attempts from this network, try again later."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
 
   /logout:
@@ -104,11 +150,12 @@ paths:
       tags:
         - account
       summary: Deletion of an authentication token
+      description: >-
+        Called as a plain top-level navigation (an `<a href>`, not XHR/fetch) by the web
+        frontend, so it responds with a redirect rather than a JSON body.
       responses:
-        200:
-          description: OK
-        401:
-          description: Authentication required
+        303:
+          description: Logged out (idempotent -- also returned if already logged out). Redirects to /auth.
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -121,25 +168,50 @@ paths:
       summary: Password change
       requestBody:
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               required:
-                - old_pw
-                - pw1
+                - oldPassword
+                - newPassword
               type: object
               properties:
-                old_pw:
+                oldPassword:
                   type: string
-                  description: old password
-                pw1:
+                newPassword:
                   type: string
-                  description: new password
+                  description: Minimum 8 characters.
         required: true
       responses:
         200:
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      changed:
+                        type: boolean
+        400:
+          description: "`missing_fields`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         401:
-          description: Authentication required
+          description: "Authentication required, or `invalid_password` (old password incorrect)."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        422:
+          description: "`password_too_short` | `password_unchanged`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -151,76 +223,81 @@ paths:
       summary: creating a new account
       requestBody:
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               required:
-                - firstname
-                - email1
-                - method
-                - birth_year
+                - firstName
+                - email
+                - birthYear
                 - captcha
-                - discovered_comment
               type: object
               properties:
-                firstname:
+                firstName:
                   type: string
                   description: first name of woman of firtnames of couple that is using this app
-                email1:
+                email:
                   type: string
                   description: login email address
                 method:
-                  type: integer
-                  description: |
-                    NFP cycle tracking method 
-                    * 1 => Billings + body temperature
-                    * 2 => Billings
-                    * 3 => FertilityCare
-                    * 4 => FertilityCare + body temperature
-                  enum :
-                    - 1
-                    - 2
-                    - 3
-                    - 4
-                birth_year:
+                  type: string
+                  description: NFP cycle tracking method. Defaults to "billings" if omitted.
+                  enum:
+                    - billings
+                    - fertilityCare
+                temperatureTracking:
+                  type: boolean
+                  description: Whether body temperature is also tracked alongside `method`. Defaults to false.
+                birthYear:
                   type: integer
                   description: year of birth for stats (dont need to be precise +/- 2 years)
                 captcha:
                   type: string
                   description: string contained in captcha imaged (obtained in another API call)
-                discovered_comment:
+                discoveredComment:
                   type: string
                   description: awnser to quetion asked to user => how did you discovered this app ?
-                ok_for_research:
-                  type: integer
-                  description: is user ok for sharing anonymous data for research (1 => yes, 0 => no)
-                  enum :
-                    - 1
-                    - 0
-        required: true
+                okForResearch:
+                  type: boolean
+                  description: is user ok for sharing anonymous data for research
       responses:
-        0 :
-          description: "Unknown error."
-        1 :
-          description: "Account already logged in (auth variable return logged in account number)."
-        2 :
-          description: "Account creation has been disabled."
-        3 :
-          description: "Missing data or user input."
-        4 :
-          description: "Provided email address is not valid."
-        5 :
-          description: "Error in captcha input."
-        6 :
-          description: "Account successfuly created but password sending has failed."
-        7 :
-          description: "Account already exist."
-        8 :
-          description: "Birth year is not reallistic."
-        100 :
-          description: "Account successfuly created"
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
+        201:
+          description: >-
+            Account created. `welcomeEmailSent: false` means the account was created but the
+            welcome email (containing the generated password) failed to send.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      userId:
+                        type: integer
+                      email:
+                        type: string
+                      name:
+                        type: string
+                      welcomeEmailSent:
+                        type: boolean
+        400:
+          description: "`missing_fields` | `invalid_email` | `invalid_birth_year`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        403:
+          description: "`registration_disabled` | `captcha_invalid`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        409:
+          description: "`already_authenticated` | `account_exists`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
 
   /captcha:
@@ -242,28 +319,41 @@ paths:
       tags:
         - account
       summary: reset password if lost based on email address
+      description: >-
+        Always returns 200 with `sent: true`, whether or not the account exists -- this is
+        deliberate, to avoid leaking account existence via response differences or timing.
       requestBody:
         description: login email address that is used to authenticate
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               required:
-                - email1
+                - email
               type: object
               properties:
-                email1:
+                email:
                   type: string
                   description: login email address
         required: true
       responses:
-        0 :
-          description: Unknown error.
-        1 :
-          description: Email address was not provided.
-        2 :
-          description: Email address provided is not valid.
-        100 :
-          description: New password sucessfully sent to provided email address (if account exist).
+        200:
+          description: A new password was sent to the address if an account exists for it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      sent:
+                        type: boolean
+        400:
+          description: "`missing_email` | `invalid_email`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
 
 
@@ -274,31 +364,41 @@ paths:
       tags:
         - account
       summary: Initialization of TOTP secret before activation.
-      description: |
-        TOTP (Time-Based One-Time Password) is a temporary, time-sensitive code used for two-factor authentication (2FA or MFA).
-
-        Possible TOTP states per account (matching DB data) :
-        * 0 : TOTP has nevers been activated.
-        * 1 : TOTP is desactivated.
-        * 2 : TOTP is initiated.
-        * 3 : TOTP is active.
+      description: >-
+        TOTP (Time-Based One-Time Password) is a temporary, time-sensitive code used for
+        two-factor authentication (2FA or MFA). `totpState` is one of `never_used`,
+        `disabled`, `init`, `active`.
       responses:
-        0 :
-          description: "Unknown error."
-        1 :
-          description: "Two-factor authentication is already enabled."
-        2 :
-          description: "Two-factor authentication is not enabled."
-        3 :
-          description: "Entered TOTP code is not valid."
-        4 :
-          description: "TOTP one-time code not provided."
-        100 :
-          description: "Two-factor authentication via TOTP successfully enabled."
-        101 :
-          description: "Two-factor authentication via TOTP successfully disabeled."
-        102 :
-          description: "Two-factor authentication via TOTP successfully initiated."
+        200:
+          description: TOTP initiated (or already active -- see 409).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      totpState:
+                        type: string
+                      initSecret:
+                        type: string
+                      otpauth:
+                        type: string
+                      qrcode:
+                        type: string
+        401:
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        409:
+          description: "`totp_already_enabled`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -308,43 +408,49 @@ paths:
       tags:
         - account
       summary: Send first TOTP code for final activation
-      description: |
-        TOTP (Time-Based One-Time Password) is a temporary, time-sensitive code used for two-factor authentication (2FA or MFA).
-
-        Possible TOTP states per account (matching DB data) :
-        * 0 : TOTP has nevers been activated.
-        * 1 : TOTP is desactivated.
-        * 2 : TOTP is initiated.
-        * 3 : TOTP is active.
       requestBody:
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               required:
-                - tmp_code
+                - code
               type: object
               properties:
-                tmp_code:
+                code:
                   type: integer
                   description: Code generated in TOTP application
         required: true
       responses:
-        0 :
-          description: "Unknown error."
-        1 :
-          description: "Two-factor authentication is already enabled."
-        2 :
-          description: "Two-factor authentication is not enabled."
-        3 :
-          description: "Entered TOTP code is not valid."
-        4 :
-          description: "TOTP one-time code not provided."
-        100 :
-          description: "Two-factor authentication via TOTP successfully enabled."
-        101 :
-          description: "Two-factor authentication via TOTP successfully disabeled."
-        102 :
-          description: "Two-factor authentication via TOTP successfully initiated."
+        200:
+          description: TOTP successfully activated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      totpState:
+                        type: string
+        400:
+          description: "`totp_code_missing`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        401:
+          description: "Authentication required, or `totp_invalid`."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        409:
+          description: "`totp_already_enabled`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -354,43 +460,44 @@ paths:
       tags:
         - account
       summary: TOTP deactivation for account
-      description: |
-        TOTP (Time-Based One-Time Password) is a temporary, time-sensitive code used for two-factor authentication (2FA or MFA).
-
-        Possible TOTP states per account (matching DB data) :
-        * 0 : TOTP has nevers been activated.
-        * 1 : TOTP is desactivated.
-        * 2 : TOTP is initiated.
-        * 3 : TOTP is active.
-      requestBody:
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              required:
-                - tmp_code
-              type: object
-              properties:
-                tmp_code:
-                  type: integer
-                  description: Code generated in TOTP application
-        required: true
+      parameters:
+        - name: code
+          in: query
+          description: Code currently generated in the user's TOTP application
+          required: true
+          schema:
+            type: integer
       responses:
-        0 :
-          description: "Unknown error."
-        1 :
-          description: "Two-factor authentication is already enabled."
-        2 :
-          description: "Two-factor authentication is not enabled."
-        3 :
-          description: "Entered TOTP code is not valid."
-        4 :
-          description: "TOTP one-time code not provided."
-        100 :
-          description: "Two-factor authentication via TOTP successfully enabled."
-        101 :
-          description: "Two-factor authentication via TOTP successfully disabeled."
-        102 :
-          description: "Two-factor authentication via TOTP successfully initiated."
+        200:
+          description: TOTP successfully deactivated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      totpState:
+                        type: string
+        400:
+          description: "`totp_code_missing`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        401:
+          description: "Authentication required, or `totp_invalid`."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        409:
+          description: "`totp_not_enabled`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -405,73 +512,69 @@ paths:
       tags:
         - account
       summary: Modification of account information
+      description: Every field is optional; only the fields present in the body are updated.
       requestBody:
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               properties:
                 name:
                   type: string
                   description: The first names of the people to whom this account belongs
-                email2:
+                secondaryEmail:
                   type: string
                   description: Second email address to receive the cycles via email on a different address
-                nfp_method:
-                  type: integer
-                  description: |
-                    Cycle tracking method 
-                    * 1 => Billings + body temperature
-                    * 2 => Billings
-                    * 3 => FertilityCare
-                    * 4 => FertilityCare + body temperature
-                  enum:
-                    - 1
-                    - 2
-                    - 3
-                    - 4
-                age:
-                  type: integer
-                  description: Approximate year of birth
-                timeline_asc:
-                  type: integer
-                  description: |
-                    Order of displaying observations.
-                    * 1 => today at the beginning of the table
-                    * 0 => today at the end of the table
-                  enum:
-                    - 1
-                    - 0
-                research:
-                  type: integer
-                  description: |
-                    Consent to contribute anonymously to research programs.
-                    * 1 => yes
-                    * 0 => no
-                  enum:
-                    - 1
-                    - 0
-                sponsor:
-                  type: integer
-                  description: |
-                    This person id donating.
-                    * 1 => yes
-                    * 0 => no
-                  enum:
-                    - 1
-                    - 0
-                last_write_client_UTC:
+                method:
                   type: string
-                  description: client side UTC update timestamp, format should be YYYY-MM-DD HH:MM:SS. Will be set by server if not present.
-                  format: string
-                  example: "2025-01-23 15:30:45"
-                  pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+                  enum:
+                    - billings
+                    - fertilityCare
+                temperatureTracking:
+                  type: boolean
+                  description: Whether body temperature is also tracked alongside `method`. Only applied if `method` or `temperatureTracking` is present.
+                birthYear:
+                  type: integer
+                timelineAscending:
+                  type: boolean
+                  description: Order of displaying observations (true => today at the beginning of the table).
+                research:
+                  type: boolean
+                  description: Consent to contribute anonymously to research programs.
+                sponsor:
+                  type: boolean
+                lastWriteClientUtc:
+                  type: string
+                  description: Client-side UTC update timestamp, ISO 8601. Set by the server if not present.
+                  format: date-time
+                  example: "2025-01-23T15:30:45Z"
         required: true
       responses:
         200:
-          description: OK - the correctly modified fields are returned in the response
+          description: OK -- the fields that were actually updated are listed in `fieldsUpdated`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      fieldsUpdated:
+                        type: array
+                        items:
+                          type: string
+                      lastWriteClientUtc:
+                        type: string
+                        format: date-time
         401:
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -484,21 +587,31 @@ paths:
       summary: User account deletion
       requestBody:
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               required:
-                - pw_before_deletion
+                - password
               type: object
               properties:
-                pw_before_deletion:
+                password:
                   type: string
                   description: Account password
         required: true
       responses:
-        200:
-          description: OK
+        204:
+          description: Account deleted.
+        400:
+          description: "`missing_password`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         401:
-          description: Authentication required
+          description: "Authentication required, or `invalid_password`."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -528,8 +641,62 @@ paths:
       responses:
         200:
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      userId:
+                        type: integer
+                      email:
+                        type: string
+                      secondaryEmail:
+                        type: string
+                        nullable: true
+                      method:
+                        type: string
+                        enum: [billings, fertilityCare]
+                      temperatureTracking:
+                        type: boolean
+                      birthYear:
+                        type: integer
+                      name:
+                        type: string
+                      inscriptionDate:
+                        type: string
+                        format: date-time
+                      sponsor:
+                        type: boolean
+                      research:
+                        type: boolean
+                      timelineAscending:
+                        type: boolean
+                      allCyclesFirstDay:
+                        type: array
+                        items:
+                          type: string
+                          format: date
+                      allPregnancyDates:
+                        type: array
+                        items:
+                          type: string
+                          format: date
+                      totpState:
+                        type: string
+                        enum: [never_used, disabled, init, active]
+                      lastWriteClientUtc:
+                        type: string
+                        format: date-time
+                        nullable: true
         401:
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -543,7 +710,14 @@ paths:
       tags:
         - observations
       summary: Reading daily observations.
-      description: It either returns the specific dates requested (via the "date" parameter) or all dates within a specified range (using the "start_date" and "end_date" parameters). If no dates or parameters are specified, it returns all daily observations for that account.
+      description: >-
+        It either returns the specific dates requested (via the "date" parameter) or all dates
+        within a specified range (using the "start_date" and "end_date" parameters). If no
+        dates or parameters are specified, it returns all daily observations for that account.
+        The result is an object keyed by date (`"YYYY-MM-DD": Day`), except when there is no
+        matching data at all, in which case `data` is an empty array rather than an empty
+        object (a plain artifact of PHP's array/object JSON encoding, not a distinct shape to
+        handle).
       parameters:
         - name: date
           in: query
@@ -572,9 +746,24 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/observation'
+                type: object
+                properties:
+                  data:
+                    type: object
+                    additionalProperties:
+                      $ref: '#/components/schemas/Day'
+        400:
+          description: "`invalid_date` | `invalid_date_range`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         401:
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -584,17 +773,47 @@ paths:
       tags:
         - observations
       summary: Writing of a daily observation
+      description: >-
+        Upsert semantics, same as before: this writes the full state of the day, not a sparse
+        patch, so a field omitted from the body is written as empty/false (send the current
+        full Day, not just the fields that changed).
       requestBody:
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
-              $ref: '#/components/schemas/observation'
+              $ref: '#/components/schemas/Day'
         required: true
       responses:
         200:
-          description: OK
+          description: Existing day updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Day'
+        201:
+          description: New day created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Day'
+        400:
+          description: "`invalid_json` | `invalid_date`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         401:
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -604,49 +823,64 @@ paths:
       tags:
         - observations
       summary: Deletion of a daily observation
-      requestBody:
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              required:
-                - date
-              properties:
-                date:
-                  type: string
-                  description: Date of observation in the format YYYY-MM-DD
-                  format: date
-                  pattern: '^\d{4}-\d{2}-\d{2}$'
-                last_write_client_UTC:
-                  type: string
-                  description: client side UTC update timestamp, format should be YYYY-MM-DD HH:MM:SS. Will be set by server if not present.
-                  format: string
-                  example: "2025-01-23 15:30:45"
-                  pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
-        required: true
+      parameters:
+        - name: date
+          in: query
+          description: Date of observation in the format YYYY-MM-DD
+          required: true
+          schema:
+            type: string
+            format: date
+            pattern: '^\d{4}-\d{2}-\d{2}$'
       responses:
-        200:
+        204:
           description: OK
+        400:
+          description: "`invalid_date`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         401:
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
 
 
   /description:
+    # NOTE: kept singular (not renamed to /descriptions) because this pass doesn't update the
+    # JS frontend that calls it -- renaming the URL would break it with no way to fix it in
+    # the same pass. Revisit when the frontend is updated to match.
 
 
     get:
       tags:
         - observations
       summary: Reading of all descriptions existing in DB sorted by most used.
-      description: Field 'use_count' is giving the number of how many time an observation is used.
+      description: Field 'useCount' gives the number of days an observation is used on.
       responses:
         200:
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Description'
         401:
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -659,7 +893,7 @@ paths:
       summary: Creating or updating descriptions.
       requestBody:
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               properties:
@@ -667,33 +901,64 @@ paths:
                   type: string
                   description: description to be created (or renamed)
                 type:
-                  type: integer
-                  description: |
-                    type of description
-                    * 0 => undefined
-                    * 1 => observation
-                    * 2 => sensation
-                  enum:
-                    - 0
-                    - 1
-                    - 2
-                no_description:
-                  type: integer
-                  description: ID number of description to rename
-                last_write_client_UTC:
                   type: string
-                  description: client side UTC update timestamp, format should be YYYY-MM-DD HH:MM:SS. Will be set by server if not present.
-                  format: string
-                  example: "2025-01-23 15:30:45"
-                  pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+                  enum:
+                    - undefined
+                    - observation
+                    - sensation
+                id:
+                  type: integer
+                  description: ID of the description to rename/retype. Omit to create a new one.
+                lastWriteClientUtc:
+                  type: string
+                  format: date-time
               required:
                 - name
                 - type
+        required: true
       responses:
         200:
-          description: OK
+          description: Existing description updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Description'
+        201:
+          description: New description created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Description'
+        400:
+          description: "`missing_fields` | `invalid_id` | `invalid_type`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         401:
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        404:
+          description: "`not_found`: `id` does not match a known description."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        409:
+          description: "`duplicate_name`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -703,23 +968,34 @@ paths:
       tags:
         - observations
       summary: Deletion of a description.
-      requestBody:
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              properties:
-                no_description:
-                  type: integer
-                  description: ID number of description to delete
-              required:
-                - no_description
-        required: true
+      parameters:
+        - name: id
+          in: query
+          description: ID of the description to delete
+          required: true
+          schema:
+            type: integer
       responses:
-        200:
+        204:
           description: OK
+        400:
+          description: "`missing_id` | `invalid_id`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         401:
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        404:
+          description: "`not_found`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -734,17 +1010,43 @@ paths:
       parameters:
         - name: fromTimestamp
           in: query
-          description: A timestamp in the format YYYY-MM-DD hh:mm:ss, with the time in UTC.
+          description: A UTC timestamp, ISO 8601 or the bare "YYYY-MM-DD hh:mm:ss" form.
           required: true
           schema:
-            format: string
-            example: "2025-01-23 15:30:45"
-            pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+            type: string
+            format: date-time
+            example: "2025-01-23T15:30:45Z"
       responses:
         200:
-          description: OK - observations are in a JSON array
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      days:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Day'
+                      descriptions:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Description'
+        400:
+          description: "`missing_parameter` | `invalid_timestamp`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         401:
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
       security:
         - HTTPcookie: []
         - HTTPtoken: []
@@ -849,111 +1151,39 @@ components:
   schemas:
 
 
-    observation:
+    Error:
       type: object
       required:
-        - date
+        - code
+        - message
       properties:
-        date:
+        code:
           type: string
-          description: Date of observation in YYYY-MM-DD format
-          format: date
-          pattern: '^\d{4}-\d{2}-\d{2}$'
-        cycle_1st_day:
-          type: integer
-          description: Start of a new cycle on this date (1 => yes, 0 => no)
-          enum :
-            - 1
-            - 0
-        stamp:
+          description: >-
+            Stable, machine-readable slug. See each endpoint's responses for the codes it can
+            return (e.g. `invalid_credentials`, `unauthorized`, `not_found`, `duplicate_name`).
+        message:
           type: string
-          description: |
-            Color stamp 
-            * R red
-            * G green
-            * Y yellow
-          enum :
-            - "R"
-            - "G"
-            - "Y"
-        baby:
-          type: string
-          description: Baby on stamp
-          enum :
-            - "BB"
-        fc_score:
-          type: string
-          description: FertilityCare note for day
-        fc_arrow:
-          type: string
-          description: Arrow related to the FertilityCare note
-          enum :
-            - "↑"
-            - "↓"
-            - "→"
-        temp:
-          type: number
-          description: Body temperature
-        time_temp_taken:
-          type: string
-          description: Timestamp of temperature measurement
-        no_description:
-            type: array
-            description: Description IDs that should be associated with that day.
-            items:
-              type: integer
-            style: form
-            explode: true
-        union_sex:
-          type: integer
-          description: Sex union on that day (1 => at least one, 0 => none)
-          enum :
-            - 1
-            - 0
-          default: 0
-        is_peak:
-          type: integer
-          description: Peak day for current menstural cycle (1 => on that day, 0 => not that day)
-          enum :
-            - 1
-            - 0
-          default: 0
-        counter_start:
-          type: integer
-          description: Extra days counting capabilities, number of days that should be counted starting this day
-          default: 0
-        day_not_observed:
-          type: integer
-          description: No observation on this date (1 => no data on this date, 0 => there is data)
-          enum :
-            - 1
-            - 0
-          default: 0
-        pregnancy:
-          type: integer
-          description: Beginning of a pregnancy (1 => yes, 0 => no)
-          enum :
-            - 1
-            - 0
-          default: 0
-        comment:
-          type: string
-          description: Free comment related that day
-        last_write_client_UTC:
-          type: string
-          description: Last client update timestamp in YYYY-MM-DD HH:MM:SS format. Must be in UTC.
-          format: string
-          example: "2025-01-23 15:30:45"
-          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+          description: Human-readable explanation, not meant to be parsed.
+        details:
+          type: object
+          description: Optional extra structured context (e.g. `captchaRequired`).
 
-
-    auth:
+    ErrorEnvelope:
+      type: object
       required:
-        - email1
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+
+    LoginRequest:
+      required:
+        - email
         - password
       type: object
       properties:
-        email1:
+        email:
           type: string
           example: demo.bill@moncycle.app
           description: Login email address
@@ -969,7 +1199,132 @@ components:
           description: >-
             Answer to the image served by /captcha (same challenge/cookie mechanism
             as account registration). Only required once the response to a previous /login
-            call came back with captcha_required = true.
+            call came back with captchaRequired = true.
+
+    Day:
+      type: object
+      required:
+        - date
+      description: >-
+        The shape used by /day and /sync, and (inside cycles[].days[]) by the NFP file format
+        served by /export and /import -- see that endpoint's docs for the differences between
+        this live-resource shape and the portable file format.
+      properties:
+        date:
+          type: string
+          format: date
+          description: Date of observation in YYYY-MM-DD format. Required on write; ignored on read.
+        cycleStartDate:
+          type: string
+          format: date
+          nullable: true
+          description: Read-only. First day of the cycle this date belongs to.
+        cycleDay:
+          type: integer
+          nullable: true
+          description: Read-only. 1-based position of this date within its cycle.
+        cycleFirstDay:
+          type: boolean
+          description: Start of a new cycle on this date.
+        dayNotObserved:
+          type: boolean
+          description: No observation of any kind was recorded for this date.
+        stampColor:
+          type: string
+          nullable: true
+          enum: [Red, Green, Yellow, White]
+          description: >-
+            Stamp color. Note: "White" with stampBaby=false is indistinguishable from "no
+            stamp at all" (both are stored as the same empty code) and round-trips back as
+            null -- this app has never had a distinct code for a plain, colorless stamp.
+        stampBaby:
+          type: boolean
+          description: Baby label on top of the stamp color.
+        isPeak:
+          type: boolean
+          description: Peak day for the current cycle. Could be multiple per cycle.
+        counterStart:
+          type: integer
+          nullable: true
+          description: Start an extra days counter from this day, for this many days.
+        sexUnion:
+          type: boolean
+          description: Sexual intercourse on that day.
+        booleanPregnancyDetected:
+          type: boolean
+          description: Beginning of a pregnancy.
+        freeMucusSensation:
+          type: array
+          items:
+            type: string
+          description: >-
+            Free-text sensation labels (Billings method). Writing a name that doesn't exist
+            yet creates it; writing an existing name that was created under
+            freeMucusObservation keeps its original type (names are unique per account
+            regardless of type, same as before this change).
+        freeMucusObservation:
+          type: array
+          items:
+            type: string
+          description: Free-text observation labels (Billings method). See freeMucusSensation.
+        temperature:
+          type: number
+          nullable: true
+        temperatureTime:
+          type: string
+          nullable: true
+          description: Time the temperature was taken, hh:mm:ss.
+        codifiedBleedingObservation:
+          type: string
+          nullable: true
+          description: FertilityCare method only. One of VH|H|M|VL|B, optionally suffixed "L" for spotting (e.g. "BL"), or just "L" for spotting alone.
+        codifiedMucusSensation:
+          type: string
+          nullable: true
+          description: FertilityCare method only. One of 0|2|2W|4|6|8|10|10DL|10SL|10WL.
+        codifiedMucusObservation:
+          type: string
+          nullable: true
+          description: FertilityCare method only. Any combination of C|G|K|P|Y|L.
+        codifiedNumberObservations:
+          type: string
+          nullable: true
+          description: FertilityCare method only. One of X1|X2|X3|AD.
+        codifiedPainObservations:
+          type: string
+          nullable: true
+          description: FertilityCare method only. One of AP|RAP|LAP.
+        codifiedArrow:
+          type: string
+          nullable: true
+          enum: [Up, Down, Right]
+          description: FertilityCare method only.
+        comment:
+          type: string
+        lastWriteClientUtc:
+          type: string
+          format: date-time
+          nullable: true
+          description: Client-side UTC update timestamp. Set by the server if not present on write.
+        lastWriteDb:
+          type: string
+          format: date-time
+          nullable: true
+          description: Read-only. Server-side last-write timestamp.
+
+    Description:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+          enum: [undefined, observation, sensation]
+        useCount:
+          type: integer
+          description: Number of days this description is currently associated with.
 
 
   securitySchemes:

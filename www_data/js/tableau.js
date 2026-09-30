@@ -159,6 +159,210 @@ moncycle_app = {
 		"←" : "g",
 		""  : ""
 	},
+
+	/* -----------------------------------------------------------------------
+	** API ADAPTERS
+	**
+	** The backend speaks a structured JSON API (see api/moncycle_app_open_api.yaml):
+	** every response is {"data": ...}, and the per-day shape uses NFP-inspired field
+	** names (stampColor, isPeak, codifiedArrow, freeMucusSensation, ...) instead of
+	** the packed legacy codes (stamp, fc_score, fc_arrow, no_description ids...) the
+	** rest of this file is written against. These adapters are the only place that
+	** need to know about the new shape -- day_timeline2timeline, day_timeline2recap,
+	** open_menu, fc_note2form/fc_form2note/fc_test_note/fc_note2html etc. all keep
+	** working against the same legacy flat shape they always have.
+	** ====================================================================== */
+
+	fc_note_keys : ['10DL','10SL','10WL','RAP','LAP','X1','X2','X3','AD','AP','VL','VH','2W','10','H','M','L','B','0','2','4','6','8','C','G','K','P','Y','R'],
+
+	// mirrors data_parse_fc_note() in lib/data.php: a leading "L" (other than "LAP...") is
+	// the separate "Lsaignement" (spotting) flag, not the standalone "L" mucus-observation
+	// code checked for below.
+	parse_fc_note : function (str) {
+		let note = {Lsaignement: false};
+		moncycle_app.fc_note_keys.forEach(k => note[k] = false);
+		if (!str) return note;
+		str = str.trim();
+		if (str.length > 0) {
+			str = str.toUpperCase();
+			if (str.startsWith('L') && !str.startsWith('LAP')) {
+				note.Lsaignement = true;
+				str = str.slice(1);
+			}
+			moncycle_app.fc_note_keys.forEach(k => {
+				if (str.includes(k)) note[k] = true;
+				str = str.split(k).join('');
+			});
+		}
+		return note;
+	},
+
+	fc_groups : {
+		codifiedBleedingObservation : ['VH','H','M','VL','B'],
+		codifiedMucusSensation : ['0','2','2W','4','6','8','10','10DL','10SL','10WL'],
+		codifiedMucusObservation : ['C','G','K','P','Y','L'],
+		codifiedNumberObservations : ['X1','X2','X3','AD'],
+		codifiedPainObservations : ['AP','RAP','LAP'],
+	},
+
+	// fc_score string (from #form_fc) -> the API's 5 codifiedXxx fields
+	fc_score_to_codified : function (str) {
+		let note = moncycle_app.parse_fc_note(str);
+		let bleeding = '';
+		moncycle_app.fc_groups.codifiedBleedingObservation.forEach(c => { if (note[c]) bleeding += c; });
+		if (note.Lsaignement) bleeding += 'L';
+		let out = {codifiedBleedingObservation : bleeding || null};
+		for (const field in moncycle_app.fc_groups) {
+			if (field == 'codifiedBleedingObservation') continue;
+			let v = '';
+			moncycle_app.fc_groups[field].forEach(c => { if (note[c]) v += c; });
+			out[field] = v || null;
+		}
+		return out;
+	},
+
+	// the API's 5 codifiedXxx fields -> a single legacy-style fc_score string, for the
+	// #form_fc textarea and for the calendar-cell rendering that reads j.fc_score. Mirrors
+	// lib/day_format.php's day_format_fc_score_encode() on the server, including the same
+	// Lsaignement repositioning: decoding puts spotting at the *end* of
+	// codifiedBleedingObservation (e.g. "BL"), but the legacy notation only recognises it as
+	// a *leading* "L", so it has to move back to the front here or it reads back as the
+	// unrelated standalone "L" mucus-observation code instead.
+	fc_score_from_api : function (d) {
+		let bleeding = (d.codifiedBleedingObservation || '').trim();
+		let spotting = false;
+		const bleeding_codes = moncycle_app.fc_groups.codifiedBleedingObservation;
+		if (bleeding !== '' && !bleeding_codes.includes(bleeding) && bleeding.endsWith('L')) {
+			let candidate = bleeding.slice(0, -1);
+			if (candidate === '' || bleeding_codes.includes(candidate)) {
+				spotting = true;
+				bleeding = candidate;
+			}
+		}
+		let parts = [];
+		if (bleeding !== '') parts.push(bleeding);
+		['codifiedMucusSensation','codifiedMucusObservation','codifiedNumberObservations','codifiedPainObservations'].forEach(f => {
+			let v = (d[f] || '').trim();
+			if (v !== '') parts.push(v);
+		});
+		if (parts.length === 0 && !spotting) return '';
+		let joined = parts.join(' ');
+		if (spotting) return 'L' + (joined !== '' ? ' ' + joined : '');
+		if (joined.startsWith('L') && !joined.startsWith('LAP')) joined = ' ' + joined;
+		return joined;
+	},
+
+	stamp_from_api : function (d) {
+		let code = {"Red":"R","Green":"G","Yellow":"Y"}[d.stampColor] || "";
+		return code + (d.stampBaby ? "BB" : "");
+	},
+
+	arrow_from_api : {"Up":"↑","Down":"↓","Right":"→"},
+	arrow_to_api : {"↑":"Up","↓":"Down","→":"Right"},
+
+	desc_type_to_int : {"undefined":0, "observation":1, "sensation":2},
+	desc_type_from_int : {0:"undefined", 1:"observation", 2:"sensation"},
+
+	description_from_api : function (d) {
+		return {no_description: d.id, name: d.name, type: moncycle_app.desc_type_to_int[d.type] || 0, use_count: d.useCount};
+	},
+
+	// full Day object (GET/POST /api/day, or one entry of GET /api/day's keyed-by-date
+	// result) -> the legacy flat shape day_timeline2timeline/day_timeline2recap/open_menu
+	// expect. Description names are matched against the already-loaded picklist
+	// (moncycle_app.description) to recover the numeric ids open_menu checks against.
+	day_from_api : function (d) {
+		let description = [];
+		(d.freeMucusObservation || []).forEach(name => {
+			let match = moncycle_app.description.find(sd => sd.name == name && sd.type == 1);
+			description.push(match || {no_description: null, name: name, type: 1, use_count: 0});
+		});
+		(d.freeMucusSensation || []).forEach(name => {
+			let match = moncycle_app.description.find(sd => sd.name == name && sd.type == 2);
+			description.push(match || {no_description: null, name: name, type: 2, use_count: 0});
+		});
+		return {
+			date_obs : d.date,
+			cycle : d.cycleStartDate,
+			pos : d.cycleDay,
+			cycle_1st_day : d.cycleFirstDay,
+			day_not_observed : d.dayNotObserved,
+			stamp : moncycle_app.stamp_from_api(d),
+			is_peak : d.isPeak,
+			counter_start : d.counterStart,
+			union_sex : d.sexUnion,
+			pregnancy : d.booleanPregnancyDetected,
+			temperature : d.temperature,
+			time_temp_taken : d.temperatureTime,
+			fc_score : moncycle_app.fc_score_from_api(d),
+			fc_arrow : moncycle_app.arrow_from_api[d.codifiedArrow] || "",
+			comment : d.comment,
+			description : description,
+		};
+	},
+
+	// the "nfp_method" 1-4 integer used throughout this file (and "nfp_method_name", its
+	// display-class variant) conflates the NFP method with whether temperature is tracked;
+	// the API exposes those as two separate fields instead.
+	nfp_method_from_api : function (method, temperatureTracking) {
+		const table = {"billings": [2, 1], "fertilityCare": [3, 4]};
+		let pair = table[method] || table["billings"];
+		return temperatureTracking ? pair[1] : pair[0];
+	},
+
+	// GET /api/key_infos's response -> the legacy flat shape moncycle_app.constante has
+	// always had.
+	constante_from_api : function (d) {
+		let nfp_method = moncycle_app.nfp_method_from_api(d.method, d.temperatureTracking);
+		return {
+			no_user_account : d.userId,
+			name : d.name,
+			sponsor : d.sponsor,
+			nfp_method : nfp_method,
+			nfp_method_name : {1:"bill_temp", 2:"bill", 3:"fc", 4:"fc_temp"}[nfp_method],
+			all_cycles_1st_day : d.allCyclesFirstDay,
+			all_pregnancy_dates : d.allPregnancyDates,
+			timeline_asc : d.timelineAscending,
+		};
+	},
+
+	// the serializeArray() output of #form_data (legacy flat field names: date, stamp, baby,
+	// fc_score, fc_arrow, temp, time_temp_taken, counter_start, is_peak, union_sex,
+	// cycle_1st_day, day_not_observed, pregnancy, comment, description[], last_write_client_UTC
+	// -- everything else in that form, the individual fc_* checkboxes, is client-side scratch
+	// state for building fc_score and was never read server-side either way) -> the JSON body
+	// POST /api/day expects.
+	day_to_api : function (fields) {
+		let get = (n) => fields.filter(f => f.name == n).map(f => f.value);
+		let get1 = (n) => { let v = get(n); return v.length ? v[0] : undefined; };
+		let codified = moncycle_app.fc_score_to_codified(get1('fc_score') || '');
+		let payload = Object.assign({
+			date : get1('date'),
+			stampColor : {"R":"Red","G":"Green","Y":"Yellow","":null}[get1('stamp') || ''],
+			stampBaby : get1('baby') == 'BB',
+			codifiedArrow : moncycle_app.arrow_to_api[get1('fc_arrow')] || null,
+			temperature : get1('temp') ? parseFloat(get1('temp')) : null,
+			temperatureTime : get1('time_temp_taken') || null,
+			counterStart : parseInt(get1('counter_start') || '0'),
+			isPeak : get1('is_peak') == '1',
+			sexUnion : get1('union_sex') == '1',
+			cycleFirstDay : get1('cycle_1st_day') == '1',
+			dayNotObserved : get1('day_not_observed') == '1',
+			booleanPregnancyDetected : get1('pregnancy') == '1',
+			comment : get1('comment') || '',
+			lastWriteClientUtc : get1('last_write_client_UTC') || null,
+		}, codified);
+		payload.freeMucusObservation = [];
+		payload.freeMucusSensation = [];
+		get('description[]').forEach(id => {
+			let sdesc = moncycle_app.description.find(d => d.no_description == parseInt(id));
+			if (!sdesc) return;
+			if (sdesc.type == 1) payload.freeMucusObservation.push(sdesc.name);
+			else if (sdesc.type == 2) payload.freeMucusSensation.push(sdesc.name);
+		});
+		return payload;
+	},
+
 	sommets : [],
 	counter_starts : {},
 	page_a_recharger: false,
@@ -182,13 +386,13 @@ moncycle_app = {
 		if (localStorage.constante != null) {
 			moncycle_app.constante = JSON.parse(localStorage.constante);
 		}
-		$.get("api/description", {}).done(function(data) {
-			// let transformed_data = {};
-			// for (let i = 0; i < data.length; i++) transformed_data[data[i]["name"]] = data[i]["use_count"];
+		$.get("api/description", {}).done(function(ret) {
+			let data = ret.data.map(moncycle_app.description_from_api);
 			moncycle_app.description = data;
 			localStorage.description = JSON.stringify(data);
 		}).fail(moncycle_app.redirection_connexion);
-		$.get("api/key_infos", {}).done(function(data) {
+		$.get("api/key_infos", {}).done(function(ret) {
+			let data = moncycle_app.constante_from_api(ret.data);
 			moncycle_app.constante = data;
 			localStorage.constante = JSON.stringify(data);
 			moncycle_app.timeline_asc = data.timeline_asc;
@@ -366,10 +570,13 @@ moncycle_app = {
 		if (form_nouv_cycle && !moncycle_app.timeline_asc) moncycle_app.form_nouveau_cycle(false);
 	},
 	charger_day_timeline : function(o_date) {
-		$.get("api/day", { date: o_date }).done(function(data) {
+		$.get("api/day", { date: o_date }).done(function(ret) {
 			let sotred_obs = {};
 			if (localStorage.day_timeline) sotred_obs = JSON.parse(localStorage.day_timeline);
-			$.each(data, function (o_date, o_data) {
+			let adapted = {};
+			$.each(ret.data, function (o_date, o_raw) {
+				let o_data = moncycle_app.day_from_api(o_raw);
+				adapted[o_date] = o_data;
 				moncycle_app.day_timeline[o_date] = o_data;
 				sotred_obs[o_date] = o_data;
 				$(`#o-${o_date}`).replaceWith(moncycle_app.day_timeline2timeline(o_data));
@@ -382,7 +589,7 @@ moncycle_app = {
 			localStorage.day_timeline = JSON.stringify(sotred_obs);
 			$(`.pas_${moncycle_app.constante.nfp_method_name}`).css("display", "none");
 			moncycle_app.trois_jours();
-			moncycle_app.graph_preparation_data(data);
+			moncycle_app.graph_preparation_data(adapted);
 		}).fail(moncycle_app.redirection_connexion);
 	},
 	form_nouveau_cycle_active: false,
@@ -422,26 +629,26 @@ moncycle_app = {
 				alert(moncycle_app_text.new_cycle_date_error);
 				return;
 			}
-			$.post("api/day", `date=${nouveau_cycle_date}&cycle_1st_day=1`).done(function(data){
-				if (data.err){
-					console.error(data.err);
+			$.ajax({
+				type: "POST",
+				url: "api/day",
+				contentType: "application/json",
+				data: JSON.stringify({date: nouveau_cycle_date, cycleFirstDay: true}),
+			}).done(function(ret){
+				if (!prepend) {
+					localStorage.removeItem("day_timeline");
+					localStorage.removeItem("constante");
+					location.reload(false);
+					return;
 				}
-				if (data.outcome == "ok"){
-					if (!prepend) {
-						localStorage.removeItem("day_timeline");
-						localStorage.removeItem("constante");
-						location.reload(false);
-						return;
-					}
-					moncycle_app.constante.all_cycles_1st_day.push(nouveau_cycle_date);
-					$("#charger_cycle").prop("disabled", false);
-					moncycle_app.form_nouveau_cycle_active = false;
-					$("#nouveau_cycle").remove();
-					$("#nocycle").remove();
-					moncycle_app.charger_cycle();
-				}		
-			}).fail(function (ret) {
-				console.error(ret.responseText); 
+				moncycle_app.constante.all_cycles_1st_day.push(nouveau_cycle_date);
+				$("#charger_cycle").prop("disabled", false);
+				moncycle_app.form_nouveau_cycle_active = false;
+				$("#nouveau_cycle").remove();
+				$("#nocycle").remove();
+				moncycle_app.charger_cycle();
+			}).fail(function (jqXHR) {
+				console.error(jqXHR.responseText);
 			});
 		});
 	},
@@ -800,16 +1007,13 @@ moncycle_app = {
 		}
 		status.text(moncycle_app_text.desc_add_saving);
 		form.find(".desc_add_submit").prop("disabled", true);
-		$.post("api/description", $.param({name : name, type : desc_type, last_write_client_UTC : moncycle_app.date.nowInUTC()})).done(function (ret) {
+		let payload = {name : name, type : moncycle_app.desc_type_from_int[desc_type], lastWriteClientUtc : moncycle_app.date.nowInUTC()};
+		$.ajax({type: "POST", url: "api/description", contentType: "application/json", data: JSON.stringify(payload)}).done(function (raw) {
 			form.find(".desc_add_submit").prop("disabled", false);
-			if (ret.err) {
-				console.error(ret.err);
-				status.text(moncycle_app_text.desc_add_error);
-				return;
-			}
-			moncycle_app.description.push({no_description : ret.no_description, name : ret.name, type : ret.type, use_count : 0, last_write_client_UTC : ret.last_write_client_UTC});
+			let desc = {no_description : raw.data.id, name : raw.data.name, type : desc_type, use_count : 0};
+			moncycle_app.description.push(desc);
 			localStorage.description = JSON.stringify(moncycle_app.description);
-			let chip = moncycle_app.render_desc_chip(ret, false);
+			let chip = moncycle_app.render_desc_chip(desc, false);
 			$(moncycle_app.desc_container_id[desc_type]).append(chip);
 			chip.find(".i_desc").on("change", moncycle_app.submit_menu);
 			form.find(".desc_add_input").val("").focus();
@@ -949,21 +1153,16 @@ moncycle_app = {
 			if (j == d.length) d.push({"date" : moncycle_app.menu_opened_date});
 			else d[j]["value"] = moncycle_app.menu_opened_date;
 		}
-		$.post("api/day", $.param(d)).done(function(data){
+		let payload = moncycle_app.day_to_api(d);
+		$.ajax({type: "POST", url: "api/day", contentType: "application/json", data: JSON.stringify(payload)}).done(function(ret){
 			$("#jour_form_saving").hide();
-			if (data.err){
-				$("#form_err").val(data.err);
-				console.error(data.err);
-			}
-			if (data.outcome == "ok") {
-				$("#jour_form_saved").show();
-				moncycle_app.charger_day_timeline(data.date);
-			}
-		}).fail(function (ret) {
+			$("#jour_form_saved").show();
+			moncycle_app.charger_day_timeline(ret.data.date);
+		}).fail(function (jqXHR) {
 			$("#jour_form_saving").hide();
-			console.error(ret.responseText);
-			$("#form_err").val(ret.responseText);
-			moncycle_app.redirection_connexion(ret);
+			console.error(jqXHR.responseText);
+			$("#form_err").val(jqXHR.responseText);
+			moncycle_app.redirection_connexion(jqXHR);
 		});
 	},
 	bulk_submit_menu : function () {
@@ -999,19 +1198,13 @@ moncycle_app = {
 		if (confirm(moncycle_app_text.confirm_delete_day(date))) {
 			let date_id = moncycle_app.date.str(date);
 			if (moncycle_app.day_timeline[date_id]["cycle_1st_day"] || moncycle_app.day_timeline[date_id]["pregnancy"]) moncycle_app.page_a_recharger = true;
-			$.ajax({type : 'DELETE', "url" : "api/day", "data" : `date=${date_id}`}).done(function(data){
-				if (data.err){
-					$("#form_err").val(data.err);
-					console.error(data.err);
-				}
-				if (data.outcome == "ok") {
-					moncycle_app.charger_day_timeline(data.date);
-					moncycle_app.close_menu();
-				}		
-			}).fail(function (ret) {
-				console.error(ret.responseText); 
-				$("#form_err").val(ret.responseText);
-				moncycle_app.redirection_connexion(ret);
+			$.ajax({type : 'DELETE', "url" : "api/day?date=" + encodeURIComponent(date_id)}).done(function(){
+				moncycle_app.charger_day_timeline(date_id);
+				moncycle_app.close_menu();
+			}).fail(function (jqXHR) {
+				console.error(jqXHR.responseText);
+				$("#form_err").val(jqXHR.responseText);
+				moncycle_app.redirection_connexion(jqXHR);
 			});
 		}
 	},

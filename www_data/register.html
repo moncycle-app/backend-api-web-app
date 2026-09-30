@@ -117,32 +117,39 @@
 							$("#r_captcha").attr("src", $("#r_captcha").attr("src") + "?v=" + new Date().getTime());
 							$("#i_captcha").val('');
 						}
-						let form_data = $("#f_registration").serializeArray();
-						$.ajax({type : 'POST', "url" : "api/register", "data" : $.param(form_data)}).done(function(ret){
+						var method = $('input[name="method"]:checked').val() == "3" ? "fertilityCare" : "billings";
+						var payload = {
+							firstName: $("#i_firstname").val(),
+							email: $("#i_email1").val(),
+							birthYear: parseInt($("#i_anaissance").val()),
+							captcha: $("#i_captcha").val(),
+							method: method,
+							temperatureTracking: $("#m_temp").is(':checked'),
+							discoveredComment: $("#i_comment").val(),
+							okForResearch: $("#jc_research").is(':checked'),
+						};
+						$.ajax({type : 'POST', "url" : "api/register", contentType: "application/json", "data" : JSON.stringify(payload)}).done(function(ret){
 							console.log(ret);
-							if (ret.outcome == 100) {
-								$("#success_name").text(ret.name);
-								$("#success_email").text(ret.email1);
-								$("#register_form").hide();
-								$("#register_ok").show();
+							$("#success_name").text(ret.data.name);
+							$("#success_email").text(ret.data.email);
+							$("#register_form").hide();
+							$("#register_ok").show();
+							if (!ret.data.welcomeEmailSent) {
+								$("#register_error_msg").html("Le compte a bien été créé, mais le mail avec le mot de passe n'a pas été envoyé. Utilisez « mot de passe perdu » sur la page de connexion.");
 							}
-							else {
-								const return_codes = {
-									0: "Erreur inconnue.",
-									1: "Compte déjà connecté.",
-									2: "La création de compte est désactivée.",
-									3: "Données manquantes pour créer le compte.",
-									4: "L'adresse email renseignée n'est pas valide.",
-									5: "Erreur dans la saisie du captcha.",
-									6: "Le compte a bien été créé, mais le mail avec le mot de passe n'a pas été envoyé.",
-									7: "Un compte existe déjà pour cette adresse email.",
-									8: "La date de naissance n'est pas réaliste."
-								};
-								$("#register_error_msg").html(return_codes[ret.outcome]);
-								reactivate_form();
+						}).fail(function(jqXHR) {
+							console.error(jqXHR);
+							var err = (jqXHR.responseJSON || {}).error || {};
+							const return_codes = {
+								already_authenticated: "Compte déjà connecté.",
+								registration_disabled: "La création de compte est désactivée.",
+								missing_fields: "Données manquantes pour créer le compte.",
+								invalid_email: "L'adresse email renseignée n'est pas valide.",
+								captcha_invalid: "Erreur dans la saisie du captcha.",
+								account_exists: "Un compte existe déjà pour cette adresse email.",
+								invalid_birth_year: "La date de naissance n'est pas réaliste."
 							};
-						}).fail(function(err) {
-							console.error(err);
+							$("#register_error_msg").html(return_codes[err.code] || err.message || "Erreur inconnue.");
 							reactivate_form();
 						});
 					});

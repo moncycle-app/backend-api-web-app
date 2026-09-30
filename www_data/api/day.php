@@ -12,20 +12,27 @@ require_once "../lib/db.php";
 require_once "../lib/date.php";
 require_once "../lib/data.php";
 require_once "../lib/sec.php";
+require_once "../lib/http.php";
+require_once "../lib/day_format.php";
 
 header('Content-Type: application/json');
 
-$result = [];
-
-if ($_SERVER['REQUEST_METHOD'] === 'DELETE') parse_str(file_get_contents('php://input'), $_DELETE);
-
 $db = db_open();
-$err = "";
 
 $user_account = sec_auth_token($db);
 sec_exit_si_non_connecte($user_account);
 
-// LECTURE D'UNE OBSERVATION
+// resolves a free-text description name to its id, creating it (with the given type) the
+// first time it's used -- mirrors the dedupe-by-name already used by the account settings
+// picklist (db_select_description_from_name).
+function day_resolve_description_id($db, $no_user_account, $name, $type, $last_write_client_UTC) {
+	$name = trim($name);
+	$existing = db_select_description_from_name($db, $no_user_account, $name);
+	if (isset($existing[0]["no_description"])) return intval($existing[0]["no_description"]);
+	return intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
+}
+
+// READING OBSERVATION(S)
 if ($_SERVER['REQUEST_METHOD'] == "GET") {
 
 	$dates_req = [];
@@ -35,152 +42,128 @@ if ($_SERVER['REQUEST_METHOD'] == "GET") {
 	if (isset($_GET["date"]) && preg_match("/^\s*\d{4}-\d{2}-\d{2}(\s*,\s*\d{4}-\d{2}-\d{2})*\s*$/", $_GET["date"])) {
 		$dates_req = explode(",", $_GET["date"]);
 	}
-	elseif (isset($_GET["date"])) $err .= "'date' in the wrong format. Correct format : YYYY-MM-DD,YYYY-MM-DD,YYYY-MM-DD... ";
+	elseif (isset($_GET["date"])) http_error(400, "invalid_date", "'date' must be one or more YYYY-MM-DD values separated by commas.");
 
 	if (isset($_GET["start_date"]) && preg_match("/^\s*\d{4}-\d{2}-\d{2}\s*$/", $_GET["start_date"])) {
 		$start_date = trim($_GET["start_date"]);
 	}
-	elseif (isset($_GET["start_date"])) $err .= "'start_date' in the wrong format. Correct format : YYYY-MM-DD ! ";
+	elseif (isset($_GET["start_date"])) http_error(400, "invalid_date", "'start_date' must be in YYYY-MM-DD format.");
 
 	if (isset($_GET["end_date"]) && preg_match("/^\s*\d{4}-\d{2}-\d{2}\s*$/", $_GET["end_date"])) {
 		$end_date = trim($_GET["end_date"]);
 	}
-	elseif (isset($_GET["end_date"])) $err .= "'end_date' in the wrong format. Correct format : YYYY-MM-DD ! ";
+	elseif (isset($_GET["end_date"])) http_error(400, "invalid_date", "'end_date' must be in YYYY-MM-DD format.");
 
 	if (($start_date || $end_date) && !($start_date && $end_date)) {
-		$err .= "'start_date' and 'end_date' should be used together";
+		http_error(400, "invalid_date_range", "'start_date' and 'end_date' must be used together.");
 	}
 
-	if (empty($err)) {
+	$result = [];
 
-		foreach ($dates_req as $date) {
-			$date = trim($date);
-			$result[$date] = data_construnct_day($db, $date, $user_account["no_user_account"]);
-		}
-
-		$all_days = array();
-		if ($start_date && $end_date) $all_days = db_select_day_timelines_frame ($db, $start_date, $end_date, $user_account["no_user_account"]);
-		elseif (empty($result)) $all_days = db_select_all_day_timeline($db, $user_account["no_user_account"]);
-			
-		$cycle_date = null;
-		for ($i = 0; $i < count($all_days); $i+=1) {
-			if ($all_days[$i]["cycle_1st_day"]) $cycle_date = $all_days[$i]["date_obs"];
-			$all_days[$i] = data_construnct_day($db, $all_days[$i]["date_obs"], $user_account["no_user_account"], $all_days[$i], $cycle_date);
-			$result[$all_days[$i]["date_obs"]] = $all_days[$i];
-		}
-
-
-
+	foreach ($dates_req as $date) {
+		$date = trim($date);
+		$result[$date] = day_to_json(data_construnct_day($db, $date, $user_account["no_user_account"]));
 	}
 
+	$all_days = [];
+	if ($start_date && $end_date) $all_days = db_select_day_timelines_frame($db, $start_date, $end_date, $user_account["no_user_account"]);
+	elseif (empty($result)) $all_days = db_select_all_day_timeline($db, $user_account["no_user_account"]);
+
+	$cycle_date = null;
+	for ($i = 0; $i < count($all_days); $i += 1) {
+		if ($all_days[$i]["cycle_1st_day"]) $cycle_date = $all_days[$i]["date_obs"];
+		$day = data_construnct_day($db, $all_days[$i]["date_obs"], $user_account["no_user_account"], $all_days[$i], $cycle_date);
+		$result[$day["date_obs"]] = day_to_json($day);
+	}
+
+	http_data(200, $result);
 }
 
-// CREATION ET MISE A JOUR D'UNE OBSERVATION
-elseif($_SERVER['REQUEST_METHOD'] == "POST" && isset($_POST['date']) && preg_match("/^\s*\d{4}-\d{2}-\d{2}\s*$/", $_POST['date'])) {
+// CREATION/UPDATE OF AN OBSERVATION
+elseif ($_SERVER['REQUEST_METHOD'] == "POST") {
 
-	$date = trim($_POST['date']);
-	$result["date"] = $date;
+	$body = http_json_body();
 
+	if (!isset($body['date']) || !is_string($body['date']) || !preg_match("/^\s*\d{4}-\d{2}-\d{2}\s*$/", $body['date'])) {
+		http_error(400, "invalid_date", "'date' is required and must be in YYYY-MM-DD format.");
+	}
+
+	$date = trim($body['date']);
 	$date_exploded = explode('-', $date);
-	if (checkdate($date_exploded[1], $date_exploded[2], $date_exploded[0])) {
+	if (!checkdate(intval($date_exploded[1]), intval($date_exploded[2]), intval($date_exploded[0]))) {
+		http_error(400, "invalid_date", "'date' is not a real calendar date.");
+	}
 
-		if (isset($user_account["is_inactive"]) && boolval($user_account["is_inactive"])) {
-			db_update_is_inactive($db, $user_account["no_user_account"], 0);
-			$user_account["is_inactive"] = 0;
+	if (isset($user_account["is_inactive"]) && boolval($user_account["is_inactive"])) {
+		db_update_is_inactive($db, $user_account["no_user_account"], 0);
+		$user_account["is_inactive"] = 0;
+	}
+
+	$last_write_client_UTC = http_from_iso8601($body['lastWriteClientUtc'] ?? null);
+	if (!$last_write_client_UTC || !date_validate_timestamp($last_write_client_UTC)) {
+		$last_write_client_UTC = date('Y-m-d H:i:s');
+	}
+
+	$fields = day_from_json($body);
+	$is_new = false;
+
+	try {
+
+		$db->exec("START TRANSACTION");
+
+		$existing = db_select_day_timeline($db, $date, $user_account["no_user_account"]);
+		$is_new = !isset($existing[0]);
+		$no_day = $is_new ? db_insert_day_timeline($db, $date, $user_account["no_user_account"]) : $existing[0]["no_day"];
+
+		db_update_day_timeline(
+			$db, $date, $user_account["no_user_account"], $last_write_client_UTC,
+			$fields['stamp'], $fields['fc_score'], $fields['fc_arrow'], $fields['temp'], $fields['htemp'],
+			$fields['is_peak'], $fields['union_sex'], $fields['cycle_1st_day'], $fields['day_not_observed'],
+			$fields['pregnancy'], $fields['comment'], $fields['counter_start']
+		);
+
+		$old_description = db_select_all_description_for_day_timeline($db, $user_account["no_user_account"], $no_day);
+		$old_description_no = array_column($old_description, "no_description");
+
+		$new_description_no = [];
+		foreach (($body['freeMucusObservation'] ?? []) as $name) {
+			$new_description_no[] = day_resolve_description_id($db, $user_account["no_user_account"], $name, 1, $last_write_client_UTC);
+		}
+		foreach (($body['freeMucusSensation'] ?? []) as $name) {
+			$new_description_no[] = day_resolve_description_id($db, $user_account["no_user_account"], $name, 2, $last_write_client_UTC);
 		}
 
-		$date = trim($_POST['date']);
-		$result["date"] = $date;
+		$to_delete_description_no = array_diff($old_description_no, $new_description_no);
+		$to_add_description_no = array_diff($new_description_no, $old_description_no);
 
-		try {
+		foreach ($to_delete_description_no as $no_desc) db_delete_linked_descriptions($db, $no_day, $no_desc);
+		foreach ($to_add_description_no as $no_desc) db_insert_link_description_day_timeline($db, $no_day, $no_desc);
 
-			$db->exec("START TRANSACTION");
-	
-			$output = db_select_day_timeline($db, $date, $user_account["no_user_account"]);
-	
-			$no_day = null;
-			if(!isset($output[0])) $no_day = db_insert_day_timeline($db, $date, $user_account["no_user_account"]);
-			else $no_day = $output[0]["no_day"];
-	
-			$temp = null;
-			$htemp = null;
-			if (isset($_POST["temp"]) && !empty(trim($_POST["temp"]))) {
-				$temp = floatval($_POST["temp"]);
-				if ($temp <= 0) $temp = null;
-				elseif (!empty($_POST["time_temp_taken"])) $htemp = trim($_POST["time_temp_taken"]);
-			}
-	
-			$go  = $_POST["stamp"] ?? '';
-			$go .= $_POST["baby"] ?? '';
-	
-			$counter_start = null;
-			if (isset($_POST["counter_start"]) && intval($_POST["counter_start"])>0) $counter_start = intval($_POST["counter_start"]);
+		$db->exec("COMMIT");
 
-			$last_write_client_UTC = "";
-			if (isset($_POST["last_write_client_UTC"]) && date_validate_timestamp(trim($_POST['last_write_client_UTC']))) $last_write_client_UTC = trim($_POST['last_write_client_UTC']);
-			else $last_write_client_UTC = date('Y-m-d H:i:s');
-	
-			db_update_day_timeline($db, $date, $user_account["no_user_account"], $last_write_client_UTC, $go, $_POST["fc_score"] ?? null, $_POST["fc_arrow"] ?? null, $temp, $htemp, $_POST["is_peak"] ?? null, $_POST["union_sex"] ?? null, $_POST["cycle_1st_day"] ?? null, $_POST["day_not_observed"] ?? null, $_POST["pregnancy"] ?? null, $_POST["comment"] ?? null, $counter_start);
-			
-			$all_raw_description = db_select_description_with_count($db, $user_account["no_user_account"]);
-			$all_description_no = array();
-			foreach ($all_raw_description as $rdesc) array_push($all_description_no, $rdesc["no_description"]);
-
-			$old_description = db_select_all_description_for_day_timeline($db, $user_account["no_user_account"], $no_day);
-			$old_description_no = array();
-			foreach ($old_description as $odesc) array_push($old_description_no, $odesc["no_description"]);
-
-			$posted_description_no = array();
-			if (isset($_POST["description"]) && is_array($_POST["description"])) $posted_description_no = $_POST["description"];
-
-			$new_description_no = array();
-			foreach ($posted_description_no as $ndesc) {
-				$int_ndesc = intval($ndesc);
-				if (array_search($int_ndesc, $all_description_no) !== false) array_push($new_description_no, $int_ndesc);
-			}
-
-			$to_delete_description_no = array_diff($old_description_no, $new_description_no);
-			$to_add_description_no = array_diff($new_description_no, $old_description_no);
-
-			foreach ($to_delete_description_no as $no_desc) db_delete_linked_descriptions ($db, $no_day, $no_desc);
-			foreach ($to_add_description_no as $no_desc) db_insert_link_description_day_timeline ($db, $no_day, $no_desc);
-
-			$db->exec("COMMIT");
-
-		} catch (\Throwable $th) {
-			$db->exec("ROLLBACK");
-			$result["outcome"] = "ko";
-			throw $th;
-		}
-
-		$result["outcome"] = "ok";
-
+	} catch (\Throwable $th) {
+		$db->exec("ROLLBACK");
+		throw $th;
 	}
-	else {
-		$err = "date non valide";
-	}
+
+	$updated = day_to_json(data_construnct_day($db, $date, $user_account["no_user_account"]));
+	http_data($is_new ? 201 : 200, $updated);
 }
 
-// SUPPRESSION D'UNE OBSERVATION
-elseif($_SERVER['REQUEST_METHOD'] == "DELETE" && isset($_DELETE['date']) && preg_match("/^\s*\d{4}-\d{2}-\d{2}\s*$/", $_DELETE['date'])) {
-	$date = trim($_DELETE['date']);
-	$result["date"] = $date;
+// DELETION OF AN OBSERVATION
+elseif ($_SERVER['REQUEST_METHOD'] == "DELETE") {
 
-	$last_write_client_UTC = "";
-	if (isset($_POST["last_write_client_UTC"]) && date_validate_timestamp(trim($_POST['last_write_client_UTC']))) $last_write_client_UTC = trim($_POST['last_write_client_UTC']);
-	else $last_write_client_UTC = date('Y-m-d H:i:s');
-	
-	db_update_day_timeline($db, $date, $user_account["no_user_account"], $last_write_client_UTC, '', null, null, null, null, null, null, null, null, null, null, null);
+	if (!isset($_GET['date']) || !preg_match("/^\s*\d{4}-\d{2}-\d{2}\s*$/", $_GET['date'])) {
+		http_error(400, "invalid_date", "'date' query parameter is required and must be in YYYY-MM-DD format.");
+	}
 
-	$result["outcome"] = "ok";
+	$date = trim($_GET['date']);
+
+	db_update_day_timeline($db, $date, $user_account["no_user_account"], date('Y-m-d H:i:s'), '', null, null, null, null, null, null, null, null, null, null, null);
+
+	http_no_content();
 }
 
 else {
-	$err = "date and/or action missing";
+	http_error(405, "method_not_allowed", "Supported methods: GET, POST, DELETE.");
 }
-
-$db = null;
-
-if ($err) print(json_encode(array("err" => $err)));
-else print(json_encode($result));
-

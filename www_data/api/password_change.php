@@ -10,6 +10,7 @@
 require_once "../config.php";
 require_once "../lib/db.php";
 require_once "../lib/sec.php";
+require_once "../lib/http.php";
 
 header('Content-Type: application/json');
 
@@ -18,35 +19,26 @@ $db = db_open();
 $user_account = sec_auth_token($db);
 sec_exit_si_non_connecte($user_account);
 
-$result = ["change_ok" => false, "msg" => ""];
+$body = http_json_body();
 
-if (isset($_POST["pw1"]) && !empty($_POST["pw1"]) && isset($_POST["old_pw"]) && !empty($_POST["old_pw"])) {
-	
-	$user_account = db_select_user_account_par_mail($db, $user_account["email1"])[0] ?? [];
-
-	if (strlen($_POST["pw1"])<8) {
-		$result["msg"] = "nouveau mot de passe trop court";
-	}
-	elseif (isset($user_account["password"]) && password_verify($_POST["pw1"], $user_account["password"])) {
-		$result["msg"] = "le nouveau mot de passe est identique à l'ancien mot de passe";
-	}
-	elseif (isset($user_account["password"]) && password_verify($_POST["old_pw"], $user_account["password"])) {
-		unset($_POST["old_pw"]);
-
-		db_udpate_password_par_nouser_account($db, sec_hash($_POST["pw1"]), $user_account["no_user_account"]);
-
-		$result["msg"] = "votre mot de passe a bien été mis à jour";
-		$result["change_ok"] = true;
-	}
-	else {
-		$result["msg"] = "l'ancien mot de passe n'est pas le bon";
-	}
-
-	unset($user_account["password"]);
-
-}
-else {
-	$result["msg"] = "les données sont manquantes";
+if (!isset($body["oldPassword"]) || empty($body["oldPassword"]) || !isset($body["newPassword"]) || empty($body["newPassword"])) {
+	http_error(400, "missing_fields", "'oldPassword' and 'newPassword' are required.");
 }
 
-echo json_encode($result);
+$user_account = db_select_user_account_par_mail($db, $user_account["email1"])[0] ?? [];
+
+if (strlen($body["newPassword"]) < 8) {
+	http_error(422, "password_too_short", "New password is too short (minimum 8 characters).");
+}
+
+if (isset($user_account["password"]) && password_verify($body["newPassword"], $user_account["password"])) {
+	http_error(422, "password_unchanged", "New password is identical to the previous password.");
+}
+
+if (!isset($user_account["password"]) || !password_verify($body["oldPassword"], $user_account["password"])) {
+	http_error(401, "invalid_password", "Old password is incorrect.");
+}
+
+db_udpate_password_par_nouser_account($db, sec_hash($body["newPassword"]), $user_account["no_user_account"]);
+
+http_data(200, ["changed" => true]);

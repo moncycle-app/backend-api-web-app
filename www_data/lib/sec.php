@@ -12,6 +12,18 @@ define("TOTP_STATE_DISABLED", 1);
 define("TOTP_STATE_INIT", 2);
 define("TOTP_STATE_ACTIVE", 3);
 
+// the string vocabulary the JSON API exposes instead of the raw 0-3 DB int -- shared by
+// api/totp.php and api/key_infos.php so the two never drift apart.
+function sec_totp_state_name($state) {
+	return match ($state) {
+		TOTP_STATE_NEVER_USED => "never_used",
+		TOTP_STATE_DISABLED => "disabled",
+		TOTP_STATE_INIT => "init",
+		TOTP_STATE_ACTIVE => "active",
+		default => "unknown",
+	};
+}
+
 // login brute-force defense thresholds. LOGIN_ATTEMPTS_DECAY_MINUTES must match the
 // "60 MINUTE" literal in db_update_co_echoue()'s SQL (lib/db.php) since that query decays
 // the counter itself; keep both in sync if this changes.
@@ -61,7 +73,7 @@ function sec_auth_token($db) {
 function sec_exit_si_non_connecte($user_account) {
 	if (is_null($user_account)) {
 		http_response_code(401);
-		echo json_encode(["auth" => False, "err" => "Accès interdit! Connectez-vous."]);
+		echo json_encode(["error" => ["code" => "unauthorized", "message" => "Authentication required."]]);
 		exit;
 	}
 }

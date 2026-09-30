@@ -9,11 +9,14 @@
 
 require_once "../config.php";
 require_once "../lib/db.php";
+require_once "../lib/http.php";
 
-header("Content-Type: text/plain");
+header('Content-Type: application/json');
 
-$db = db_open();
-
-echo boolval(db_select_nb_user_account($db)[0][0]) ? "oookkk" : "kkkooo";
-echo PHP_EOL;
-
+try {
+	$db = db_open();
+	if (boolval(db_select_nb_user_account($db)[0][0])) http_data(200, ["status" => "ok"]);
+	http_error(503, "database_unreachable", "Database query did not return the expected result.");
+} catch (\Throwable $e) {
+	http_error(503, "database_unreachable", "Database is not reachable.");
+}
