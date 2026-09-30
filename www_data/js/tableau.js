@@ -135,6 +135,14 @@ const moncycle_app_text = {
 	},
 	fc_syntax_valid : "syntaxe valide",
 	fc_syntax_invalid : "syntaxe invalide",
+
+	/* --- description picker (sensations / observations / autre) --------- */
+	desc_add_saving : "⏳",
+	desc_add_saved : "✅",
+	desc_add_error : "❌",
+	desc_add_duplicate : function (name) {
+		return `❌ « ${name} » existe déjà`;
+	},
 }
 
 moncycle_app = {
@@ -206,9 +214,10 @@ moncycle_app = {
 		$("#jour_form_prev").click(moncycle_app.open_menu);
 		$("#bulk_but_submit_compter").click(moncycle_app.bulk_submit_menu);
 		$("#jour_form_bulk_but").click(moncycle_app.bulk_show_hide);
-		$("#jour_form #form_data input, #jour_form textarea").on("change", moncycle_app.submit_menu);
+		$("#jour_form #form_data input:not(.desc_add_input), #jour_form textarea").on("change", moncycle_app.submit_menu);
 		$("#form_fc").on("keyup", moncycle_app.fc_note2form);
 		$("#jour_form_suppr").click(moncycle_app.suppr_day_timeline);
+		moncycle_app.bind_desc_add_forms();
 		$("#but_mini_maxi").click(moncycle_app.mini_maxi_switch);
 		$("#go_baby").click(moncycle_app.go_blank_or_empty);
 		if (localStorage.mini_maxi == "mini") moncycle_app.mini_maxi = "maxi";
@@ -753,6 +762,65 @@ moncycle_app = {
 		if ($("#go_baby")[0].checked) $("#blank_or_empty").text(moncycle_app_text.target_blank);
 		else $("#blank_or_empty").text(moncycle_app_text.target_empty);
 	},
+	// container holding the chips for each description type: 2=sensation, 1=observation, 0=autre (legacy)
+	desc_container_id : {2 : "#menu_sensation_container", 1 : "#menu_observation_container", 0 : "#menu_autre_container"},
+	render_desc_chip : function (sdesc, active) {
+		return $(`<span class="desc_chip" id="s_desc_${sdesc.no_description}"><input type="checkbox" name="description[]" value="${sdesc.no_description}" id="i_desc_${sdesc.no_description}" class="i_desc" ${active ? 'checked' : ''} /><label for="i_desc_${sdesc.no_description}">${sdesc.name}</label></span>`);
+	},
+	// wires the "+ nouvelle sensation/observation" affordances in jour_form; there is no
+	// equivalent for "autre" since that legacy type can't be created or converted to (see open_menu)
+	bind_desc_add_forms : function () {
+		$(".desc_add_toggle").on("click", function () {
+			$(this).hide();
+			$(this).siblings(".desc_add_form").show().find(".desc_add_input").val("").focus();
+		});
+		$(".desc_add_cancel").on("click", function () {
+			let form = $(this).closest(".desc_add_form");
+			form.hide().find(".desc_add_status").empty();
+			form.siblings(".desc_add_toggle").show();
+		});
+		$(".desc_add_submit").on("click", function () {
+			moncycle_app.desc_add_submit($(this).closest(".desc_add_form"));
+		});
+		$(".desc_add_input").on("keydown", function (event) {
+			if (event.key !== "Enter") return;
+			event.preventDefault();
+			moncycle_app.desc_add_submit($(this).closest(".desc_add_form"));
+		});
+	},
+	desc_add_submit : function (form) {
+		let desc_type = parseInt(form.data("desc-type"));
+		let name = form.find(".desc_add_input").val().trim();
+		let status = form.find(".desc_add_status");
+		if (name == "") return;
+		let duplicate = moncycle_app.description.some(d => d.name.toLowerCase() == name.toLowerCase());
+		if (duplicate) {
+			status.text(moncycle_app_text.desc_add_duplicate(name));
+			return;
+		}
+		status.text(moncycle_app_text.desc_add_saving);
+		form.find(".desc_add_submit").prop("disabled", true);
+		$.post("api/description", $.param({name : name, type : desc_type, last_write_client_UTC : moncycle_app.date.nowInUTC()})).done(function (ret) {
+			form.find(".desc_add_submit").prop("disabled", false);
+			if (ret.err) {
+				console.error(ret.err);
+				status.text(moncycle_app_text.desc_add_error);
+				return;
+			}
+			moncycle_app.description.push({no_description : ret.no_description, name : ret.name, type : ret.type, use_count : 0, last_write_client_UTC : ret.last_write_client_UTC});
+			localStorage.description = JSON.stringify(moncycle_app.description);
+			let chip = moncycle_app.render_desc_chip(ret, false);
+			$(moncycle_app.desc_container_id[desc_type]).append(chip);
+			chip.find(".i_desc").on("change", moncycle_app.submit_menu);
+			form.find(".desc_add_input").val("").focus();
+			status.text(moncycle_app_text.desc_add_saved);
+		}).fail(function (err) {
+			form.find(".desc_add_submit").prop("disabled", false);
+			status.text(moncycle_app_text.desc_add_error);
+			console.error(err);
+			moncycle_app.redirection_connexion(err);
+		});
+	},
 	menu_opened_date : null,
 	open_menu : function(e, date = null) {
 		let o_date;
@@ -803,15 +871,23 @@ moncycle_app = {
 		$("#form_time_temp_taken").val(j.time_temp_taken);
 		$("#menu_observation_container").empty();
 		$("#menu_sensation_container").empty();
+		$("#menu_autre_container").empty();
 		let active_desc = [];
 		for (const adesc of j.description) active_desc.push(adesc.no_description);
+		let has_autre = false;
 		for (const sdesc of moncycle_app.description) {
 			let active = active_desc.includes(sdesc.no_description);
-			let html_option = $(`<span id="s_desc_${sdesc.no_description}"><input type="checkbox" name="description[]" value="${sdesc.no_description}" id="i_desc_${sdesc.no_description}" class="i_desc" ${active ? 'checked' : ''} /><label for="i_desc_${sdesc.no_description}">${sdesc.name}</label><br /></span>`);
-			if (sdesc.type == 1) $("#menu_observation_container").append(html_option)
-			else if (sdesc.type == 2) $("#menu_sensation_container").append(html_option);
+			let container_id = moncycle_app.desc_container_id[sdesc.type];
+			if (!container_id) continue;
+			if (sdesc.type == 0) has_autre = true;
+			$(container_id).append(moncycle_app.render_desc_chip(sdesc, active));
 		}
+		// "autre" is a legacy type new descriptions can't be created as or converted to;
+		// only show the category when a legacy description of that type still exists
+		$("#desc_category_other").toggle(has_autre);
 		$(".i_desc").on("change", moncycle_app.submit_menu);
+		$(".desc_add_form").hide().find(".desc_add_status").empty();
+		$(".desc_add_toggle").show();
 		if (j.cycle_1st_day) {
 			$("#ev_cycle_1st_day").prop('checked', true);
 			$("#ev_cycle_1st_day").attr('initial', true);

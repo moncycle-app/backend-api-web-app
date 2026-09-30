@@ -138,16 +138,35 @@
 						<br />
 					</div>
 					<div class="pas_fc pas_fc_temp">
-						<div class="sens_and_obs" >
-							<span class="categorie">Sensations:</span><br />
-							<span id="menu_sensation_container"></span>
-							<br /><br />
+						<div class="desc_picker">
+							<div class="desc_category">
+								<span class="categorie">🧠 Sensations:</span>
+								<div class="desc_chips" id="menu_sensation_container"></div>
+								<button type="button" class="desc_add_toggle" data-desc-type="2">➕ nouvelle sensation</button>
+								<div class="desc_add_form" id="desc_add_form_sensation" data-desc-type="2" style="display:none">
+									<input type="text" class="desc_add_input" maxlength="256" placeholder="nom de la sensation" autocomplete="off" />
+									<button type="button" class="desc_add_submit">✅</button>
+									<button type="button" class="desc_add_cancel">✖️</button>
+									<span class="desc_add_status"></span>
+								</div>
+							</div>
+							<div class="desc_category">
+								<span class="categorie">👀 Observations:</span>
+								<div class="desc_chips" id="menu_observation_container"></div>
+								<button type="button" class="desc_add_toggle" data-desc-type="1">➕ nouvelle observation</button>
+								<div class="desc_add_form" id="desc_add_form_observation" data-desc-type="1" style="display:none">
+									<input type="text" class="desc_add_input" maxlength="256" placeholder="nom de l'observation" autocomplete="off" />
+									<button type="button" class="desc_add_submit">✅</button>
+									<button type="button" class="desc_add_cancel">✖️</button>
+									<span class="desc_add_status"></span>
+								</div>
+							</div>
+							<div class="desc_category" id="desc_category_other" style="display:none">
+								<span class="categorie">❓ Autre:</span>
+								<div class="desc_chips" id="menu_autre_container"></div>
+							</div>
 						</div>
-						<div class="sens_and_obs">
-							<span class="categorie">Observations:</span><br />
-							<span id="menu_observation_container"></span>
-							<br /><br />
-						</div>
+						<br />
 					</div>
 					<div>
 						<span class="categorie">Évènements:</span><br />

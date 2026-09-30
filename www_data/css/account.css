@@ -65,16 +65,28 @@ form {
 .f_edit_description .i_desc_name,
 #i_desc_name_new {
 	display: inline-block;
-	width: 45%;
+	width: 38%;
 	height: 1.2em;
 }
 
 .f_edit_description .i_desc_type,
 #i_desc_type_new {
 	display: inline-block;
-	width: 35%;
+	width: 32%;
 	box-sizing: content-box;
 	height: 1.2em;
+}
+
+.f_edit_description .i_desc_count {
+	display: inline-block;
+	width: 8%;
+	min-width: 1.5em;
+	box-sizing: content-box;
+	height: 1.2em;
+	padding: 5px 0;
+	text-align: center;
+	font-weight: bold;
+	color: gray;
 }
 
 .f_delete_description .i_desc_del,

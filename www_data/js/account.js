@@ -76,7 +76,8 @@ $(document).ready(function(){
 					<option ${description.type==2 ? 'selected' : '' } value="2">🧠 Sensations</option>
 					<option ${description.type==1 ? 'selected' : '' } value="1">👀 Observation</option>
 					<option ${description.type==0 ? 'selected' : '' } value="0" disabled>❓ à définir</option>
-				</select></form>`);
+				</select>
+				<span class="i_desc_count" title="Nombre de jours associés à cette description">${description.use_count}</span></form>`);
 			let input_del = $(`<form 
 				class="f_delete_description" method="delete" action="api/description" id="f_delete_description_${description.no_description}">
 				<input type="hidden" name="no_description" value="${description.no_description}" />

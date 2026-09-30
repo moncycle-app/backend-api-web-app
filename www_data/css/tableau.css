@@ -628,10 +628,84 @@ h2 {
 	color: gray;
 }
 
-.sens_and_obs {
+.desc_picker {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 20px;
+	margin-top: 5px;
+}
+
+.desc_category {
+	flex: 1 1 220px;
+	min-width: 220px;
+}
+
+.desc_chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 8px 0;
+}
+
+.desc_chip {
 	display: inline-block;
-	width: 48%;
-	vertical-align: top;
+}
+
+.desc_chip input[type=checkbox] {
+	position: absolute;
+	opacity: 0;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+}
+
+.desc_chip label {
+	display: inline-block;
+	margin: 0;
+	padding: 3px 6px;
+	border-radius: 5px;
+	background-color: #f0f0f0;
+	border: 1px solid #f0f0f0;
+	line-height: 1.2;
+	user-select: none;
+	transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.desc_chip input[type=checkbox]:checked + label {
+	background-color: #1e824c;
+	border-color: #16683c;
+	color: white;
+}
+
+.desc_chip input[type=checkbox]:focus-visible + label {
+	outline: 2px solid #1e824c;
+	outline-offset: 1px;
+}
+
+.desc_add_toggle {
+	background-color: transparent;
+	border: 1px dashed #b8b8b8;
+	color: gray;
+	font-size: .8em;
+	padding: 4px 10px;
+	border-radius: 5px;
+}
+
+.desc_add_form {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-top: 6px;
+}
+
+.desc_add_form .desc_add_input {
+	flex: 1 1 140px;
+	min-width: 120px;
+}
+
+.desc_add_status {
+	font-size: .8em;
 }
 
 @media (min-width: 601px) {
@@ -743,5 +817,14 @@ h2 {
 
 	#jour_form #bulk_form {
 		background-color: #001e3c;
+	}
+
+	.desc_chip label {
+		background-color: #191919;
+		border-color: #191919;
+	}
+
+	.desc_add_toggle {
+		border-color: #4c4c4c;
 	}
 }

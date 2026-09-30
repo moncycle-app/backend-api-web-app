@@ -129,24 +129,21 @@ elseif($_SERVER['REQUEST_METHOD'] == "POST" && isset($_POST['date']) && preg_mat
 			$old_description = db_select_all_description_for_day_timeline($db, $user_account["no_user_account"], $no_day);
 			$old_description_no = array();
 			foreach ($old_description as $odesc) array_push($old_description_no, $odesc["no_description"]);
-			$to_delete_description_no = $old_description_no;
+
+			$posted_description_no = array();
+			if (isset($_POST["description"]) && is_array($_POST["description"])) $posted_description_no = $_POST["description"];
 
 			$new_description_no = array();
-			if (isset($_POST["no_description"]) && is_array($_POST["no_description"])) $new_description_no = $_POST["no_description"];
-		
-			for ($i=0; $i < count($new_description_no); $i+=1) { 
-				$int_ndesc = intval($new_description_no[$i]);
-				if (array_search($int_ndesc, $all_description_no) === false) unset($new_description_no[$i]);
-				else {
-					$to_delete_index = array_search($int_ndesc, $to_delete_description_no);
-					if ($to_delete_index !== false) unset($to_delete_description_no[$to_delete_index]);
-					$to_add_index = array_search($int_ndesc, $old_description_no);
-					if ($to_add_index !== false) unset($new_description_no[$to_add_index]);
-				}
+			foreach ($posted_description_no as $ndesc) {
+				$int_ndesc = intval($ndesc);
+				if (array_search($int_ndesc, $all_description_no) !== false) array_push($new_description_no, $int_ndesc);
 			}
 
+			$to_delete_description_no = array_diff($old_description_no, $new_description_no);
+			$to_add_description_no = array_diff($new_description_no, $old_description_no);
+
 			foreach ($to_delete_description_no as $no_desc) db_delete_linked_descriptions ($db, $no_day, $no_desc);
-			foreach ($new_description_no as $no_desc) db_insert_link_description_day_timeline ($db, $no_day, $no_desc);
+			foreach ($to_add_description_no as $no_desc) db_insert_link_description_day_timeline ($db, $no_day, $no_desc);
 
 			$db->exec("COMMIT");
 
