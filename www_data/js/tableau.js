@@ -6,36 +6,150 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
+/* ===========================================================================
+** USER-FACING TEXT
+**
+** Every string shown to the user lives in this block and nowhere else in this
+** file, so it can be translated (or moved to its own file) without touching
+** any logic. Strings that need values injected are functions taking raw
+** values (Date, number) and doing their own formatting, because both the
+** wording and the layout of a date change with the language.
+**
+** Deliberately NOT here, these are not language:
+**  - CSS class names and DOM id fragments (rouge, vert, jaune, baby, b/h/d/g),
+**    see moncycle_app.stamp_class and moncycle_app.arrow_id;
+**  - FertilityCare / Billings notation codes (VL, H, B, AD, RAP, 10KL, X1...),
+**    which belong to the method itself.
+** ======================================================================== */
+const moncycle_app_text = {
+
+	/* --- calendar ------------------------------------------------------- */
+	months : ["jan", "fév", "mars", "avr", "mai", "juin", "juil", "août", "sep", "oct", "nov", "déc"],
+	months_long : ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"],
+	weekdays : ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"],
+	// "3 mars"
+	date_short : function (d) {
+		return `${d.getDate()} ${moncycle_app_text.months[d.getMonth()]}`;
+	},
+	// "lundi 3 mars 2025"
+	date_long : function (d) {
+		return `${moncycle_app_text.weekdays[d.getDay()]} ${d.getDate()} ${moncycle_app_text.months_long[d.getMonth()]} ${d.getFullYear()}`;
+	},
+	// heading of a timeline row: weekday initial + short date, "l 3 mars "
+	date_row : function (d) {
+		return `${moncycle_app_text.weekdays[d.getDay()][0]} ${d.getDate()} ${moncycle_app_text.months[d.getMonth()]} `;
+	},
+	// position of a day inside its cycle, "J12"
+	day_number : function (n) {
+		return `J${n}`;
+	},
+
+	/* --- page ----------------------------------------------------------- */
+	console_banner : "moncycle.app - app de suivi de cycle pour les méthodes naturelles",
+	page_title : function (name) {
+		return `moncycle.app - ${name}`;
+	},
+	sponsor_badge : " &#x1F396;&#xFE0F;",
+	// label of the view switch: it names the view it switches TO
+	but_view_maxi : "🔬 Vue maxi",
+	but_view_mini : "🔭 Vue mini",
+
+	/* --- cycle header and exports --------------------------------------- */
+	// "Cycle du 3 mars au 29 mars de 27j" (timeline) / "... de 27 jours" (recap)
+	cycle_title : function (start, end, nb) {
+		return `Cycle du ${moncycle_app_text.date_short(start)} <span class='cycle_fin'>au ${moncycle_app_text.date_short(end)} </span> de <span class='nb_jours'>${nb}</span>j`;
+	},
+	cycle_title_recap : function (start, end, nb) {
+		return `Cycle du ${moncycle_app_text.date_short(start)}. <span class='cycle_fin'>au ${moncycle_app_text.date_short(end)}. </span> de <span class='nb_jours'>${nb}</span> jours`;
+	},
+	but_export_nfp : "🚀 export NFP",
+	but_export_csv : "&#x1F522; export CSV",
+	but_export_pdf : "&#x1F4C4; export PDF",
+	label_anonymous_export : " anonymiser l'export PDF",
+
+	/* --- new cycle form ------------------------------------------------- */
+	new_cycle_title : "Créer un nouveau cycle",
+	new_cycle_ask_1st_day : "Entrer la date du premier jour du cycle à créer.",
+	new_cycle_ask_restart : "Entrer la date du jour de reprise du suivi du cycle.",
+	new_cycle_submit : "✔️",
+	new_cycle_date_error : "Erreur: la date du premier jour du cycle à créer ne doit pas être dans un cycle existant et doit être antérieure à aujourd'hui.",
+	all_cycles_shown : "Tous les cycles sont affichées.",
+	create_cycle_hint : "Dans la page MAXI vous avez la possibilité de créer un nouveau cycle.",
+
+	/* --- a day, in the timeline and in the recap ------------------------ */
+	// glyph drawn in the day cell, keyed by the stamp code stored in the DB
+	stamp_glyph : {
+		"R"  : "R",
+		"G"  : "G",
+		"Y"  : "=",
+		"BB" : "👶",
+	},
+	// glyph of the cervical fluid arrow, keyed by the value stored in the DB
+	arrow_glyph : {
+		"↓" : "⬇️",
+		"↑" : "⬆️",
+		"→" : "➡️",
+		"←" : "⬅️",
+		""  : ""
+	},
+	loading : "chargement...",
+	loading_glyph : "⏳",
+	to_fill_in : "à renseigner",
+	to_fill_in_glyph : "👋",
+	not_observed : "jour non observé",
+	not_observed_glyph : "?",
+	pregnancy : "🤰 grossesse",
+	pregnancy_glyph : "🤰",
+	// stamp drawn in the recap for a pregnancy day
+	pregnancy_stamp_glyph : "G",
+	union : "❤️",
+	peak_bill : "⛰️",
+	peak_fc : "PIC",
+	// day counted from the peak, "+3"
+	peak_offset : function (n) {
+		return `+${n}`;
+	},
+	// time the temperature was taken, " à 7h05"
+	temperature_time : function (hh, mm) {
+		return ` à ${hh}h${mm}`;
+	},
+	// stands for a note too long to fit in the recap cell
+	fc_note_overflow : "*",
+	// not used at the moment
+	to_today : "à auj.",
+
+	/* --- day form ------------------------------------------------------- */
+	arrow_up : "↑",
+	arrow_down : "↓",
+	// button moving to the previous / next day, "↑ J13"
+	but_day_step : function (arrow, n) {
+		return `${arrow} ${moncycle_app_text.day_number(n)}`;
+	},
+	target_blank : "blanc",
+	target_empty : "vide",
+	bulk_too_many_days : function (max) {
+		return `Le nombre de jours doit être inférieur à ${max}.`;
+	},
+	confirm_delete_day : function (d) {
+		return `Voulez-vous vraiment supprimer définitivement les données de la journée du ${moncycle_app_text.date_long(d)}?`;
+	},
+	fc_syntax_valid : "syntaxe valide",
+	fc_syntax_invalid : "syntaxe invalide",
+}
+
 moncycle_app = {
-	stamp : {
-		"R"  : ["R", "rouge"],
-		"G"  : ["G", "vert"],
-		"Y"  : ["=", "jaune"],
-		"BB" : ["👶", "baby"],
+	stamp_class : {
+		"R"  : "rouge",
+		"G"  : "vert",
+		"Y"  : "jaune",
+		"BB" : "baby",
 	},
-	fleche : {
-		"↓" : ["b", "⬇️"],
-		"↑" : ["h", "⬆️"],
-		"→" : ["d", "➡️"],
-		"←" : ["g", "⬅️"],
-		""  : ["", ""]
-	},
-	text : {
-		je_sais_pas: "jour non observé",
-		je_sais_pas_emoji: "?",
-		pregnancy: "🤰 grossesse",
-		pregnancy_court: "🤰",
-		a_renseigner : "à renseigner",
-		a_renseigner_emoji : "👋",
-		chargement : "chargement...",
-		chargement_emoji : "⏳",
-		a_aujourdhui : "à auj.",
-		union : "❤️",
-		sommet_bill : "⛰️",
-		sommet_fc : "PIC",
-		mois : ["jan", "fév", "mars", "avr", "mai", "juin", "juil", "août", "sep", "oct", "nov", "déc"],
-		mois_long : ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"],
-		semaine : ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"],
+	arrow_id : {
+		"↓" : "b",
+		"↑" : "h",
+		"→" : "d",
+		"←" : "g",
+		""  : ""
 	},
 	sommets : [],
 	counter_starts : {},
@@ -51,7 +165,7 @@ moncycle_app = {
 	day_timeline : {},
 	timeline_asc : true,
 	letsgo : function() {
-		console.log("moncycle.app - app de suivi de cycle pour les méthodes naturelles");
+		console.log(moncycle_app_text.console_banner);
 		if (!localStorage.auth) window.location.replace('/auth');
 		moncycle_app.date_chargement = moncycle_app.date.str(moncycle_app.date.now());
 		if (localStorage.description != null) {
@@ -71,10 +185,10 @@ moncycle_app = {
 			localStorage.constante = JSON.stringify(data);
 			moncycle_app.timeline_asc = data.timeline_asc;
 			localStorage.timeline_asc = JSON.stringify(data.timeline_asc);
-			document.title = "moncycle.app - " + moncycle_app.constante.name;
+			document.title = moncycle_app_text.page_title(moncycle_app.constante.name);
 			if (moncycle_app.cycle_curseur == 0) moncycle_app.remplir_page_de_cycle();
 			$("#name").html(moncycle_app.constante.name);
-			if (moncycle_app.constante.sponsor) $("#name").append(" &#x1F396;&#xFE0F;");
+			if (moncycle_app.constante.sponsor) $("#name").append(moncycle_app_text.sponsor_badge);
 			$(".main_button").css("display","inline-block");
 			if (moncycle_app.timeline_asc) $("#charger_cycle").hide();
 			else $("#charger_cycle").show();
@@ -129,14 +243,14 @@ moncycle_app = {
 		if (moncycle_app.mini_maxi=="maxi"){
 			$("#timeline").hide();
 			$("#recap").show();
-			$("#but_mini_maxi").text("🔬 Vue maxi");
+			$("#but_mini_maxi").text(moncycle_app_text.but_view_maxi);
 			moncycle_app.mini_maxi="mini";
 			localStorage.mini_maxi="mini";
 		}
 		else {
 			$("#timeline").show();
 			$("#recap").hide();
-			$("#but_mini_maxi").text("🔭 Vue mini");
+			$("#but_mini_maxi").text(moncycle_app_text.but_view_mini);
 			moncycle_app.mini_maxi="maxi";
 			localStorage.mini_maxi="maxi";
 		}
@@ -277,11 +391,11 @@ moncycle_app = {
 			min_calc.setDate(min_calc.getDate()+1);
 			min_date = moncycle_app.date.str(min_calc);
 		}
-		let text = "Entrer la date du premier jour du cycle à créer.";
-		if (!prepend) text = "Entrer la date du jour de reprise du suivi du cycle.";
-		let html = `<div class="cycle" id="nouveau_cycle"><h2 class="title">Créer un nouveau cycle</h2><div class="nouveau_cycle_form">${text}<br><input id="nouveau_cycle_date" type="date" value="${max_date}" max="${max_date}" min="${min_date}" /> <input type="button" id="but_creer_cycle" value="✔️" /></div></div>`;	
-		let nocycle = `<div id="nocycle">Tous les cycles sont affichées.</div>`;
-		if (moncycle_app.cycle_curseur == 0) nocycle = `<div id="nocycle">Dans la page MAXI vous avez la possibilité de créer un nouveau cycle.</div>`;
+		let instruction = moncycle_app_text.new_cycle_ask_1st_day;
+		if (!prepend) instruction = moncycle_app_text.new_cycle_ask_restart;
+		let html = `<div class="cycle" id="nouveau_cycle"><h2 class="title">${moncycle_app_text.new_cycle_title}</h2><div class="nouveau_cycle_form">${instruction}<br><input id="nouveau_cycle_date" type="date" value="${max_date}" max="${max_date}" min="${min_date}" /> <input type="button" id="but_creer_cycle" value="${moncycle_app_text.new_cycle_submit}" /></div></div>`;	
+		let nocycle = `<div id="nocycle">${moncycle_app_text.all_cycles_shown}</div>`;
+		if (moncycle_app.cycle_curseur == 0) nocycle = `<div id="nocycle">${moncycle_app_text.create_cycle_hint}</div>`;
 		if (prepend && !moncycle_app.timeline_asc) {
 			$("#charger_cycle").prop("disabled", true);
 			$("#timeline").prepend(html);
@@ -296,7 +410,7 @@ moncycle_app = {
 			let max = moncycle_app.date.parse($("#nouveau_cycle_date").attr("max"));
 			let min = moncycle_app.date.parse($("#nouveau_cycle_date").attr("min"));
 			if (moncycle_app.date.parse(nouveau_cycle_date) > max || (!isNaN(min) && moncycle_app.date.parse(nouveau_cycle_date) < min)) {
-				alert("Erreur: la date du premier jour du cycle à créer ne doit pas être dans un cycle existant et doit être antérieure à aujourd'hui.");
+				alert(moncycle_app_text.new_cycle_date_error);
 				return;
 			}
 			$.post("api/day", `date=${nouveau_cycle_date}&cycle_1st_day=1`).done(function(data){
@@ -327,8 +441,8 @@ moncycle_app = {
 		$(".obs .s").empty();
 		$(".obs .s").show();
 		$(".day .s").removeClass("j_pic");
-		let txt_sommet = moncycle_app.text.sommet_bill;
-		if (moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4) txt_sommet = moncycle_app.text.sommet_fc;
+		let txt_sommet = moncycle_app_text.peak_bill;
+		if (moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4) txt_sommet = moncycle_app_text.peak_fc;
 		moncycle_app.sommets.forEach(s => {
 			let last = 3;
 			if (!moncycle_app.timeline_asc) last = $(`#o-${s}`).parent()[0].children.length - $(`#o-${s}`).index() - 1;
@@ -337,7 +451,7 @@ moncycle_app = {
 				let s_date = moncycle_app.date.parse(s);
 				s_date.setDate(s_date.getDate()+n);
 				let s_id = moncycle_app.date.str(s_date);
-				$(`#o-${s_id} .s`).html(`+${n}`);
+				$(`#o-${s_id} .s`).html(moncycle_app_text.peak_offset(n));
 				$(`#ro-${s_id} .s`).html(n);
 			});
 			$(`#o-${s} .s`).html(txt_sommet);
@@ -354,7 +468,7 @@ moncycle_app = {
 				let s_date = moncycle_app.date.parse(d);
 				s_date.setDate(s_date.getDate()+i);
 				let s_id = moncycle_app.date.str(s_date);
-				$(`#o-${s_id} .n`).html(`+${i+1}`);
+				$(`#o-${s_id} .n`).html(moncycle_app_text.peak_offset(i+1));
 				if (($(`#ro-${s_id} .s`).text()).length==0) {
 					$(`#ro-${s_id} .n`).html(i+1);
 					$(`#ro-${s_id} .n`).show();
@@ -366,9 +480,9 @@ moncycle_app = {
 	cycle_option : function (c_date_str, c_date_fin_str, discri) {
 		let id_buts = c_date_str.replace("-", "_").replace("-", "_");
 		let c_action = $(`<div class='cycle_options c_options_${c_date_str}' style='display:none'></div>`);
-		c_action.append(`<a href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=nfp'><button style='display:none'>🚀 export NFP</button></a> `);
-		c_action.append(`<a href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=csv'><button>&#x1F522; export CSV</button></a> `);
-		c_action.append(`<a id='pdf_but_${id_buts}_${discri}' href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=pdf&anonymous=0'><button>&#x1F4C4; export PDF</button></a> `);
+		c_action.append(`<a href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=nfp'><button style='display:none'>${moncycle_app_text.but_export_nfp}</button></a> `);
+		c_action.append(`<a href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=csv'><button>${moncycle_app_text.but_export_csv}</button></a> `);
+		c_action.append(`<a id='pdf_but_${id_buts}_${discri}' href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=pdf&anonymous=0'><button>${moncycle_app_text.but_export_pdf}</button></a> `);
 		let anonymiser_checkbox = $(`<input type='checkbox' value='1' id='anonymous_${id_buts}_${discri}' name="privacy" />`);
 		anonymiser_checkbox.change(function () {
 			let url = $(`#pdf_but_${id_buts}_${discri}`).attr("href").split('?');
@@ -380,7 +494,7 @@ moncycle_app = {
 		});
 		c_action.append("<br />");
 		c_action.append(anonymiser_checkbox);
-		c_action.append(`<label for='anonymous_${id_buts}_${discri}' class='label_anonymous_export'> anonymiser l'export PDF</label>`);
+		c_action.append(`<label for='anonymous_${id_buts}_${discri}' class='label_anonymous_export'>${moncycle_app_text.label_anonymous_export}</label>`);
 		return c_action;
 	},
 	cycle_title_opened : null,
@@ -400,8 +514,7 @@ moncycle_app = {
 		let cycle = $("<div>", {id: c_id, class: "cycle"});
 		let c_date = moncycle_app.date.parse(c);
 		let c_fin = new Date(fin);
-		let c_fin_text = `au ${c_fin.getDate()} ${moncycle_app.text.mois[c_fin.getMonth()]} `;
-		let c_title = $(`<h2 class='title title_${c}' for='${c}'>Cycle du ${c_date.getDate()} ${moncycle_app.text.mois[c_date.getMonth()]} <span class='cycle_fin'>${c_fin_text}</span> de <span class='nb_jours'>${nb}</span>j</h2>`);
+		let c_title = $(`<h2 class='title title_${c}' for='${c}'>${moncycle_app_text.cycle_title(c_date, c_fin, nb)}</h2>`);
 		let c_graph = $(`<div class='graph pas_bill pas_fc' id='graph-${c_id}' style='display:none' ><canvas id='canvas-${c_id}'></canvas></div>`);
 		let c_content = $(`<div class='contenu' id='contenu-${c_id}'></div>`);
 		c_title.click(moncycle_app.cycle_title_click);
@@ -416,8 +529,7 @@ moncycle_app = {
 		let cycle = $("<div>", {id: c_id, class: "cycle_recap"});
 		let c_date = moncycle_app.date.parse(c);
 		let c_fin = new Date(fin);
-		let c_fin_text = `au ${c_fin.getDate()} ${moncycle_app.text.mois[c_fin.getMonth()]}. `;
-		let c_title = $(`<h5 class='title title_${c}' for='${c}'>Cycle du ${c_date.getDate()} ${moncycle_app.text.mois[c_date.getMonth()]}. <span class='cycle_fin'>${c_fin_text}</span> de <span class='nb_jours'>${nb}</span> jours</h5>`);
+		let c_title = $(`<h5 class='title title_${c}' for='${c}'>${moncycle_app_text.cycle_title_recap(c_date, c_fin, nb)}</h5>`);
 		c_title.click(moncycle_app.cycle_title_click);
 		cycle.append(c_title);
 		cycle.append(moncycle_app.cycle_option(c, moncycle_app.date.str(fin), "recap"));
@@ -479,7 +591,7 @@ moncycle_app = {
 		let day_timeline = $("<div>", {id: o_id, class: o_class, date: moncycle_app.date.str(o_date)});
 		if (j.chargement) {
 			day_timeline.append(`<span class='s'></span>`);
-			day_timeline.append(`<span class='g g_loading'>${moncycle_app.text.chargement_emoji}</span>`);
+			day_timeline.append(`<span class='g g_loading'>${moncycle_app_text.loading_glyph}</span>`);
 			day_timeline.append(`<span class='c'></span>`);
 			if (moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4) {
 				day_timeline.append(`<span class='fc'></span>`);
@@ -492,14 +604,14 @@ moncycle_app = {
 		let index_couleur = j.stamp;
 		let baby = (j.stamp == "BB");
 		if (j.stamp && j.stamp.includes("BB") && j.stamp.length>2) {
-			color = moncycle_app.stamp["BB"][1];
+			color = moncycle_app.stamp_class["BB"];
 			index_couleur = index_couleur.replace("BB", "");
 			baby = true;
 		}
-		if (moncycle_app.stamp[index_couleur]) color = moncycle_app.stamp[index_couleur][1]; 
-		let car_du_milieu = baby ? moncycle_app.stamp["BB"][0] : "";
-		let car_du_bas = j.union_sex ? moncycle_app.text.union : "";
-		if (j.err && j.err.includes("no data")) car_du_milieu = moncycle_app.text.a_renseigner_emoji;
+		if (moncycle_app.stamp_class[index_couleur]) color = moncycle_app.stamp_class[index_couleur]; 
+		let car_du_milieu = baby ? moncycle_app_text.stamp_glyph["BB"] : "";
+		let car_du_bas = j.union_sex ? moncycle_app_text.union : "";
+		if (j.err && j.err.includes("no data")) car_du_milieu = moncycle_app_text.to_fill_in_glyph;
 		let recap_note = j.fc_score;
 		if ((moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4) && j.fc_score) {
 			recap_note = recap_note.toUpperCase();
@@ -518,15 +630,15 @@ moncycle_app = {
 		}
 		if (j.pregnancy) {
 			color = "pink";
-			car_du_milieu = "G"
-			car_du_bas = moncycle_app.text.pregnancy_court;
+			car_du_milieu = moncycle_app_text.pregnancy_stamp_glyph;
+			car_du_bas = moncycle_app_text.pregnancy_glyph;
 		}
 		if (j.day_not_observed) {
-			car_du_milieu = "?";		
+			car_du_milieu = moncycle_app_text.not_observed_glyph;		
 			color = "jcpas";
 		}
-		if (car_du_milieu=="" && j.stamp=="") car_du_milieu = moncycle_app.text.a_renseigner_emoji;
-		day_timeline.append(`<span class='s'>${j.is_peak ? moncycle_app.text.sommet_bill : ""}</span>`);
+		if (car_du_milieu=="" && j.stamp=="") car_du_milieu = moncycle_app_text.to_fill_in_glyph;
+		day_timeline.append(`<span class='s'>${j.is_peak ? moncycle_app_text.peak_bill : ""}</span>`);
 		if (moncycle_app.constante.nfp_method==1 || moncycle_app.constante.nfp_method==2) day_timeline.append(`<span class='n'></span>`);
 		day_timeline.append(`<span class='g ${color}'>${car_du_milieu}</span>`);
 		if ((moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4) && !j.pregnancy && !j.day_not_observed && j.fc_score){
@@ -535,7 +647,7 @@ moncycle_app = {
 			if (fc_glaire) recap_note = recap_note.replace(fc_glaire[0], '');
 			day_timeline.append(`<span class='fc'>${fc_glaire? fc_glaire[0] : ""}</span>`);
 			recap_note = recap_note.trim().replace(/\s+/g, '')
-			if (recap_note.length>2) recap_note='*';
+			if (recap_note.length>2) recap_note = moncycle_app_text.fc_note_overflow;
 			day_timeline.append(`<span class='fc'>${recap_note}</span>`);
 		}
 		else if (moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4) {
@@ -554,25 +666,25 @@ moncycle_app = {
 		if (j.pregnancy) o_class += " o_gross";
 		let day_timeline = $("<div>", {id: o_id, class: o_class, date : moncycle_app.date.str(o_date)});
 		let d_bold = o_date.getDay()==0 ? "bold" : "";
-		day_timeline.append(`<span class='d ${d_bold}'>${moncycle_app.text.semaine[o_date.getDay()][0]} ${o_date.getDate()} ${moncycle_app.text.mois[o_date.getMonth()]} </span>`);
+		day_timeline.append(`<span class='d ${d_bold}'>${moncycle_app_text.date_row(o_date)}</span>`);
 		let pos = $(`<span class='j'>${j.pos}</span>`);
 		day_timeline.append(pos);
 		if (j.chargement) {
-			day_timeline.append(`<span class='g g_loading'>${moncycle_app.text.chargement_emoji}</span>`);
-			day_timeline.append(`<span class='l'>${moncycle_app.text.chargement}</span>`);
+			day_timeline.append(`<span class='g g_loading'>${moncycle_app_text.loading_glyph}</span>`);
+			day_timeline.append(`<span class='l'>${moncycle_app_text.loading}</span>`);
 			return day_timeline;
 		}
 		day_timeline.click(moncycle_app.open_menu);
 		let tbd = true;
 		if (j.pregnancy) {
-			day_timeline.append(`<span class='e'>${moncycle_app.text.pregnancy}</span>`);
+			day_timeline.append(`<span class='e'>${moncycle_app_text.pregnancy}</span>`);
 			day_timeline.append(`<span class='s'></span>`);
 			day_timeline.append(`<span class='n'></span>`);
 			tbd = false;
 		}
 		else {
 			if (j.day_not_observed) {
-				day_timeline.append(`<span class='g jcpas'>${moncycle_app.text.je_sais_pas_emoji}</span>`);
+				day_timeline.append(`<span class='g jcpas'>${moncycle_app_text.not_observed_glyph}</span>`);
 				pos.addClass("j_jcpas");
 				tbd = false;
 			}
@@ -581,14 +693,14 @@ moncycle_app = {
 					let contenu = "o";
 					let color = j.stamp;
 					if (j.stamp.includes("BB") && j.stamp.length>2){
-						contenu = moncycle_app.stamp["BB"][0];
+						contenu = moncycle_app_text.stamp_glyph["BB"];
 						color = j.stamp.replace("BB", "");
 					}
 					else {
-						contenu = moncycle_app.stamp[j.stamp][0];
+						contenu = moncycle_app_text.stamp_glyph[j.stamp];
 					}
-					day_timeline.append(`<span class='g ${moncycle_app.stamp[color][1]}'>${contenu}</span>`);
-					pos.addClass("j_" + moncycle_app.stamp[color][1]);
+					day_timeline.append(`<span class='g ${moncycle_app.stamp_class[color]}'>${contenu}</span>`);
+					pos.addClass("j_" + moncycle_app.stamp_class[color]);
 					tbd = false;
 				}
 				let html_fc_score = moncycle_app.fc_note2html(j.fc_score || "");
@@ -603,30 +715,30 @@ moncycle_app = {
 					}
 					day_timeline.append(`<span class='t pas_bill pas_fc' style='background-color: ${color}'>${temp}</span>`);
 					if (j.time_temp_taken) {
-						let h = j.time_temp_taken.substring(0,5).replace(':','h');
-						day_timeline.append(`<span class='th bill pas_fc pas_bill' style='color: ${color}'> à ${h}</span>`);
+						let hm = j.time_temp_taken.substring(0,5).split(':');
+						day_timeline.append(`<span class='th bill pas_fc pas_bill' style='color: ${color}'>${moncycle_app_text.temperature_time(hm[0], hm[1])}</span>`);
 					}
 					tbd = false;
 				}
 				if ((moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4) && j.fc_score) tbd = false;
 			}
 			if (tbd) {
-				day_timeline.append(`<span class='g ar'>${moncycle_app.text.a_renseigner_emoji}</span>`);
+				day_timeline.append(`<span class='g ar'>${moncycle_app_text.to_fill_in_glyph}</span>`);
 				day_timeline.append(`<span class='s'></span>`);
-				day_timeline.append(`<span class='r'>${moncycle_app.text.a_renseigner}</span>`);
+				day_timeline.append(`<span class='r'>${moncycle_app_text.to_fill_in}</span>`);
 				pos.addClass("j_ar");
 				return day_timeline;
 			}
-			day_timeline.append(`<span class='s'>${j.is_peak ? moncycle_app.text.sommet_bill : ""}</span>`);
+			day_timeline.append(`<span class='s'>${j.is_peak ? moncycle_app_text.peak_bill : ""}</span>`);
 			day_timeline.append(`<span class='n'></span>`);
 			if (!j.day_not_observed) {
 				let description_tbl = [];
 				for (const sdesc of j.description) description_tbl.push(sdesc.name);
 				day_timeline.append(`<span class='o pas_fc pas_fc_temp'>${description_tbl.join(', ')}</span>`);
-				if (moncycle_app.fleche[j.fc_arrow]) day_timeline.append(`<span class='fle pas_bill pas_bill_temp'>${moncycle_app.fleche[j.fc_arrow][1] || ""}</span>`);
+				if (moncycle_app.arrow_id[j.fc_arrow]) day_timeline.append(`<span class='fle pas_bill pas_bill_temp'>${moncycle_app_text.arrow_glyph[j.fc_arrow] || ""}</span>`);
 			}
-			else day_timeline.append(`<span class='p'>${moncycle_app.text.je_sais_pas}</span>`);
-			day_timeline.append(`<span class='u'>${j.union_sex ? moncycle_app.text.union : ""}</span>`);
+			else day_timeline.append(`<span class='p'>${moncycle_app_text.not_observed}</span>`);
+			day_timeline.append(`<span class='u'>${j.union_sex ? moncycle_app_text.union : ""}</span>`);
 		}
 		if (j.comment) {
 			let comment = j.comment.trim();
@@ -638,8 +750,8 @@ moncycle_app = {
 		return day_timeline;
 	},
 	go_blank_or_empty : function () {
-		if ($("#go_baby")[0].checked) $("#blank_or_empty").text("blanc");
-		else $("#blank_or_empty").text("vide");
+		if ($("#go_baby")[0].checked) $("#blank_or_empty").text(moncycle_app_text.target_blank);
+		else $("#blank_or_empty").text(moncycle_app_text.target_empty);
 	},
 	menu_opened_date : null,
 	open_menu : function(e, date = null) {
@@ -650,13 +762,11 @@ moncycle_app = {
 		moncycle_app.menu_opened_date = date;
 		let j = moncycle_app.day_timeline[moncycle_app.menu_opened_date];
 		let stamp = j.stamp? j.stamp : "";
-		let titre = [moncycle_app.text.semaine[o_date.getDay()], o_date.getDate(), moncycle_app.text.mois_long[o_date.getMonth()], o_date.getFullYear()];
-		titre.push(`<span>J${j.pos}</span>`);
-		$("#jour_form_titre").html(titre.join(" "));
-		let arrow = {"next" : '↑', "prev" : '↓'};
-		if (!moncycle_app.timeline_asc) arrow = {"next" : '↓', "prev" : '↑'};
-		$("#jour_form_prev").text(arrow["prev"] + " J" + (j.pos-1));
-		$("#jour_form_next").text(arrow["next"] + " J" + (j.pos+1));
+		$("#jour_form_titre").html(`${moncycle_app_text.date_long(o_date)} <span>${moncycle_app_text.day_number(j.pos)}</span>`);
+		let arrow = {"next" : moncycle_app_text.arrow_up, "prev" : moncycle_app_text.arrow_down};
+		if (!moncycle_app.timeline_asc) arrow = {"next" : moncycle_app_text.arrow_down, "prev" : moncycle_app_text.arrow_up};
+		$("#jour_form_prev").text(moncycle_app_text.but_day_step(arrow["prev"], j.pos-1));
+		$("#jour_form_next").text(moncycle_app_text.but_day_step(arrow["next"], j.pos+1));
 		let date_cursor = new Date(j.date_obs);
 		date_cursor.setDate(date_cursor.getDate()+1);
 		let str_date_cursor = moncycle_app.date.str(date_cursor);
@@ -682,12 +792,12 @@ moncycle_app = {
 			moncycle_app.fc_note2form();
 			moncycle_app.fc_test_note();
 		}
-		if (j.fc_arrow && (moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4)) $("#fc_f" + moncycle_app.fleche[j.fc_arrow][0]).prop('checked', true);
+		if (j.fc_arrow && (moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4)) $("#fc_f" + moncycle_app.arrow_id[j.fc_arrow]).prop('checked', true);
 		if (stamp.includes("BB") && stamp.length>2) {
-			$("#go_" + moncycle_app.stamp["BB"][1]).prop('checked', true);
+			$("#go_" + moncycle_app.stamp_class["BB"]).prop('checked', true);
 			stamp = stamp.replace("BB", "");
 		}
-		if (moncycle_app.stamp[stamp]) $("#go_" + moncycle_app.stamp[stamp][1]).prop('checked', true);
+		if (moncycle_app.stamp_class[stamp]) $("#go_" + moncycle_app.stamp_class[stamp]).prop('checked', true);
 		moncycle_app.go_blank_or_empty();
 		$("#form_temp").val(j.temperature);
 		$("#form_time_temp_taken").val(j.time_temp_taken);
@@ -783,7 +893,7 @@ moncycle_app = {
 	bulk_submit_menu : function () {
 		let nb_of_days = $("#i_bulk_compter").val();
 		if (nb_of_days > 365) {
-			alert("Le nombre de jours doit être inférieur à 365.");
+			alert(moncycle_app_text.bulk_too_many_days(365));
 			return;
 		}
 		let menu_current_date = moncycle_app.menu_opened_date;
@@ -810,8 +920,7 @@ moncycle_app = {
 	suppr_day_timeline : function () {
 		let date = moncycle_app.date.parse($("#form_date").val());
 		date.setHours(9);
-		let jour = [moncycle_app.text.semaine[date.getDay()], date.getDate(), moncycle_app.text.mois_long[date.getMonth()], date.getFullYear()].join(" ");
-		if (confirm(`Voulez-vous vraiment supprimer définitivement les données de la journée du ${jour}?`)) {
+		if (confirm(moncycle_app_text.confirm_delete_day(date))) {
 			let date_id = moncycle_app.date.str(date);
 			if (moncycle_app.day_timeline[date_id]["cycle_1st_day"] || moncycle_app.day_timeline[date_id]["pregnancy"]) moncycle_app.page_a_recharger = true;
 			$.ajax({type : 'DELETE', "url" : "api/day", "data" : `date=${date_id}`}).done(function(data){
@@ -834,7 +943,7 @@ moncycle_app = {
 		$.each(data, function(o_date, o_data) {
 			if (moncycle_app.graph_data[o_data.cycle] == undefined) moncycle_app.graph_data[o_data.cycle] = {};
 			let date = moncycle_app.date.parse(o_date);
-			let label = `${date.getDate()} ${moncycle_app.text.mois[date.getMonth()]}`;
+			let label = moncycle_app_text.date_short(date);
 			moncycle_app.graph_data[o_data.cycle][label] = parseFloat(o_data.temperature);
 			if (moncycle_app.graphs[o_data.cycle]) moncycle_app.graph_update(o_data.cycle);
 		});
@@ -845,12 +954,12 @@ moncycle_app = {
 			$("#fc_msg").empty();
 		}
 		else if (moncycle_app.fc_note_regex.test($("#form_fc").val().toUpperCase())) {
-			$("#fc_msg").html("syntaxe valide");
+			$("#fc_msg").html(moncycle_app_text.fc_syntax_valid);
 			$("#fc_msg").addClass("vert");
 			$("#fc_msg").removeClass("rouge");
 		}
 		else {
-			$("#fc_msg").html("syntaxe invalide");
+			$("#fc_msg").html(moncycle_app_text.fc_syntax_invalid);
 			$("#fc_msg").addClass("rouge");
 			$("#fc_msg").removeClass("vert");
 		}
