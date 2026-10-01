@@ -101,6 +101,22 @@ function db_select_all_description_for_day_timeline($db, $no_user_account, $no_d
 	return $statement->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// Every description linked to any day in a date range, in one query. The per-day
+// db_select_all_description_for_day_timeline() above is an N+1 when a whole period is read
+// at once (the NFP export walks a cycle day by day), so the file pipeline uses this and
+// groups the rows by no_day in PHP.
+function db_select_descriptions_for_day_timeline_frame ($db, $start_date, $end_date, $no_user_account) {
+	static $sql = "SELECT ld.no_day, d.no_description, d.name, d.type FROM day_timeline AS dt JOIN link_day_timeline_description AS ld ON ld.no_day = dt.no_day JOIN description AS d ON d.no_description = ld.no_description WHERE dt.no_user_account = :no_user_account AND dt.date_obs >= :start_date AND dt.date_obs <= :end_date AND d.no_user_account = :no_user_account ORDER BY ld.no_day ASC, d.type ASC, d.no_description ASC";
+
+	static $statement = $db->prepare($sql);
+	$statement->bindValue(":start_date", $start_date, PDO::PARAM_STR);
+	$statement->bindValue(":end_date", $end_date, PDO::PARAM_STR);
+	$statement->bindValue(":no_user_account", $no_user_account, PDO::PARAM_INT);
+	$statement->execute();
+
+	return $statement->fetchAll(PDO::FETCH_ASSOC);
+}
+
 function db_delete_linked_descriptions ($db, $no_day, $no_description) {
 	static $sql = "DELETE FROM link_day_timeline_description WHERE no_description = :no_description AND no_day = :no_day";
 
@@ -129,6 +145,23 @@ function db_select_description_from_name($db, $no_user_account, $name) {
 	static $statement = $db->prepare($sql);
 	$statement->bindValue(":name", $name, PDO::PARAM_STR);
 	$statement->bindValue(":no_user_account", $no_user_account, PDO::PARAM_INT);
+	$statement->execute();
+
+	return $statement->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// Exact-match sibling of db_select_description_from_name() above, which matches with
+// "name LIKE :name": unescaped "%" and "_" in the bound value act as wildcards there, and its
+// LIMIT 1 has no ORDER BY, so a name carrying either character can resolve to an arbitrary
+// different description. That is harmless for the account UI (names come from a picklist) but
+// not for the NFP import, where the names come out of a file. utf8mb4_bin makes "=" exact and
+// case-sensitive, and it matches the unique key, so this can never collide on insert.
+function db_select_description_exact_name($db, $no_user_account, $name) {
+	static $sql = "SELECT d.no_description, d.name, d.type FROM description AS d WHERE d.no_user_account = :no_user_account AND d.name = :name LIMIT 1";
+
+	static $statement = $db->prepare($sql);
+	$statement->bindValue(":no_user_account", $no_user_account, PDO::PARAM_INT);
+	$statement->bindValue(":name", $name, PDO::PARAM_STR);
 	$statement->execute();
 
 	return $statement->fetchAll(PDO::FETCH_ASSOC);

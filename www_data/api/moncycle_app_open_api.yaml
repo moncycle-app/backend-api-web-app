@@ -82,7 +82,6 @@ info:
     | `GET /version` | a plain JSON object (a static file) |
     | `GET /pub_stat` | a plain JSON object |
     | `GET /export` | a file (`.nfp` JSON, `.csv` or `.pdf`); errors are **plain text in French** |
-    | `POST /import` | its own JSON shape: `err_code` / `err_message`, see the endpoint |
     | `GET /all_of_my_data_plz` | a CSV file; `401` has no body |
 
     `GET /logout` is also special: it answers with an HTTP redirect, not a body.
@@ -353,9 +352,12 @@ tags:
       **section 5** before your first write (`POST /day` replaces the whole day).
   - name: files
     description: |-
-      Import and export. These endpoints move **files**, not live resources, so they do not use
-      the `data` / `error` envelope. `/export` and `/import` speak the portable **NFP file
-      format**, which is versioned on its own (`schemaVersion`) and shared with other NFP apps.
+      Import and export. Both speak the portable **NFP file format**, which is versioned on its
+      own (`schemaVersion`) and shared with other NFP apps.
+
+      `/export` returns a **file**, not a live resource, so it does not use the `data` / `error`
+      envelope — its errors are plain text in French. `/import` takes a file but answers like
+      the rest of the API, with `data` on success and `error` on failure.
 
 paths:
 
@@ -1773,7 +1775,7 @@ paths:
 
         | `type` | Content type | Purpose |
         |---|---|---|
-        | `nfp` | `application/json` | **Portable data.** The NFP file format, to move data to another app. See the `NfpFile` schema. |
+        | `nfp` | `application/json` | **Portable data.** The NFP file format, to move data to another app, and what `POST /import` reads. See the `NfpFile` schema. |
         | `csv` | `application/csv` | A spreadsheet, for a quick look at raw values. |
         | `pdf` | `application/pdf` | A printable chart, laid out for the account's method. |
 
@@ -1793,10 +1795,21 @@ paths:
         - For `type=nfp` the export is widened backwards to the **first day of the cycle**
           containing `start_date`, so a cycle is never exported cut in half. The `csv` and `pdf`
           formats use exactly the dates you asked for.
-        - `anonymous=1` only affects `pdf`: it leaves the user's name off the chart, which is
-          what you want before sharing it with a practitioner.
+        - `anonymous=1` affects `pdf` and `nfp`: it leaves the user's name off the chart, and
+          omits the `userInformation` block from the NFP file. The observations themselves are
+          unchanged. This is what you want before sharing either with a practitioner.
         - `json_in_page=1` only affects `nfp`: it returns indented JSON inline instead of
           triggering a file download. Useful for a quick look in a browser or in curl.
+
+        ### What an NFP export contains
+
+        `fileInformation` (this app and its version), `userMethodPreferences.preferredMethod`,
+        `userInformation` unless `anonymous=1`, and the cycles of the period — split at each
+        cycle first day, each one a full run of dates with gaps written as `{}`.
+
+        Re-importing an exported file reproduces the account exactly, with three expected
+        normalisations of the FertilityCare notation: `Br` is written `B`, `x1`/`x2`/`x3` are
+        written uppercase, and `C/K` is written `CK`.
 
         By default the response carries `Content-Disposition: attachment`, so a browser saves a
         file named `moncycle_app_<date>.<ext>`.
@@ -1837,7 +1850,9 @@ paths:
         - name: anonymous
           in: query
           required: false
-          description: "`type=pdf` only. `1` = leave the user's name off the chart."
+          description: |-
+            `type=pdf` and `type=nfp`. `1` = leave the user's name off the chart, and omit
+            `userInformation` from the NFP file.
           schema:
             type: integer
             enum: [0, 1]
@@ -1867,6 +1882,8 @@ paths:
             A plain-text message in French, **not** the `error` envelope. Causes: a missing or
             malformed date; `start_date` not before `end_date`; a `type` outside the three values;
             `anonymous` or `json_in_page` outside `0` / `1`; or no recorded day in the period.
+
+            Note that `anonymous` is now validated for every `type`, not only `pdf`.
           content:
             text/html:
               schema:
@@ -1878,66 +1895,104 @@ paths:
   /import:
     post:
       tags: [files]
-      summary: Validate an NFP file
+      summary: Import an NFP file into the account
       description: |-
-        Sends an NFP file to the server for checking.
+        Reads an NFP file and writes its cycles into the logged-in account.
 
-        ### Important: this endpoint only validates
+        > **Changed in 15.** This endpoint used to validate only, answer `{"import": "ok"}` and
+        > report failures in its own `err_code` / `err_message` / `err_list` shape. It now
+        > writes, answers an `ImportReport` inside the standard `data` envelope, and reports
+        > failures with the standard `error` envelope. `dryRun=1` reproduces the old
+        > check-only behaviour, and `overide` now does something.
 
-        **Nothing is written to the account.** The current implementation checks the file and
-        reports what is wrong with it. A successful call answers `{"import": "ok"}`, which means
-        *"this file is valid"*, not *"the data was imported"*. Use it today as a "check my file
-        before I send it" step. The `overide` parameter is accepted and parsed, but it has no
-        effect yet.
+        ### All or nothing
 
-        ### The checks, in order
+        The file goes through four stages, and **nothing is written until every checking stage
+        has passed**:
 
-        1. the body is valid JSON;
-        2. `schemaVersion` is present, looks like `N.N`, and is exactly `1.0` — the only
-           supported version;
-        3. the whole file matches the `NfpFile` schema (`source_app`, `source_app_version`,
-           `file_creation_timestamp`, `cycles`, and each cycle's `method` / `cycleStartDate` /
-           `days`);
-        4. every day of every cycle matches the day schema.
+        | Stage | What it checks | Failure |
+        |---|---|---|
+        | 1 | size, UTF-8, JSON, nesting depth, `schemaVersion` | `413`, or `400` |
+        | 2 | structure and types, against `NfpFile` | `400` `invalid_nfp_structure` |
+        | 3 | real calendar dates, value ranges, text lengths, overlapping cycles | `400` `inconsistent_nfp_data` |
+        | 4 | the write, inside one transaction | `500`, nothing committed |
 
-        The first failing step stops the process and decides `err_code`.
+        So a rejected file leaves the account exactly as it was, and an accepted file is
+        imported whole.
 
-        ### Its own error shape
+        ### Days that already have data
 
-        This endpoint has **its own error format**, not the `error` envelope of the rest of the
-        API:
+        `overide=0` (the default) leaves those dates untouched and lists them in `daysSkipped`.
+        `overide=1` replaces them whole — including their free-text labels — exactly like a
+        `POST /day`, which also carries the full state of a day.
 
-        ```json
-        {
-          "err_code": 120,
-          "err_message": "JSON file structure is not a valid NFP input",
-          "err_list": ["[source_app] The property source_app is required"]
-        }
-        ```
+        A day the file leaves empty (`{}`) is a gap: it is not written, and it does not count as
+        a conflict. The **first** day of each cycle is always written even when empty, because
+        it is what marks the cycle boundary.
 
-        | `err_code` | Meaning |
-        |---|---|
-        | `101` | `overide` is not `1` or `0` |
-        | `102` | the body is not valid JSON (see `err_detail`) |
-        | `103` | `schemaVersion` is missing or empty |
-        | `104` | `schemaVersion` is not a version number like `1.0` |
-        | `105` | that `schemaVersion` is not supported (see `err_detail`) |
-        | `120` | the file structure is invalid (see `err_list`) |
-        | `121` | at least one day is invalid (see `err_list`, which names the cycle and the day index) |
+        ### Nothing is dropped silently
 
-        `err_list` is built for humans: each line is `[where] what is wrong`. Show it to the
-        user as is.
+        This app does not record everything the format can describe, so every answer reports
+        what became of the rest — see `ImportReport`:
+
+        - `ignoredFields` — carried by the file, nowhere to put it here (cervix observations,
+          `codifiedEvents`, `babyFeedCount`, `codifiedManualFertility`, ...).
+        - `mappedFields` — stored, but less precisely than the file said (a `symptothermic_fr`
+          bleeding value becomes a Red stamp; `sexUnion: "ReservedUnion"` becomes a plain
+          union).
+        - `warnings` — accepted, but worth showing the user: usually a cycle whose `method`
+          differs from the account's.
+
+        A cycle of **any** `method` imports, `symptothermic_fr` included: the fields every
+        method shares are kept, and the rest is reported.
+
+        ### What an import never changes
+
+        `userInformation` and `userMethodPreferences` are read but **never applied**. A file
+        cannot rename the account, change its address, or switch its method — that is what
+        `POST /account` is for. Both appear in `ignoredFields`.
+
+        ### Limits
+
+        Rejected with `400` (or `413` for the first): **256 KB** per request (the server's
+        `post_max_size`; raising it means raising `memory_limit` too), 120 cycles per file,
+        400 days per cycle, 4000 days per file, 20 free-text labels per day, 256 characters per
+        label and per joined comment, temperature between 30 and 45 °C.
+
+        Dates must be real calendar dates, no earlier than `1900-01-01`, and not in the future
+        (one day of slack, for a client in a timezone ahead of the server). Two cycles covering
+        the same date reject the file, since the day would belong to both.
       parameters:
         - name: overide
           in: query
           required: false
           description: |-
-            Intended to allow overwriting existing days. Accepted and validated, but **it has no
-            effect** while this endpoint only validates.
+            `0` leaves dates that already have data alone and reports them in `daysSkipped`.
+            `1` replaces them. (The spelling is kept for compatibility.)
           schema:
             type: integer
             enum: [0, 1]
             default: 0
+        - name: dryRun
+          in: query
+          required: false
+          description: |-
+            `1` runs every check and answers the same report with `daysToWrite` filled in,
+            **without writing anything**. Use it for a "check my file first" step.
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
+        - name: lastWriteClientUtc
+          in: query
+          required: false
+          description: |-
+            The client's UTC clock, ISO 8601, recorded on every day the import writes so
+            `GET /sync` can order it against other devices. Defaults to the server's time.
+          schema:
+            type: string
+            format: date-time
+          example: "2026-03-31T18:04:22Z"
       requestBody:
         required: true
         description: The content of an `.nfp` file, as a JSON body.
@@ -1947,23 +2002,67 @@ paths:
               $ref: '#/components/schemas/NfpFile'
       responses:
         "200":
-          description: The file is valid. Nothing was written to the account.
+          description: |-
+            The file was accepted. On a dry run nothing was written; otherwise the days in
+            `daysCreated` and `daysOverwritten` are now in the account.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  import:
-                    type: string
-                    enum: [ok]
+                  data:
+                    $ref: '#/components/schemas/ImportReport'
         "400":
-          description: The file was rejected. See the `err_code` table above.
+          description: |-
+            The file was rejected and **nothing was written**. `error.code` says which stage
+            refused it:
+
+            | `code` | Meaning |
+            |---|---|
+            | `invalid_parameter` | `overide` or `dryRun` is not `0`/`1` |
+            | `empty_body` | no request body |
+            | `invalid_encoding` | the body is not valid UTF-8 |
+            | `invalid_json` | not JSON, too deeply nested, or the top level is not an object |
+            | `missing_schema_version` | `schemaVersion` absent or empty |
+            | `invalid_schema_version` | `schemaVersion` is not a number like `1.0` |
+            | `unsupported_schema_version` | a version this build does not implement |
+            | `invalid_nfp_structure` | fails the `NfpFile` schema |
+            | `inconsistent_nfp_data` | valid JSON, impossible contents |
+
+            `invalid_nfp_structure` and `inconsistent_nfp_data` carry `error.details.issues`:
+            one line per problem, `[where] what is wrong`, with `where` a path inside the file
+            (`cycles[0].days[7].temperature`) or the date of the day. Capped at 50 lines, with
+            `error.details.issueCount` giving the true total. Built to be shown as is.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ImportError'
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                error:
+                  code: inconsistent_nfp_data
+                  message: The file is valid JSON but its contents are inconsistent.
+                  details:
+                    issues:
+                      - "[2026-03-14] temperature 52.4 is outside the plausible range 30.0-45.0 C."
+                      - "[cycles[1]] 2026-03-20 appears twice in the file (also in cycles[0]): the cycles overlap."
+                    issueCount: 2
         "401":
-          description: "Not authenticated. No body, and a `Location: auth` header."
+          $ref: '#/components/responses/Unauthorized'
+        "405":
+          description: "`method_not_allowed` — only `POST`."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        "413":
+          description: |-
+            `file_too_large` — the body is over the server's `post_max_size`, so it never
+            reached the application. Split the file into fewer cycles. The message quotes the
+            size and the limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
   /all_of_my_data_plz:
     get:
@@ -2277,7 +2376,9 @@ components:
             `freeMucusObservation` is reused and keeps its original type — names are unique per
             account whatever their type. Names are case-sensitive.
 
-            In the NFP **file** format these labels are one comma-joined string, not an array.
+            In the NFP **file** format these labels are an array too. Files written by
+            moncycle.app 14 held one comma-joined string instead; `POST /import` still reads
+            those.
           items:
             type: string
             maxLength: 256
@@ -2413,184 +2514,491 @@ components:
       type: object
       description: |-
         The **NFP file format**: a portable JSON file for moving cycle data between NFP apps.
-        Produced by `GET /export?type=nfp`, checked by `POST /import`.
+        Produced by `GET /export?type=nfp`, read and written by `POST /import`.
 
-        It is **not** the live API shape, and it has its own version number. Two differences
-        catch people out:
+        It is not the live API shape, and it carries its own version number, independent of the
+        app version. Only `schemaVersion` `"1.0"` is supported.
 
-        - most day values are written as **strings**, including booleans (`"true"`);
-        - `freeMucusSensation` and `freeMucusObservation` are **comma-joined strings** here,
-          while the live `Day` object uses arrays.
+        ### Reading older files
 
-        Only `schemaVersion` `"1.0"` is supported.
-      required: [schemaVersion, source_app, source_app_version, file_creation_timestamp, cycles]
+        Three variants of version 1.0 are in circulation. `POST /import` accepts all three;
+        `GET /export` always writes the first.
+
+        | | current | early draft | moncycle.app 14 |
+        |---|---|---|---|
+        | writing app | `fileInformation` object | flat `source_app`, `source_app_version`, `file_creation_timestamp` | as the draft |
+        | user block | `userInformation` object | positional array `[id, email, firstName, lastName, birthDate]` | as the draft |
+        | preferred method | `preferredMethod` | `preferedMethod` (one `r`) | `preferedMethod` |
+        | day note | `comments` array | `comment` string | `comment` string |
+        | empty day | `mucusNotObserved` | `dayNotObserved` | `dayNotObserved` |
+        | free-text labels | arrays | arrays | **comma-joined strings** |
+        | `sexUnion` | enum string | enum string | **boolean** |
+        | flags | real booleans | strings `"true"`/`"false"` | real booleans |
+
+        Older spellings are normalised on the way in, so they never reach the live API.
+      required: [schemaVersion, fileInformation, cycles]
       properties:
         schemaVersion:
           type: string
-          pattern: '^[0-9]\.[0-9]$'
+          pattern: '^[0-9]+\.[0-9]+$'
           description: Version of this file format. Must be `"1.0"`.
           example: "1.0"
-        source_app:
-          type: string
-          description: The app that wrote the file.
-          example: moncycle.app
-        source_app_version:
-          type: string
-          description: The version of that app.
-          example: "15"
-        file_creation_timestamp:
-          type: string
-          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
-          description: When the file was written, `YYYY-MM-DD hh:mm:ss`. Note the space — this is **not** ISO 8601.
-          example: "2026-03-31 18:04:22"
+        fileInformation:
+          $ref: '#/components/schemas/NfpFileInformation'
+        userInformation:
+          $ref: '#/components/schemas/NfpUserInformation'
+        userMethodPreferences:
+          $ref: '#/components/schemas/NfpUserMethodPreferences'
         cycles:
           type: array
-          description: The exported cycles, in order.
+          minItems: 1
+          maxItems: 120
+          description: The cycles, in order.
           items:
             $ref: '#/components/schemas/NfpCycle'
 
+    NfpFileInformation:
+      type: object
+      description: Which app wrote the file, and when.
+      required: [sourceApp, sourceAppVersion, fileCreationTimestamp]
+      properties:
+        sourceApp:
+          type: string
+          maxLength: 255
+          description: The app that wrote the file.
+          example: moncycle.app
+        sourceAppVersion:
+          type: string
+          maxLength: 64
+          description: The version of that app.
+          example: "15dev"
+        fileCreationTimestamp:
+          type: string
+          maxLength: 64
+          description: |-
+            When the file was written, ISO 8601 with a timezone. A bare `YYYY-MM-DD hh:mm:ss`
+            (what the early draft used) is also accepted and converted.
+          example: "2026-03-31T18:04:22+02:00"
+
+    NfpUserInformation:
+      type: object
+      description: |-
+        Who the data belongs to. Every field is optional.
+
+        **On import this block is read but never applied**: a file cannot rename the account,
+        change its address or alter its identity. It is reported in `ignoredFields`.
+
+        On export it is omitted entirely when `anonymous=1`.
+      properties:
+        identifier:
+          type: string
+          maxLength: 255
+          description: The writing app's own id for the user. moncycle.app writes the account id.
+          example: "1042"
+        email:
+          type: string
+          maxLength: 255
+          example: jane@example.org
+        firstName:
+          type: string
+          maxLength: 255
+          example: Jane
+        lastName:
+          type: string
+          maxLength: 255
+        birthDate:
+          type: string
+          maxLength: 32
+          description: |-
+            `YYYY-MM-DD`. moncycle.app never writes this field: it only stores a birth *year*
+            (`birthYear` on `/account`), and a full date would mean inventing a day and month.
+          example: "1995-12-31"
+        comment:
+          type: string
+          maxLength: 1024
+
+    NfpUserMethodPreferences:
+      type: object
+      description: |-
+        The user's method settings. Advisory: it has no effect on whether a file is valid, and
+        the per-cycle `method` is what decides how a cycle is read.
+
+        **On import this block is read but never applied** — the account's method is only
+        changed from `POST /account`. It is reported in `ignoredFields`.
+      properties:
+        preferredMethod:
+          type: string
+          maxLength: 64
+          description: "`billings`, `fertilityCare`, `symptothermic_fr`, or another app's own value."
+          example: billings
+        twoTenthShift:
+          type: boolean
+          description: Not recorded by this app.
+        oestrogenicalHollow:
+          type: boolean
+          description: Not recorded by this app.
+        irregularitiesSensibility:
+          type: boolean
+          description: Not recorded by this app.
+
     NfpCycle:
       type: object
-      description: One cycle inside an NFP file.
+      description: |-
+        One cycle. Unlike the live API, the file records the `method` **per cycle**, so a user
+        who changed method keeps a correct history.
       required: [method, cycleStartDate, days]
       properties:
         method:
           type: string
+          maxLength: 64
           description: |-
             The method used for this cycle: `billings`, `fertilityCare` or `symptothermic_fr`
-            (case-insensitive). Unlike the live API, the file records the method **per cycle**, so
-            a user who changed method keeps a correct history.
+            (case-insensitive), or an app's own value.
+
+            This app records `billings` and `fertilityCare`. A cycle of any other method still
+            imports — the fields every method shares are kept, and the rest is reported in
+            `ignoredFields`.
           example: billings
         cycleStartDate:
           type: string
           format: date
+          pattern: '^\d{4}-\d{2}-\d{2}$'
           description: Day 1 of this cycle. The first entry in `days` is this date.
           example: "2026-03-10"
         days:
           type: array
+          maxItems: 400
           description: |-
-            The days of the cycle, in date order, starting at `cycleStartDate`. Days with nothing
-            recorded are present as empty objects, so the position in the array is the day number.
+            The days of the cycle in date order, starting at `cycleStartDate`, so the position
+            in the array is the day number. A day with nothing recorded is an empty object
+            (`{}`) rather than being left out.
+
+            On import an empty day is a gap: it is not written, and it is not treated as a
+            conflict with existing data. The **first** day of a cycle is always written even
+            when empty, because it carries the cycle boundary.
           items:
             $ref: '#/components/schemas/NfpFileDay'
+        comment:
+          type: string
+          maxLength: 1024
+          description: Not recorded by this app — only per-day comments are. Reported on import.
+        cycleParticularCases:
+          type: array
+          maxItems: 8
+          description: Not recorded by this app. Reported on import.
+          items:
+            type: string
+            enum: [FirstEyedCycle, PostPill, Pregnancy, PostPartum]
+        currentCyclePlannedPregnancy:
+          type: string
+          enum: [Yes, No, Undecided]
+          description: Not recorded by this app. Reported on import.
+        nextMonthsPlannedPregnancy:
+          type: string
+          enum: [Yes, No, Undecided]
+          description: Not recorded by this app. Reported on import.
+        endOfCycleFollowUp:
+          type: string
+          enum: [Pregnancy, Menopause, Disease, Other]
+          description: Not recorded by this app. Reported on import.
+        temperatureUsualTime:
+          type: string
+          pattern: '^\d{2}:\d{2}:\d{2}$'
+          description: Not recorded by this app. Reported on import.
+        temperatureCaptureType:
+          type: string
+          maxLength: 64
+          description: Not recorded by this app. Reported on import.
+        temperatureThermometerType:
+          type: string
+          maxLength: 64
+          description: Not recorded by this app. Reported on import.
 
     NfpFileDay:
       type: object
       description: |-
-        One day inside an NFP file. **Every field is optional**, and a field with no value is
-        left out entirely rather than set to `null`.
+        One day. **Every field is optional**, and a field with no value is left out entirely
+        rather than set to `null` — so `{}` is a day with nothing recorded.
 
-        Remember the two format differences: booleans are strings here, and the free-text
-        labels are comma-joined strings rather than arrays.
+        Flags are real booleans and free-text labels are real arrays (the early draft typed
+        them as strings; those are still accepted on import).
+
+        ### What this app stores
+
+        Fields marked *not stored* are read, counted and reported in `ignoredFields`, never
+        written. Fields marked *narrowed* are written as something less precise, and reported
+        in `mappedFields`.
       properties:
+        comments:
+          type: array
+          maxItems: 32
+          description: |-
+            The user's free notes. Joined with newlines into the single `comment` of the live
+            `Day`, which holds **256 characters** — a longer result rejects the file.
+          items:
+            type: string
+            maxLength: 256
+          example: ["cramps in the morning"]
         stampColor:
           type: string
-          description: "`Green`, `Red`, `Yellow` or `White`, case-insensitive."
+          enum: [Green, Red, Yellow, White]
+          description: |-
+            *Narrowed for `White` alone.* The stamp is stored as a colour plus an optional baby
+            label, and white is the absence of a colour — so `White` without `stampBaby` cannot
+            be told from a day with no stamp, and is stored as no stamp.
           example: White
         stampBaby:
-          type: string
-          description: "`\"true\"` or `\"false\"` — a string, not a boolean."
-          example: "true"
+          type: boolean
+          description: The baby label drawn on top of the stamp colour.
+          example: true
         isPeak:
-          type: string
-          description: "`\"true\"` or `\"false\"`. A cycle can hold more than one peak day."
-          example: "true"
+          type: boolean
+          description: A cycle can hold more than one peak day.
+          example: true
         counterStart:
-          type: string
-          description: Number of days to show a counter for, as a string.
-          example: "3"
+          type: integer
+          minimum: 0
+          maximum: 255
+          description: Number of days to show a counter for. `0` means none.
+          example: 3
         sexUnion:
           type: string
+          enum: [Union, ReservedUnion, LastReportedUnion]
           description: |-
-            `Union` or `LastReportedUnion`, case-insensitive. The second one means the user will not
-            record further unions in this cycle. This API only ever writes the simple case.
+            *Narrowed.* This app records only **whether** there was a union, so all three values
+            are stored the same way and export always writes `Union`.
           example: Union
-        freeMucusSensation:
-          type: string
-          description: "**Billings.** The labels joined with `, ` — a string here, an array in the live `Day`."
-          example: "dry, slippery"
-        freeMucusObservation:
-          type: string
-          description: "**Billings.** The labels joined with `, `."
-          example: "clear and stretchy"
-        codifiedBleedingObservation:
-          type: string
-          description: "**FertilityCare.** See the matching field on `Day`."
-          example: BL
-        codifiedMucusSensation:
-          type: string
-          description: "**FertilityCare.** See the matching field on `Day`."
-          example: "10"
-        codifiedMucusObservation:
-          type: string
-          description: "**FertilityCare.** See the matching field on `Day`."
-          example: KL
-        codifiedNumberObservations:
-          type: string
-          description: "**FertilityCare.** See the matching field on `Day`."
-          example: X2
-        codifiedPainObservations:
-          type: string
-          description: "**FertilityCare.** See the matching field on `Day`."
-          example: AP
-        codifiedArrow:
-          type: string
-          description: "**FertilityCare.** `Up`, `Down` or `Right`."
-          example: Up
         mucusNotObserved:
-          type: string
+          type: boolean
           description: |-
-            `"true"` or `"false"`. The file-format name for `dayNotObserved` on the live `Day`
-            object.
-          example: "true"
+            The user recorded nothing that day — the file-format name for `dayNotObserved` on
+            the live `Day`.
+
+            It cannot be combined with an observation: `codifiedMucusObservation`,
+            `codifiedMucusSensation`, `codifiedBleedingObservation`, `codifiedCervixHeight`,
+            `codifiedCervixConsistency`, `freeMucusObservation`, `freeMucusSensation`,
+            `booleanCervixMucus` or `booleanCervixAperture` on the same day rejects the file.
+          example: true
         booleanPregnancyDetected:
-          type: string
-          description: "`\"true\"` or `\"false\"`."
-          example: "false"
+          type: boolean
+          example: false
         temperature:
           type: number
-          description: Basal body temperature. A real number here, not a string.
+          description: |-
+            Basal body temperature, a real number. Stored to two decimals, and must be between
+            **30 and 45 °C** — anything else rejects the file.
           example: 36.75
         temperatureTime:
           type: string
-          pattern: '^\s*\d\d:\d\d:\d\d\s*$'
-          description: When it was taken, `hh:mm:ss`.
+          pattern: '^\d{2}:\d{2}:\d{2}$'
+          description: When it was taken, `hh:mm:ss`. Ignored without a `temperature`.
           example: "06:45:00"
-        comment:
+        freeMucusSensation:
+          type: array
+          maxItems: 20
+          description: |-
+            **Billings.** Free-text sensation labels. Each becomes a `sensation` description on
+            the account, reusing an existing one of the same name. Max **256 characters** each.
+          items:
+            type: string
+            maxLength: 256
+          example: ["dry", "slippery"]
+        freeMucusObservation:
+          type: array
+          maxItems: 20
+          description: "**Billings.** Free-text observation labels, as above but typed `observation`."
+          items:
+            type: string
+            maxLength: 256
+          example: ["clear and stretchy"]
+        codifiedBleedingObservation:
           type: string
-          description: The user's free note.
-          example: cramps in the morning
+          maxLength: 32
+          description: |-
+            **FertilityCare:** `VH`, `H`, `M`, `L`, `VL`, `Br` (stored as `B`).
 
-    ImportError:
+            **Any other method:** *narrowed.* There is no bleeding field outside FertilityCare
+            here, so a value becomes a **Red stamp** when the day has no `stampColor` of its
+            own, and is reported otherwise. This is how a `symptothermic_fr`
+            `Traces`/`Medium`/`Heavy` is kept.
+          example: VH
+        codifiedMucusSensation:
+          type: string
+          maxLength: 32
+          description: |-
+            **FertilityCare:** `0`, `2`, `2W`, `4`, `6`, `8`, `10`, `10DL`, `10SL`, `10WL`.
+
+            *Not stored for other methods*: the same key holds a different vocabulary under
+            `symptothermic_fr` (`Dry`/`Humid`/`Wet`/`Lubricated`), which has no equivalent here.
+          example: "10DL"
+        codifiedMucusObservation:
+          type: string
+          maxLength: 32
+          description: |-
+            **FertilityCare:** `C`, `C/K` (stored as `CK`), `K`, `G`, `L`, `P`, `Y`.
+            *Not stored for other methods*, as above.
+          example: K
+        codifiedNumberObservations:
+          type: string
+          maxLength: 16
+          description: "**FertilityCare:** `x1`, `x2`, `x3`, `AD`. Stored and exported uppercase (`X1`)."
+          example: X2
+        codifiedPainObservations:
+          type: string
+          maxLength: 16
+          description: "**FertilityCare:** `AP`, `RAP`, `LAP`."
+          example: AP
+        codifiedArrow:
+          type: string
+          enum: [Up, Down, Right]
+          description: "**FertilityCare.** *Not stored for other methods.*"
+          example: Up
+        nonUsualBleeding:
+          type: boolean
+          description: "*Not stored.* This app has no spotting flag of its own."
+        booleanCervixMucus:
+          type: boolean
+          description: "*Not stored.* Cervix observations are not recorded here."
+        booleanCervixAperture:
+          type: boolean
+          description: "*Not stored.* Cervix observations are not recorded here."
+        codifiedCervixConsistency:
+          type: string
+          maxLength: 32
+          description: "*Not stored.* Cervix observations are not recorded here."
+        codifiedCervixHeight:
+          type: string
+          maxLength: 32
+          description: "*Not stored.* Cervix observations are not recorded here."
+        codifiedTemperatureParasitic:
+          type: string
+          maxLength: 64
+          description: "*Not stored.* No temperature-disturbance field is recorded here."
+        temperatureCaptureOffset:
+          type: integer
+          minimum: -12
+          maximum: 12
+          description: "*Not stored.* Only an absolute `temperatureTime` is recorded here."
+        codifiedEvents:
+          type: array
+          maxItems: 32
+          description: "*Not stored.* No pre-defined event list is recorded here."
+          items:
+            type: string
+            maxLength: 128
+        babyFeedCount:
+          type: integer
+          minimum: 0
+          maximum: 99
+          description: "*Not stored.* No feed count is recorded here."
+        codifiedManualFertility:
+          type: string
+          maxLength: 64
+          description: "*Not stored.* Fertility is computed for display, not stored."
+
+    ImportReport:
       type: object
       description: |-
-        The error shape of `POST /import` only. The rest of the API uses `ErrorEnvelope`
-        instead.
-      required: [err_code, err_message]
+        What `POST /import` did. Returned inside the usual `data` envelope, on success and on a
+        dry run alike.
+
+        The three report lists are the point of this answer: **nothing the file carries is
+        dropped without appearing in one of them.** Show them to the user.
       properties:
-        err_code:
-          type: integer
-          enum: [101, 102, 103, 104, 105, 120, 121]
-          description: Which check failed. See the table on `POST /import`.
-          example: 120
-        err_message:
+        dryRun:
+          type: boolean
+          description: True when `dryRun=1` was sent, so nothing was written.
+          example: false
+        overide:
+          type: boolean
+          description: The `overide` value that was applied.
+          example: false
+        schemaVersion:
           type: string
-          description: A short English sentence describing that check.
-          example: JSON file structure is not a valid NFP input
-        err_list:
+          description: The version the file declared.
+          example: "1.0"
+        sourceApp:
+          type: string
+          description: The app the file says wrote it.
+          example: moncycle.app
+        cyclesRead:
+          type: integer
+          description: Cycles found in the file.
+          example: 2
+        daysRead:
+          type: integer
+          description: Day entries found, including the empty ones.
+          example: 58
+        daysToWrite:
+          type: integer
+          description: |-
+            Days the file actually asks to write — `daysRead` minus the gaps. On a dry run this
+            is what a real import would attempt.
+          example: 54
+        daysWritten:
+          type: integer
+          description: "`daysCreated` + `daysOverwritten`. Absent on a dry run."
+          example: 54
+        daysCreated:
+          type: array
+          description: Dates that had no data and were created.
+          items:
+            type: string
+            format: date
+          example: ["2026-03-10", "2026-03-11"]
+        daysOverwritten:
+          type: array
+          description: Dates that already had data and were replaced (`overide=1` only).
+          items:
+            type: string
+            format: date
+          example: []
+        daysSkipped:
           type: array
           description: |-
-            On `120` and `121`: one line per problem found, as `[where] what is wrong`. On `121` the
-            location names the cycle and the index of the day. Built to be shown to a user as is.
+            Dates left untouched because they already had data and `overide` was `0`. Re-send
+            with `overide=1` to replace them.
+          items:
+            type: string
+            format: date
+          example: ["2026-03-09"]
+        descriptionsCreated:
+          type: integer
+          description: Free-text labels that did not exist on the account yet and were added.
+          example: 3
+        warnings:
+          type: array
+          description: |-
+            Accepted, but worth telling the user — typically a cycle whose `method` differs from
+            the account's, or a method this app does not record.
           items:
             type: string
           example:
-            - "[source_app] The property source_app is required"
-            - "[2026-03-10 - 4][temperature] String value found, but a number is required"
-        err_detail:
-          type: string
-          description: "On `102`: the JSON parser message. On `105`: the unsupported version that was found."
-          example: Syntax error
+            - "[cycles[0]] the cycle uses 'fertilityCare' while this account is set to 'billings'. The data was imported; change the method in the account settings to see it."
+        mappedFields:
+          type: array
+          description: |-
+            Stored, but as something narrower than the file said. The cases are: a bleeding
+            value outside FertilityCare becoming a Red stamp, a `ReservedUnion` /
+            `LastReportedUnion` becoming a plain union, a `White` stamp with no baby label
+            becoming no stamp, and a free-text label the file uses under both types keeping
+            the single type it has on the account.
+          items:
+            type: string
+          example:
+            - "[2007-01-25] codifiedBleedingObservation 'Heavy' stored as a Red stamp (symptothermic_fr records bleeding as a stamp)."
+            - "[2007-02-06] sexUnion 'ReservedUnion' stored as a plain union: day_timeline records only whether there was one."
+            - "[2024-08-01] 'humide' is recorded as a sensation on this account and stays one: a label carries a single type here."
+        ignoredFields:
+          type: array
+          description: |-
+            Carried by the file with nowhere to put it here. Each line reads
+            `[where] field: why`.
+          items:
+            type: string
+          example:
+            - "[file] userInformation: the account's own identity is never changed by an import."
+            - "[2007-01-25] codifiedManualFertility: fertility is computed for display, not stored."
 
   securitySchemes:
 

@@ -7,110 +7,151 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
+/*
+** Imports an NFP file into the logged-in account.
+**
+** The four stages of lib/nfp_file.php run in order and nothing is written until all the
+** checking ones have passed, so the account is either updated with the whole file or not
+** touched at all:
+**
+**   1. nfp_file_parse()        size, encoding, JSON, schema version
+**   2. nfp_file_schema_errors() structure and types
+**   3. nfp_file_build_plan()   calendar, ranges, lengths, cycle overlap -> the write plan
+**   4. nfp_file_write_plan()   inside one transaction
+**
+** ?dryRun=1 stops after stage 3, which is the "check my file first" behaviour this endpoint
+** used to be limited to.
+**
+** ?overide=<0|1> decides what happens to a date the account already has data on: 0 (the
+** default) leaves it alone and reports it, 1 replaces it.
+*/
+
 require_once "../vendor/autoload.php";
 
 require_once "../config.php";
 require_once "../lib/db.php";
 require_once "../lib/sec.php";
-require_once "../lib/data.php";
-require_once "../lib/nfp_file.php";
-require_once "../lib/nfp_format.php";
 require_once "../lib/date.php";
+require_once "../lib/data.php";
+require_once "../lib/http.php";
+require_once "../lib/day_format.php";
+require_once "../lib/nfp_format.php";
+require_once "../lib/nfp_file.php";
 
-use JsonSchema\SchemaStorage;
-use JsonSchema\Validator;
-use JsonSchema\Constraints\Factory;
-use JsonSchema\Constraints\Constraint;
+header('Content-Type: application/json');
 
 $db = db_open();
 
 $user_account = sec_auth_token($db);
-sec_redirect_non_connecte($user_account);
+sec_exit_si_non_connecte($user_account);
 
-$outcome = [];
-$error = 0;
-$nfp_data = null;
+if ($_SERVER['REQUEST_METHOD'] !== "POST") {
+	http_error(405, "method_not_allowed", "Supported method: POST.");
+}
 
-$error_list = [
-	101 => "'overide' param should be 1 or 0",
-	102 => "Invalid JSON payload",
-	103 => "'schemaVersion' is missing of empty in NFP data",
-	104 => "'schemaVersion' does not contain a valid version number",
-	105 => "'schemaVersion' is not a supported version number",
-	120 => "JSON file structure is not a valid NFP input",
-	121 => "At least one day is not matching Billings NFP schema"
+// ---------------------------------------------------------------------------
+// Parameters
+// ---------------------------------------------------------------------------
+
+// "overide" keeps its original spelling: it is already published in the API.
+if (isset($_GET['overide']) && !in_array($_GET['overide'], ["0", "1"], true)) {
+	http_error(400, "invalid_parameter", "'overide' must be 0 or 1.");
+}
+$overide = isset($_GET['overide']) && $_GET['overide'] === "1";
+
+if (isset($_GET['dryRun']) && !in_array($_GET['dryRun'], ["0", "1"], true)) {
+	http_error(400, "invalid_parameter", "'dryRun' must be 0 or 1.");
+}
+$dry_run = isset($_GET['dryRun']) && $_GET['dryRun'] === "1";
+
+$last_write_client_UTC = http_from_iso8601($_GET['lastWriteClientUtc'] ?? null);
+if (!$last_write_client_UTC || !date_validate_timestamp($last_write_client_UTC)) {
+	$last_write_client_UTC = date('Y-m-d H:i:s');
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1 -- the body
+// ---------------------------------------------------------------------------
+
+$content_length = isset($_SERVER['CONTENT_LENGTH']) ? intval($_SERVER['CONTENT_LENGTH']) : null;
+$parsed = nfp_file_parse(file_get_contents('php://input'), $content_length);
+
+if (!$parsed["ok"]) {
+	$status = $parsed["code"] === "file_too_large" ? 413 : 400;
+	http_error($status, $parsed["code"], $parsed["message"], $parsed["details"]);
+}
+
+$nfp_file = $parsed["file"];
+
+// ---------------------------------------------------------------------------
+// Stage 2 -- structure and types
+// ---------------------------------------------------------------------------
+
+$schema_errors = nfp_file_schema_errors($nfp_file);
+if (!empty($schema_errors)) {
+	http_error(400, "invalid_nfp_structure", "The file does not match the NFP schema.", ["issues" => $schema_errors]);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 3 -- semantics and consistency
+// ---------------------------------------------------------------------------
+
+$checked = nfp_file_build_plan($nfp_file, $user_account);
+
+if (!empty($checked["issues"])) {
+	http_error(400, "inconsistent_nfp_data", "The file is valid JSON but its contents are inconsistent.", [
+		"issues" => array_slice($checked["issues"], 0, 50),
+		"issueCount" => count($checked["issues"]),
+	]);
+}
+
+$report = [
+	"dryRun" => $dry_run,
+	"overide" => $overide,
+	"schemaVersion" => nfp_format_get($nfp_file, "schemaVersion"),
+	"sourceApp" => nfp_format_get(nfp_format_get($nfp_file, "fileInformation"), "sourceApp"),
+	"cyclesRead" => $checked["cyclesRead"],
+	"daysRead" => $checked["daysRead"],
+	"daysToWrite" => count($checked["plan"]),
+	"warnings" => $checked["warnings"],
+	"mappedFields" => $checked["mapped"],
+	"ignoredFields" => $checked["ignored"],
 ];
 
-$overide = false;
-if (isset($_GET['overide']) && !in_array($_GET['overide'], ["1", "0"])) {
-	$error = 101;
-}
-else $overide = boolval($_GET['overide']);
-
-if (!$error) {
-	try {
-		$raw = file_get_contents('php://input');
-		$nfp_data = json_decode($raw, false, 512, JSON_THROW_ON_ERROR);
-	} catch (JsonException $e) {
-		$error = 102;
-		$outcome["err_detail"] = $e->getMessage();
-	}
+if ($dry_run) {
+	$report["daysCreated"] = [];
+	$report["daysOverwritten"] = [];
+	$report["daysSkipped"] = [];
+	$report["descriptionsCreated"] = 0;
+	http_data(200, $report);
 }
 
-if (!$error) {
-	if (!isset($nfp_data->schemaVersion) || empty($nfp_data->schemaVersion)) {
-		$error = 103;
-	}
-	else if (!preg_match("/^\s*\d+\.\d+\s*$/", $nfp_data->schemaVersion)) {
-		$error = 104;
-	}
-	else if (version_compare(trim($nfp_data->schemaVersion), "1.0") != 0) {
-		$error = 105;
-		$outcome["err_detail"] = $nfp_data->schemaVersion . " is not supported";
-	}
+// ---------------------------------------------------------------------------
+// Stage 4 -- the write
+// ---------------------------------------------------------------------------
+
+// an import counts as activity, same as a POST to /api/day
+if (isset($user_account["is_inactive"]) && boolval($user_account["is_inactive"])) {
+	db_update_is_inactive($db, $user_account["no_user_account"], 0);
 }
 
-if (!$error) {
-	$jsonSchema = json_decode(NFP_MAIN_FILE_SCHEMA);
-	$schemaStorage = new SchemaStorage();
-	$schemaStorage->addSchema('internal://mySchema', $jsonSchema);
-	$validator = new Validator(new Factory($schemaStorage));
-	$validator->validate($nfp_data, $jsonSchema);
-	if (!$validator->isValid()) {
-		$error = 120;
-		$outcome["err_list"] = [];
-		foreach ($validator->getErrors() as $err) {
-			array_push($outcome["err_list"], sprintf("[%s] %s", $err['property'], $err['message']));
-		}
-	}
+try {
+	$db->exec("START TRANSACTION");
+	$written = nfp_file_write_plan(
+		$db, intval($user_account["no_user_account"]), $checked["plan"], $overide, $last_write_client_UTC
+	);
+	$db->exec("COMMIT");
+} catch (\Throwable $th) {
+	$db->exec("ROLLBACK");
+	throw $th;
 }
 
-if (!$error) {
-	foreach ($nfp_data->cycles as $cycle_data) {
-		$jsonSchema = json_decode(NFP_BILLINGS_DAY_SCHEMA);
-		$schemaStorage = new SchemaStorage();
-		$schemaStorage->addSchema('internal://mySchema', $jsonSchema);
-		$validator = new Validator(new Factory($schemaStorage));
-		foreach ($cycle_data->days as $no => $day_data) {
-			$validator->validate($day_data, $jsonSchema);
-			if (!$validator->isValid()) {
-				$error = 121;
-				$outcome["err_list"] = [];
-				foreach ($validator->getErrors() as $err) {
-					array_push($outcome["err_list"], sprintf("[%s - %d][%s] %s", $cycle_data->cycleStartDate, $no, $err['property'], $err['message']));
-				}
-			}
-		}
-	}
-}
+// the writer finds one kind of narrowing of its own (a label already recorded under the other
+// type), so its list joins the ones found while checking
+$report["mappedFields"] = array_merge($report["mappedFields"], $written["narrowed"]);
+unset($written["narrowed"]);
 
-header('Content-Type: application/json');
+$report = array_merge($report, $written);
+$report["daysWritten"] = count($written["daysCreated"]) + count($written["daysOverwritten"]);
 
-if ($error > 0) {
-	http_response_code(400);
-	$outcome["err_code"] = $error;
-	$outcome["err_message"] = $error_list[$error] ?? "";
-}
-else $outcome["import"] = "ok";
-
-print(json_encode($outcome));
+http_data(200, $report);

@@ -68,7 +68,9 @@ function data_parse_fc_note ($str_fc_note) {
 		'Y' => false,
 		'R' => false
 	];
-	if (is_null($str_fc_note) || empty($str_fc_note)) return $fc_note;
+	// "=== ''" and not empty(): "0" is a real FertilityCare code (dryness) and is falsy in PHP,
+	// so empty() read a day noted just "0" as having no note at all.
+	if (is_null($str_fc_note) || $str_fc_note === '') return $fc_note;
 	$str_fc_note = trim($str_fc_note);
 	if (strlen($str_fc_note)>0) {
 		$str_fc_note = strtoupper($str_fc_note);

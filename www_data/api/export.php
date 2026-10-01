@@ -13,6 +13,9 @@ require_once "../lib/db.php";
 require_once "../lib/doc.php";
 require_once "../lib/sec.php";
 require_once "../lib/data.php";
+require_once "../lib/http.php";
+require_once "../lib/day_format.php";
+require_once "../lib/nfp_format.php";
 require_once "../lib/nfp_file.php";
 
 require_once "../vendor/autoload.php";
@@ -61,13 +64,14 @@ if (!isset($_GET['type']) || !in_array($_GET['type'], $available_type)) {
 	exit;
 }
 
-// CHECK ANONYMOUS MODE OR NOT
-if ($_GET['type'] == "pdf" && isset($_GET['anonymous']) && !in_array($_GET['anonymous'], ["1", "0"])) {
+// CHECK ANONYMOUS MODE OR NOT -- applies to pdf (no name on the chart) and to nfp (no
+// userInformation block in the file)
+if (isset($_GET['anonymous']) && !in_array($_GET['anonymous'], ["1", "0"])) {
 	http_response_code(400);
 	print("ERREUR: 'anonymous' doit être 1 ou 0");
 	exit;
 }
-$pdf_anonymous = boolval($_GET['anonymous'] ?? "0");
+$anonymous = boolval($_GET['anonymous'] ?? "0");
 
 // VERIFY JSON_IN_PAGE PARAM
 if ($_GET['type'] == "nfp" && isset($_GET['json_in_page']) && !in_array($_GET['json_in_page'], ["1", "0"])) {
@@ -104,8 +108,8 @@ try {
 
 	elseif ($_GET['type'] == "pdf") {
 		$pdf = null;
-		if ($user_account["nfp_method"] == 3 || $user_account["nfp_method"] == 4) $pdf = doc_cycle_fc_vers_pdf($cycle, $user_account["nfp_method"], $user_account["name_user_account"], $pdf_anonymous);
-		else $pdf = doc_cycle_bill_vers_pdf($cycle, $user_account["nfp_method"], $user_account["name_user_account"], $pdf_anonymous);
+		if ($user_account["nfp_method"] == 3 || $user_account["nfp_method"] == 4) $pdf = doc_cycle_fc_vers_pdf($cycle, $user_account["nfp_method"], $user_account["name_user_account"], $anonymous);
+		else $pdf = doc_cycle_bill_vers_pdf($cycle, $user_account["nfp_method"], $user_account["name_user_account"], $anonymous);
 		header("content-type:application/pdf");
 		header('Content-Disposition: attachment; filename="moncycle_app_'. $filename_start_date .'.pdf"');
 		$pdf->Output('I', 'moncycle_app_'. $filename_start_date . '.pdf');
@@ -115,18 +119,18 @@ try {
 
 		$json_version = json_decode(file_get_contents("version.json"), true);
 
-		$nfp_data = [
-			"schemaVersion" => "1.0",
-			"source_app" => "moncycle.app",
-			"source_app_version" => $json_version["version"],
-			"file_creation_timestamp" => date('Y-m-d H:i:s')
-		];
-		$nfp_data["cycles"] = nfp_file_billing_export($result["start_date"], $result["end_date"], $db, $user_account);
+		$nfp_data = nfp_file_export(
+			$db, $result["start_date"], $result["end_date"], $user_account,
+			$anonymous, $json_version["version"] ?? ""
+		);
 
 		header('Content-Type: application/json');
 		if (!$json_in_page) header('Content-Disposition: attachment; filename="moncycle_app_'. $filename_start_date .'.nfp"');
 
-		print(json_encode($nfp_data, $json_in_page ? JSON_PRETTY_PRINT : 0));
+		// JSON_UNESCAPED_UNICODE / _SLASHES keep accented comments and the ISO-8601 timestamp
+		// readable in the file; JSON_PRESERVE_ZERO_FRACTION keeps a round 37.0 a number.
+		$flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION;
+		print(json_encode($nfp_data, $json_in_page ? ($flags | JSON_PRETTY_PRINT) : $flags));
 
 	}
 
