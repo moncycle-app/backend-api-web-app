@@ -1,66 +1,416 @@
 openapi: 3.0.3
-info:
-  title: MONCYCLE.APP API
-  description: |-
-    Documentation de l'API REST de moncycle.app! L'application fonctionne sur la base d'une timeline d'observations. 1 observation => 1 jour.
-    Ainsi la lecture d'un cycle ou sa modification se fait via le call API observation.
-    Un nouveau cycle est caracterisé par un attribut lié au premier jour du cycle en question.
 
-    All endpoints below speak JSON: request bodies for POST/PUT/DELETE are `application/json`
-    (not form-urlencoded), every response is either `{"data": ...}` on success or
-    `{"error": {"code", "message", "details"?}}` on failure, and real HTTP status codes are
-    used throughout (see the `Error` schema for the stable `code` values). `/export` and
-    `/import` are the exception: they speak the separate, versioned NFP file format
-    (`schemaVersion`/`source_app`/...), not this envelope, since that's a portable file
-    format rather than a live resource.
-  license:
-    name: CC BY-NC-SA
-    url: https://creativecommons.org/licenses/by-nc-sa/4.0
+info:
+  title: moncycle.app API
   version: "2.0"
+  license:
+    name: CC BY-NC-SA 4.0
+    url: https://creativecommons.org/licenses/by-nc-sa/4.0
+  description: |-
+    This API stores **daily fertility observations** for one person, or for one couple sharing
+    an account. It is the backend of the moncycle.app web app. Other clients (mobile apps,
+    scripts, research tools) can use the same API.
+
+    This page is written to be read from top to bottom the first time. After that, use it as a
+    reference. Plain English is used on purpose, so that non-native speakers can read it
+    quickly. Domain words (peak day, stamp, Billings…) are explained in the
+    **Glossary** at the end.
+
+    ---
+
+    ## 1. The one idea you need
+
+    **One day = one observation.**
+
+    The account owns a **timeline**: a long list of calendar days. Each day holds what the user
+    observed on that date. There is no "cycle" resource, no "chart" resource, no "entry id".
+    The calendar date *is* the identifier.
+
+    ```
+    timeline of one account
+    ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+    │2026-03-08│2026-03-09│2026-03-10│2026-03-11│2026-03-12│2026-03-13│
+    ├──────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
+    │          │          │ cycle    │          │ isPeak   │          │
+    │ stamp    │ stamp    │ FirstDay │ stamp    │ = true   │ stamp    │
+    │ = Green  │ = Green  │ = true   │ = Red    │          │ = White  │
+    └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+                           ^
+                           └─ a new cycle starts here
+    ```
+
+    A **cycle is not stored**. It is *derived* from the timeline. One day carries the flag
+    `cycleFirstDay: true`, and that is all the server needs:
+
+    - the cycle of any date = the closest day at or before it that has `cycleFirstDay: true`;
+    - `cycleStartDate` and `cycleDay` are **computed by the server** on every read.
+
+    So, to start a new cycle, you do not create anything. You write one day with
+    `cycleFirstDay: true`. To correct a wrong cycle start, you write that same day again with
+    `cycleFirstDay: false`. Everything after it moves to the previous cycle automatically.
+
+    This is the whole mindset of the API. Keep it in mind and the rest follows.
+
+    ## 2. Three rules for every response
+
+    **Rule 1 — success is wrapped in `data`.**
+
+    ```json
+    { "data": { "status": "ok" } }
+    ```
+
+    **Rule 2 — failure is wrapped in `error`.**
+
+    ```json
+    { "error": { "code": "invalid_credentials", "message": "Incorrect password or non-existent account." } }
+    ```
+
+    Read `code` in your program. It is a stable slug and it will not change.
+    Show `message` to a human, or log it. Never parse it. An optional `details` object may
+    carry extra context.
+
+    **Rule 3 — the HTTP status code is real.** `200` means it worked. `401` means you are not
+    logged in. `409` means a conflict. Check the status first, then the body.
+
+    ### Exceptions to rule 1 and 2
+
+    Four endpoints are older or serve files. They do **not** use the `data` / `error` envelope.
+    This is the complete list, so you never have to guess:
+
+    | Endpoint | What it returns instead |
+    |---|---|
+    | `GET /version` | a plain JSON object (a static file) |
+    | `GET /pub_stat` | a plain JSON object |
+    | `GET /export` | a file (`.nfp` JSON, `.csv` or `.pdf`); errors are **plain text in French** |
+    | `POST /import` | its own JSON shape: `err_code` / `err_message`, see the endpoint |
+    | `GET /all_of_my_data_plz` | a CSV file; `401` has no body |
+
+    `GET /logout` is also special: it answers with an HTTP redirect, not a body.
+
+    ## 3. Authentication
+
+    There is one credential: a **token**. You get it from `POST /login`.
+
+    The token is a random 256-character string. Send it back in one of two ways — both work on
+    every protected endpoint, so pick the one that fits your client:
+
+    ```
+    Authorization: Bearer <token>          <- apps, scripts, mobile clients
+    Cookie: MONCYCLEAPP_TOKEN=<token>      <- browsers (the server sets this cookie for you)
+    ```
+
+    If both are present, the `Authorization` header wins.
+
+    Good to know:
+
+    - The token **does not expire** on its own. The cookie is set for 5 years.
+    - There is no refresh step. There are no scopes and no roles.
+    - `GET /logout` destroys **one** token (the one you used), not all of them.
+    - One account can hold many valid tokens at the same time (one per device).
+    - Missing or wrong token on a protected endpoint → `401` with code `unauthorized`.
+
+    ## 4. First run, step by step
+
+    Creating an account needs a captcha, and a captcha needs a cookie. So use a cookie jar
+    (`-c` / `-b` in curl) for these two calls.
+
+    ```bash
+    # 1. Get a captcha image. This also sets the MONCYCLEAPP_TOKEN cookie.
+    curl -s -c jar.txt http://localhost:8003/api/captcha -o captcha.jpg
+    # ... a human reads captcha.jpg, for example "a7k2f"
+
+    # 2. Create the account. The password is generated by the server and emailed.
+    curl -s -b jar.txt -c jar.txt -X POST http://localhost:8003/api/register \
+      -H 'Content-Type: application/json' \
+      -d '{"firstName":"Marie","email":"marie@example.org","birthYear":1994,
+           "method":"billings","temperatureTracking":false,"captcha":"a7k2f"}'
+    # -> 201 {"data":{"userId":42,"email":"...","name":"Marie","welcomeEmailSent":true}}
+    ```
+
+    **You do not choose the password.** The server generates one and sends it by email. The
+    user can change it later with `POST /password_change`.
+
+    Then log in and keep the token:
+
+    ```bash
+    curl -s -X POST http://localhost:8003/api/login \
+      -H 'Content-Type: application/json' \
+      -d '{"email":"marie@example.org","password":"<from the email>"}'
+    # -> 200 {"data":{"token":"abc...256 chars...","userId":42,"totpUsed":false}}
+    ```
+
+    ## 5. Daily use, step by step
+
+    ```bash
+    TOKEN=abc...   # from /login
+    AUTH="Authorization: Bearer $TOKEN"
+
+    # Who am I, and what are my settings? Call this once at startup.
+    curl -s -H "$AUTH" http://localhost:8003/api/key_infos
+
+    # Write today. Day 1 of a new cycle, red stamp, one free-text sensation.
+    curl -s -H "$AUTH" -H 'Content-Type: application/json' \
+      -X POST http://localhost:8003/api/day \
+      -d '{"date":"2026-03-10","cycleFirstDay":true,"stampColor":"Red",
+           "freeMucusSensation":["dry"],"comment":"cramps in the morning"}'
+    # -> 201 (day created) with the full day as the server now stores it
+
+    # Read one week back
+    curl -s -H "$AUTH" \
+      'http://localhost:8003/api/day?start_date=2026-03-04&end_date=2026-03-10'
+    ```
+
+    ### The most important write rule: POST /day replaces the whole day
+
+    `POST /day` is an **upsert of the complete day**, not a partial patch. Any field you leave
+    out is written as empty or `false`. There is no `PATCH`.
+
+    ```
+    stored:  { date: 2026-03-10, stampColor: "Red", isPeak: true, comment: "cramps" }
+    you send:{ date: 2026-03-10, stampColor: "Green" }
+    result:  { date: 2026-03-10, stampColor: "Green", isPeak: false, comment: "" }
+                                                      ^^^^^^^^^^^^^  ^^^^^^^^^^^^
+                                                      both were silently cleared
+    ```
+
+    **Always read the day, change the fields you want, then send the whole object back.**
+    The response body is the day as the server stored it, so you can use it to refresh your
+    local copy without a second `GET`.
+
+    ## 6. Dates, times and null
+
+    | Thing | Format | Example |
+    |---|---|---|
+    | A calendar date | `YYYY-MM-DD` | `2026-03-10` |
+    | A time of day | `hh:mm:ss` | `06:45:00` |
+    | A timestamp | ISO 8601 **UTC**, ends with `Z` | `2026-03-10T05:32:48Z` |
+
+    Timestamps are always UTC. The server never sends a local offset such as `+02:00`, and it
+    ignores one if you send it. Convert to local time in your client.
+
+    Two timestamps appear on days, descriptions and the account:
+
+    - **`lastWriteClientUtc`** — *your* clock. You send it. If you omit it, or it is not valid,
+      the server writes its own clock instead. This is the field `GET /sync` filters on.
+    - **`lastWriteDb`** — the server clock. Read-only. The server always sets it.
+
+    A field that is `null` means "no value recorded". An empty array (`[]`) means "no labels".
+    An empty string (`""`) is used for `comment` when there is no comment. Booleans are real
+    JSON booleans (`true` / `false`), never the strings `"true"` / `"false"`.
+
+    ## 7. Two tracking methods
+
+    Each account uses one method, chosen at registration and changeable later on
+    `POST /account`. The method decides **which fields of a day make sense**. The server does
+    not block the other fields, but the app will not display them.
+
+    | Method | How a day is recorded | Fields used |
+    |---|---|---|
+    | `billings` | free text, chosen by the user | `freeMucusSensation`, `freeMucusObservation` |
+    | `fertilityCare` | short standard codes | the six `codified*` fields |
+
+    Common to both: `stampColor`, `stampBaby`, `isPeak`, `cycleFirstDay`, `sexUnion`,
+    `temperature`, `comment`, and the rest.
+
+    `temperatureTracking` is a separate boolean. It says whether the user also records basal
+    body temperature. So there are four real combinations, for example
+    `billings` + temperature, or `fertilityCare` without temperature.
+
+    ### Free-text labels are shared objects (Billings)
+
+    In Billings mode, a user writes labels like "dry", "sticky", "clear and stretchy". These
+    are **not** free strings stored on the day. Each label is a reusable object called a
+    **description**, with its own `id` and a `useCount`.
+
+    You never have to create them by hand. When you send a new name inside
+    `freeMucusSensation` or `freeMucusObservation`, `POST /day` creates the description for you
+    and links it to the day. The `/description` endpoints exist so the app can show a
+    "most used first" picklist, and rename or delete a label everywhere at once.
+
+    Two things to know:
+
+    - Names are **unique per account** and **case-sensitive**. `"Dry"` and `"dry"` are two
+      different labels.
+    - A name keeps the type it was first created with. If "dry" already exists as an
+      `observation`, sending it inside `freeMucusSensation` links the existing `observation`
+      label. It does not create a second one.
+
+    ## 8. Keeping two clients in sync
+
+    `GET /sync?fromTimestamp=...` returns every day and every description whose
+    `lastWriteClientUtc` is **greater than or equal to** the timestamp you pass. Use it like
+    this:
+
+    ```
+    1. remember the timestamp of your last successful sync   (lastSync)
+    2. GET /sync?fromTimestamp=<lastSync>
+    3. merge the returned days and descriptions into your local store
+    4. POST your own local changes to /day and /description
+    5. save the new lastSync
+    ```
+
+    Three honest limits, so you do not debug them yourself:
+
+    - **The filter uses the client clock**, not the server clock. If a client has a wrong
+      clock, its writes can land outside the window and be missed. Subtract a safety margin
+      from `lastSync` (a few minutes) and make your merge idempotent.
+    - **The bound is inclusive** (`>=`). The last record of a sync comes back again on the next
+      one. Your merge must tolerate that.
+    - **Deletions are not reported.** A deleted *day* comes back as a blanked day, so you do
+      see it. A deleted *description* simply disappears from the list, with no tombstone. To
+      detect that, compare with a full `GET /description`.
+
+    ## 9. Login protection
+
+    Failed logins are counted per account, and they decay after **60 minutes** of no failure.
+
+    | Recent failures on the account | What happens |
+    |---|---|
+    | 0 – 2 | normal login |
+    | 3 or more | a captcha is required: `403` `captcha_required` |
+    | 15 or more | account temporarily locked: `403` `account_locked` |
+
+    There is also a limit of **30 attempts per IP address**, which answers `429` `rate_limited`.
+
+    Every `/login` response — success or failure — may contain `captchaRequired: true`. It is a
+    hint about your **next** attempt, not about this one. When you see it, fetch
+    `GET /captcha` and include the answer in the next login.
+
+    The lock only applies to a **wrong** password. The real owner can still log in with the
+    correct password, so a third party cannot lock someone out.
+
+    ## 10. Privacy by design
+
+    This is personal data, so the API is deliberately narrow:
+
+    - An account can only ever read and write **its own** data. There is no admin endpoint, no
+      user list, and no way to address another account.
+    - `GET /pub_stat` is public but rounded (to the nearest 10, or 100 for observations), so no
+      individual can be recognised.
+    - `POST /recover_password` always answers `200`, even when the email is unknown, and waits
+      a random 1–5 seconds. This hides whether an account exists.
+    - `GET /all_of_my_data_plz` gives the user a full CSV dump of their own data (GDPR right of
+      access). Passwords, TOTP secrets and tokens are masked in it.
+    - `DELETE /account` deletes the account for real. Rows in every other table are removed by
+      database cascade. It needs the password as confirmation.
+    - An account with no activity for 4 years is deleted automatically.
+
+    ## 11. Glossary
+
+    | Term | Meaning |
+    |---|---|
+    | **NFP** | Natural Family Planning. A family of methods based on daily body observations. |
+    | **Billings** | The Billings Ovulation Method. The user describes mucus in their own words. |
+    | **FertilityCare** | The Creighton Model FertilityCare System. The user records short standard codes such as `10KL` or `6C`. |
+    | **Cycle** | The period from one first day of menstruation to the day before the next one. |
+    | **Day 1** | The first day of a cycle. In this API, the day flagged `cycleFirstDay: true`. |
+    | **Stamp** | The coloured square drawn on the paper chart for one day. Red, green, yellow or white. |
+    | **Baby stamp** | A small baby picture added on top of a stamp, to mark a potentially fertile day. |
+    | **Peak day** | The last day with the most fertile type of mucus. A cycle can hold more than one `isPeak` day. |
+    | **Sensation** | What the user *feels* (for example "dry"). |
+    | **Observation** | What the user *sees* (for example "stretchy"). |
+    | **Description** | A reusable free-text label in this API, either a sensation or an observation. |
+    | **Basal temperature** | Body temperature taken at rest, right after waking up. |
+    | **TOTP** | Time-based One-Time Password. The 6-digit code from an app such as Aegis or Google Authenticator. Used for two-factor authentication. |
+    | **NFP file** | The portable JSON file format used by `/export` and `/import`, so a user can move data between apps. |
+    | **Upsert** | A write that creates the record if it does not exist, and replaces it if it does. |
+
 externalDocs:
-  description: www.moncycle.app
-  url: hhttps://www.moncycle.app
+  description: moncycle.app website
+  url: https://www.moncycle.app
+
 servers:
   - url: .
+    description: The server this documentation page is served from (relative paths).
   - url: https://tableau.moncycle.app/api
+    description: Production.
+  - url: http://localhost:8003/api
+    description: Local development (docker).
+
+# Every endpoint needs a token, unless it declares `security: []`.
+security:
+  - HTTPtoken: []
+  - HTTPcookie: []
+
 tags:
   - name: general
-    description: general information about the server (no personal information)
+    description: |-
+      Public endpoints. No token, no personal data. Use them for monitoring, for a version
+      check at client startup, and for the public counters on the website.
   - name: account
-    description: login, account modifications, register, TOTP, …
+    description: |-
+      The account lifecycle: register, captcha, log in, log out, change or recover the
+      password, two-factor authentication, change settings, delete the account.
+
+      Read **section 3 and 4** of the introduction first. The order of the calls matters,
+      because the captcha is tied to a cookie.
   - name: observations
-    description: creation, modification, and reading of observations and menstrual cycle data
+    description: |-
+      The heart of the API: the timeline of days, the reusable free-text labels, the account
+      summary, and the sync endpoint.
+
+      Read **section 1** of the introduction first ("one day = one observation"), and
+      **section 5** before your first write (`POST /day` replaces the whole day).
+  - name: files
+    description: |-
+      Import and export. These endpoints move **files**, not live resources, so they do not use
+      the `data` / `error` envelope. `/export` and `/import` speak the portable **NFP file
+      format**, which is versioned on its own (`schemaVersion`) and shared with other NFP apps.
 
 paths:
 
+  # ---------------------------------------------------------------------------
+  # GENERAL
+  # ---------------------------------------------------------------------------
+
   /version:
     get:
-      tags:
-        - general
+      tags: [general]
       summary: Server and API version
+      description: |-
+        A static JSON file. **No `data` envelope.** Call it at client startup to check which
+        server you are talking to, and to warn the user if your client is too old.
+
+        `version` is a plain number. During a development cycle it carries the suffix `dev`,
+        for example `"15dev"`.
+      security: []
       responses:
-        200:
+        "200":
           description: OK
-
-
-  /pub_stat:
-    get:
-      tags:
-        - general
-      summary: Public statistics
-      responses:
-        200:
-          description: OK
-
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  app:
+                    type: string
+                    example: moncycle.app
+                  version:
+                    type: string
+                    description: Plain number, with the suffix `dev` on a development server.
+                    example: "15dev"
+                  build:
+                    type: string
+                    description: Build date, `YYYY-MM-DD`. The placeholder `YYYY-MM-DD` on a development server.
+                    example: "2026-03-01"
+                  commit:
+                    type: string
+                    description: Short git commit hash. The placeholder `xxxxxxxx` on a development server.
+                    example: 5d81638a
 
   /health_check:
     get:
-      tags:
-        - general
-      summary: Server health status for monitoring
+      tags: [general]
+      summary: Is the server alive?
+      description: |-
+        For monitoring. The server answers `200` only if it can reach the database **and** get
+        the expected result from a real query. Any other case is `503`.
+
+        Nothing is written and nothing personal is read, so you can poll this often.
+      security: []
       responses:
-        200:
-          description: Server is responding and the database connection is working.
+        "200":
+          description: The server and the database both work.
           content:
             application/json:
               schema:
@@ -72,33 +422,258 @@ paths:
                       status:
                         type: string
                         enum: [ok]
-        503:
-          description: "`database_unreachable`"
+        "503":
+          description: "`database_unreachable` — the database is down, or the query failed."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+  /pub_stat:
+    get:
+      tags: [general]
+      summary: Public counters
+      description: |-
+        Public, anonymous usage counters, used on the website. **No `data` envelope.**
 
+        Every number is **rounded on purpose** so that no individual can be recognised:
+        accounts and cycles to the nearest 10, observations to the nearest 100. A small
+        instance can therefore report `0`.
+
+        Side effect: calling this endpoint increases the internal daily, weekly and monthly
+        visit counters. Do not use it as a health check — use `GET /health_check`.
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  moncycle_app_nb_user_account:
+                    type: integer
+                    description: Number of accounts, rounded to the nearest 10.
+                    example: 1250
+                  moncycle_app_nb_cycle:
+                    type: integer
+                    description: Number of recorded cycles, rounded to the nearest 10.
+                    example: 8430
+                  moncycle_app_nb_total_observation:
+                    type: integer
+                    description: Number of recorded days, rounded to the nearest 100.
+                    example: 241500
+
+  # ---------------------------------------------------------------------------
+  # ACCOUNT
+  # ---------------------------------------------------------------------------
+
+  /register:
+    post:
+      tags: [account]
+      summary: Create an account
+      description: |-
+        Creates an account and **emails a generated password** to the address you give.
+
+        The caller does not choose the password. This is intentional: it proves the user owns
+        the mailbox, and it avoids weak passwords. The user can change it afterwards with
+        `POST /password_change`.
+
+        ### Order of calls
+
+        1. `GET /captcha` — this sets the `MONCYCLEAPP_TOKEN` cookie and stores a challenge.
+        2. A human reads the image.
+        3. `POST /register`, **sending that same cookie back**, with the answer in `captcha`.
+
+        Without the cookie from step 1, the captcha can never match and you always get `403`.
+        Each captcha works **once**: a failed registration needs a fresh `GET /captcha`.
+
+        ### Partial success
+
+        `welcomeEmailSent: false` with status `201` means the account **was created** but the
+        email failed. Do not retry the registration — it will answer `409 account_exists`.
+        Send the user to `POST /recover_password` instead.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [firstName, email, birthYear, captcha]
+              properties:
+                firstName:
+                  type: string
+                  description: First name of the user, or both first names when a couple shares the account.
+                  example: Marie
+                email:
+                  type: string
+                  format: email
+                  description: Login address. The generated password is sent here. Must be unique.
+                  example: marie@example.org
+                birthYear:
+                  type: integer
+                  description: |-
+                    Year of birth, used for anonymous statistics only. It does not need to be exact
+                    (± 2 years is fine). Must be the current year or up to 100 years earlier.
+                  example: 1994
+                captcha:
+                  type: string
+                  description: The text read in the image from `GET /captcha`. Case-sensitive.
+                  example: a7k2f
+                method:
+                  type: string
+                  enum: [billings, fertilityCare]
+                  default: billings
+                  description: Tracking method. Defaults to `billings` when omitted. See introduction, section 7.
+                temperatureTracking:
+                  type: boolean
+                  default: false
+                  description: Does the user also record basal body temperature?
+                discoveredComment:
+                  type: string
+                  description: Free-text answer to "how did you find this app?". Optional.
+                  example: recommended by my midwife
+                okForResearch:
+                  type: boolean
+                  default: false
+                  description: Consent to share anonymous data with research programs.
+      responses:
+        "201":
+          description: Account created. Check `welcomeEmailSent` before telling the user to look at their mailbox.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      userId:
+                        type: integer
+                        example: 42
+                      email:
+                        type: string
+                        example: marie@example.org
+                      name:
+                        type: string
+                        example: Marie
+                      welcomeEmailSent:
+                        type: boolean
+                        description: "`false` means the account exists but the password email could not be sent."
+        "400":
+          description: "`missing_fields` | `invalid_email` | `invalid_birth_year`"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        "403":
+          description: |-
+            `registration_disabled` — this instance does not accept new accounts.
+            `captcha_invalid` — wrong answer, no captcha stored, or the cookie was not sent back.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        "409":
+          description: |-
+            `already_authenticated` — you sent a valid token; log out first.
+            `account_exists` — this email already has an account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /captcha:
+    get:
+      tags: [account]
+      summary: Get a captcha image
+      description: |-
+        Returns a **JPEG image**, not JSON. A human must read the text in it.
+
+        The challenge is stored on the server against the `MONCYCLEAPP_TOKEN` cookie. The
+        endpoint sets that cookie if you do not have one yet (valid 2 days), so your client
+        must keep cookies for this flow to work.
+
+        One image = one single use. The server erases the stored answer as soon as it is
+        checked, right or wrong. Call this endpoint again for every new attempt.
+
+        You need a captcha in two situations:
+
+        - always, before `POST /register`;
+        - before `POST /login`, once a response came back with `captchaRequired: true`
+          (see introduction, section 9).
+
+        The response carries `Cache-Control: no-store`, so each request is a fresh image.
+      security: []
+      responses:
+        "200":
+          description: A new captcha image. Also sets or refreshes the `MONCYCLEAPP_TOKEN` cookie.
+          headers:
+            Set-Cookie:
+              description: "`MONCYCLEAPP_TOKEN=<random>`, sent only when the visitor has no valid cookie yet. HttpOnly, 2 days."
+              schema:
+                type: string
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
 
   /login:
     post:
-      tags:
-        - account
-      summary: Creation of a token (API key)
+      tags: [account]
+      summary: Log in and get a token
+      description: |-
+        Exchanges an email and a password for a **token**. The token is also set as the
+        `MONCYCLEAPP_TOKEN` cookie, so a browser client does not need to store it.
+
+        ### Which call do I make?
+
+        ```
+        POST /login {email, password}
+          |
+          |-- 200 + token ............... done
+          |-- 401 totp_required ......... retry with {email, password, code}
+          |-- 403 captcha_required ...... GET /captcha, then retry with {email, password, captcha}
+          |-- 401 invalid_credentials ... wrong email or password
+          |-- 403 account_locked ........ too many failures, wait (see section 9)
+          |-- 429 rate_limited .......... too many attempts from this IP, wait
+          '-- 200 alreadyAuthenticated .. you already sent a valid token
+        ```
+
+        A captcha and a TOTP code can both be required at the same time. Send them together.
+
+        ### Reading the success body
+
+        - `token` — your credential. **Absent** when `alreadyAuthenticated` is `true`, because
+          no new token was created. Keep using the one you sent.
+        - `alreadyAuthenticated: true` — you sent a valid token, so the server did nothing. The
+          email and password in the body were not even checked.
+        - `totpUsed` — whether a second factor was verified on this login.
+        - `captchaRequired` — a hint about the **next** attempt on this account, not this one.
+          It can appear on a success.
+
+        Each successful login creates a **new** token and leaves the existing ones valid, so
+        logging in on a phone does not disconnect the laptop.
+      security: []
       requestBody:
-        description: Identification data (email, password, TOTP)
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/LoginRequest'
-        required: true
       responses:
-        200:
-          description: >-
-            Authenticated (password only, password + TOTP, or already authenticated via the
-            existing cookie/bearer token). See `totpUsed`/`alreadyAuthenticated` in the body to
-            tell which.
+        "200":
+          description: |-
+            Authenticated. Three cases land here: password only, password + TOTP, or a request that
+            already carried a valid token. Read `totpUsed` and `alreadyAuthenticated` to tell them
+            apart.
+          headers:
+            Set-Cookie:
+              description: "`MONCYCLEAPP_TOKEN=<token>`. HttpOnly, 5 years. Not sent when `alreadyAuthenticated` is true."
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -109,81 +684,112 @@ paths:
                     properties:
                       token:
                         type: string
-                        description: Auth token (also set as the MONCYCLEAPP_TOKEN cookie). Absent when alreadyAuthenticated is true.
+                        description: 256-character token. Absent when `alreadyAuthenticated` is `true`.
                       userId:
                         type: integer
+                        example: 42
                       totpUsed:
                         type: boolean
+                        description: "`true` when a TOTP code was verified. Absent when `alreadyAuthenticated` is `true`."
                       alreadyAuthenticated:
                         type: boolean
+                        description: Present and `true` only when the request already carried a valid token.
                       captchaRequired:
                         type: boolean
-                        description: Hint that the *next* login attempt on this account will require a captcha, regardless of whether this one succeeded.
-        400:
-          description: "`missing_credentials`: email and/or password missing or empty."
+                        description: Present and `true` when the **next** attempt on this account will need a captcha.
+        "400":
+          description: |-
+            `missing_credentials` — `email` or `password` is absent, empty, or the email is malformed.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: "`invalid_credentials` | `totp_required` | `totp_invalid`"
+        "401":
+          description: |-
+            `invalid_credentials` — wrong password, or no such account. The same code is used for both,
+            on purpose, so nobody can discover which emails have an account.
+            `totp_required` — the password is correct, now send `code`.
+            `totp_invalid` — the password is correct but `code` is wrong or expired.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        403:
-          description: "`login_disabled` | `captcha_required` | `account_disabled` | `account_locked`"
+        "403":
+          description: |-
+            `login_disabled` — this instance has logins turned off.
+            `captcha_required` — send `captcha` with the answer from `GET /captcha`.
+            `account_disabled` — the account was deactivated by an administrator.
+            `account_locked` — too many recent failures. Wait; it clears after 60 minutes with no new failure.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        429:
-          description: "`rate_limited`: too many attempts from this network, try again later."
+        "429":
+          description: "`rate_limited` — too many attempts from this IP address. Wait and try again later."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-
 
   /logout:
     get:
-      tags:
-        - account
-      summary: Deletion of an authentication token
-      description: >-
-        Called as a plain top-level navigation (an `<a href>`, not XHR/fetch) by the web
-        frontend, so it responds with a redirect rather than a JSON body.
-      responses:
-        303:
-          description: Logged out (idempotent -- also returned if already logged out). Redirects to /auth.
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
+      tags: [account]
+      summary: Destroy the token you are using
+      description: |-
+        Deletes **the one token** used for this request, and clears the cookie.
 
+        This endpoint answers with **`303` and a `Location` header**, not with JSON. The reason
+        is that the web app calls it as a normal link (`<a href>`), and a browser needs a real
+        redirect to navigate. If you call it with `fetch` or from a script, do not follow the
+        redirect — just treat `303` as success.
+
+        It is **idempotent**. Calling it without a token, or twice, also answers `303`.
+
+        Other tokens of the same account stay valid. There is no "log out everywhere".
+      responses:
+        "303":
+          description: Logged out. Also returned when you were not logged in. Redirects to `/auth`.
+          headers:
+            Location:
+              description: Always `/auth`.
+              schema:
+                type: string
+            Set-Cookie:
+              description: Expires `MONCYCLEAPP_TOKEN` (and the legacy `MONCYCLEAPP_JETTON`).
+              schema:
+                type: string
 
   /password_change:
     post:
-      tags:
-        - account
-      summary: Password change
+      tags: [account]
+      summary: Change the password
+      description: |-
+        Changes the password of the account you are logged in as. You must know the current
+        password, even though you are already authenticated.
+
+        The new password must be **at least 8 characters** and must be different from the
+        current one.
+
+        Existing tokens are **not** revoked. The user stays logged in everywhere, including on
+        any device a third party might hold. If that matters for your client, call
+        `GET /logout` on the other sessions, or tell the user to.
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              required:
-                - oldPassword
-                - newPassword
               type: object
+              required: [oldPassword, newPassword]
               properties:
                 oldPassword:
                   type: string
+                  description: The password in use right now.
                 newPassword:
                   type: string
-                  description: Minimum 8 characters.
-        required: true
+                  description: Minimum 8 characters. Must differ from the current one.
       responses:
-        200:
-          description: OK
+        "200":
+          description: Password changed.
           content:
             application/json:
               schema:
@@ -194,150 +800,67 @@ paths:
                     properties:
                       changed:
                         type: boolean
-        400:
-          description: "`missing_fields`"
+                        enum: [true]
+        "400":
+          description: "`missing_fields` — `oldPassword` or `newPassword` is absent or empty."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: "Authentication required, or `invalid_password` (old password incorrect)."
+        "401":
+          description: |-
+            `unauthorized` — no valid token.
+            `invalid_password` — `oldPassword` is wrong.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        422:
-          description: "`password_too_short` | `password_unchanged`"
+        "422":
+          description: |-
+            `password_too_short` — fewer than 8 characters.
+            `password_unchanged` — the new password is the same as the current one.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
-  /register:
-    post:
-      tags:
-        - account
-      summary: creating a new account
-      requestBody:
-        content:
-          application/json:
-            schema:
-              required:
-                - firstName
-                - email
-                - birthYear
-                - captcha
-              type: object
-              properties:
-                firstName:
-                  type: string
-                  description: first name of woman of firtnames of couple that is using this app
-                email:
-                  type: string
-                  description: login email address
-                method:
-                  type: string
-                  description: NFP cycle tracking method. Defaults to "billings" if omitted.
-                  enum:
-                    - billings
-                    - fertilityCare
-                temperatureTracking:
-                  type: boolean
-                  description: Whether body temperature is also tracked alongside `method`. Defaults to false.
-                birthYear:
-                  type: integer
-                  description: year of birth for stats (dont need to be precise +/- 2 years)
-                captcha:
-                  type: string
-                  description: string contained in captcha imaged (obtained in another API call)
-                discoveredComment:
-                  type: string
-                  description: awnser to quetion asked to user => how did you discovered this app ?
-                okForResearch:
-                  type: boolean
-                  description: is user ok for sharing anonymous data for research
-      responses:
-        201:
-          description: >-
-            Account created. `welcomeEmailSent: false` means the account was created but the
-            welcome email (containing the generated password) failed to send.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: object
-                    properties:
-                      userId:
-                        type: integer
-                      email:
-                        type: string
-                      name:
-                        type: string
-                      welcomeEmailSent:
-                        type: boolean
-        400:
-          description: "`missing_fields` | `invalid_email` | `invalid_birth_year`"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        403:
-          description: "`registration_disabled` | `captcha_invalid`"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        409:
-          description: "`already_authenticated` | `account_exists`"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-
-
-  /captcha:
-    get:
-      tags:
-        - account
-      summary: >-
-        create/refresh a captcha challenge image tied to the visitor's MONCYCLEAPP_TOKEN cookie.
-        Called before 'register', and before 'login' once its response comes back with
-        captcha_required = true.
-      responses:
-        200:
-          description: OK
-
-
 
   /recover_password:
     post:
-      tags:
-        - account
-      summary: reset password if lost based on email address
-      description: >-
-        Always returns 200 with `sent: true`, whether or not the account exists -- this is
-        deliberate, to avoid leaking account existence via response differences or timing.
+      tags: [account]
+      summary: Send a new password by email
+      description: |-
+        Generates a new random password, replaces the old one, and emails it.
+
+        **This endpoint always answers `200` with `sent: true`**, whether the account exists or
+        not, and whether the email was delivered or not. It also waits a random 1 to 5 seconds.
+        Both behaviours are deliberate: they stop an attacker from discovering which email
+        addresses have an account, either from the response or from its timing.
+
+        So your client cannot know whether a mail was really sent. Show a neutral message, for
+        example: *"If an account exists for this address, a new password has been sent."*
+
+        The old password stops working as soon as the account is found, so a user who triggers
+        this by mistake must use the new password from the email.
+
+        No captcha and no token are needed. Add your own throttling if you expose a public
+        form.
+      security: []
       requestBody:
-        description: login email address that is used to authenticate
+        required: true
         content:
           application/json:
             schema:
-              required:
-                - email
               type: object
+              required: [email]
               properties:
                 email:
                   type: string
-                  description: login email address
-        required: true
+                  format: email
+                  description: The login address of the account.
+                  example: marie@example.org
       responses:
-        200:
-          description: A new password was sent to the address if an account exists for it.
+        "200":
+          description: Request accepted. This says nothing about whether the account exists.
           content:
             application/json:
               schema:
@@ -348,29 +871,53 @@ paths:
                     properties:
                       sent:
                         type: boolean
-        400:
-          description: "`missing_email` | `invalid_email`"
+                        enum: [true]
+        "400":
+          description: |-
+            `missing_email` — `email` is absent or empty.
+            `invalid_email` — not a valid email address. Note: a *malformed* address is rejected,
+            while a well-formed unknown address answers `200`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
-
-
   /totp:
-
-
     get:
-      tags:
-        - account
-      summary: Initialization of TOTP secret before activation.
-      description: >-
-        TOTP (Time-Based One-Time Password) is a temporary, time-sensitive code used for
-        two-factor authentication (2FA or MFA). `totpState` is one of `never_used`,
-        `disabled`, `init`, `active`.
+      tags: [account]
+      summary: "Two-factor: step 1, start the setup"
+      description: |-
+        Starts the setup of **TOTP** two-factor authentication (the 6-digit code from an app
+        such as Aegis, FreeOTP or Google Authenticator).
+
+        ### The three steps
+
+        ```
+        GET    /totp          -> a new secret + a QR code      (state becomes "init")
+        POST   /totp {code}   -> confirm with one real code     (state becomes "active")
+        DELETE /totp?code=... -> turn it off                    (state becomes "disabled")
+        ```
+
+        Two-factor is **not active** after this call. It only becomes active after `POST /totp`
+        succeeds. Until then, login keeps working with the password alone. This way a user who
+        loses the QR code mid-setup is never locked out.
+
+        ### Using the response
+
+        Show `qrcode` to the user, and `initSecret` as a fallback for manual entry. Each call
+        generates a **new secret and replaces the previous one**, so any code from a half-
+        finished earlier attempt stops working.
+
+        | Field | Use |
+        |---|---|
+        | `qrcode` | A complete **SVG document as a string**. Render it directly; there is no PNG. |
+        | `otpauth` | The `otpauth://` URI behind the QR code. Use it for a "tap to add" link on mobile. |
+        | `initSecret` | The raw base32 secret, for users who type it by hand. |
+
+        `initSecret` and `otpauth` are as sensitive as a password. Never log them.
       responses:
-        200:
-          description: TOTP initiated (or already active -- see 409).
+        "200":
+          description: Setup started. The account state is now `init`.
           content:
             application/json:
               schema:
@@ -381,48 +928,55 @@ paths:
                     properties:
                       totpState:
                         type: string
+                        enum: [init]
                       initSecret:
                         type: string
+                        description: Base32 secret. Secret value — do not log it.
+                        example: JBSWY3DPEHPK3PXP
                       otpauth:
                         type: string
+                        description: "`otpauth://` provisioning URI. Secret value — do not log it."
+                        example: otpauth://totp/marie%40example.org?issuer=MONCYCLE.APP&secret=JBSWY3DPEHPK3PXP
                       qrcode:
                         type: string
-        401:
-          description: Authentication required
+                        description: A full SVG document, as a string.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "409":
+          description: "`totp_already_enabled` — turn it off with `DELETE /totp` before setting it up again."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        409:
-          description: "`totp_already_enabled`"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
 
     post:
-      tags:
-        - account
-      summary: Send first TOTP code for final activation
+      tags: [account]
+      summary: "Two-factor: step 2, confirm and activate"
+      description: |-
+        Confirms the setup started by `GET /totp`, by checking one code produced from the new
+        secret. **This is the call that actually turns two-factor on.**
+
+        From now on, `POST /login` needs `code` in addition to the password.
+
+        Call `GET /totp` first. Without a stored secret this call cannot succeed.
+
+        A wrong code answers `401` and changes nothing, so the user can simply try again. Codes
+        change every 30 seconds; a code that was correct a minute ago is no longer valid.
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              required:
-                - code
               type: object
+              required: [code]
               properties:
                 code:
                   type: integer
-                  description: Code generated in TOTP application
-        required: true
+                  description: The 6-digit code shown by the authenticator app right now.
+                  example: 492013
       responses:
-        200:
-          description: TOTP successfully activated.
+        "200":
+          description: Two-factor authentication is now active.
           content:
             application/json:
               schema:
@@ -433,43 +987,51 @@ paths:
                     properties:
                       totpState:
                         type: string
-        400:
-          description: "`totp_code_missing`"
+                        enum: [active]
+        "400":
+          description: "`totp_code_missing` — `code` is absent, empty, or not a positive number."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: "Authentication required, or `totp_invalid`."
+        "401":
+          description: |-
+            `unauthorized` — no valid token.
+            `totp_invalid` — the code does not match. Nothing was changed; the user can retry.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        409:
-          description: "`totp_already_enabled`"
+        "409":
+          description: "`totp_already_enabled` — it is already active; there is nothing to confirm."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
 
     delete:
-      tags:
-        - account
-      summary: TOTP deactivation for account
+      tags: [account]
+      summary: "Two-factor: turn it off"
+      description: |-
+        Turns two-factor authentication off and **erases the stored secret**. The state becomes
+        `disabled`, not `never_used`, so you can still tell that the user once had it on.
+
+        A **valid current code is required**, as a query parameter. This is on purpose: someone
+        who steals a session cannot silently remove the second factor.
+
+        There is no recovery path here. A user who lost their authenticator app cannot disable
+        TOTP through the API and must contact support.
       parameters:
         - name: code
           in: query
-          description: Code currently generated in the user's TOTP application
           required: true
+          description: The 6-digit code shown by the authenticator app right now.
           schema:
             type: integer
+            example: 492013
       responses:
-        200:
-          description: TOTP successfully deactivated.
+        "200":
+          description: Two-factor authentication is off and the secret is erased.
           content:
             application/json:
               schema:
@@ -480,40 +1042,57 @@ paths:
                     properties:
                       totpState:
                         type: string
-        400:
-          description: "`totp_code_missing`"
+                        enum: [disabled]
+        "400":
+          description: "`totp_code_missing` — the `code` parameter is absent, empty, or not a positive number."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: "Authentication required, or `totp_invalid`."
+        "401":
+          description: |-
+            `unauthorized` — no valid token.
+            `totp_invalid` — the code does not match. Two-factor stays on.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        409:
-          description: "`totp_not_enabled`"
+        "409":
+          description: "`totp_not_enabled` — two-factor was not active, so there is nothing to turn off."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
-
 
   /account:
-
-
-
     post:
-      tags:
-        - account
-      summary: Modification of account information
-      description: Every field is optional; only the fields present in the body are updated.
+      tags: [account]
+      summary: Update account settings
+      description: |-
+        Updates the settings of the logged-in account.
+
+        **Unlike `POST /day`, this is a partial update.** Only the fields present in the body
+        are touched. Everything else keeps its value. Send a body with just the one setting you
+        want to change.
+
+        The response lists what really changed in `fieldsUpdated`. Use it to confirm: a field
+        you sent but which does not appear there was **rejected or ignored**, and the call still
+        answered `200`. There is no validation error for a bad value here.
+
+        Things that surprise people:
+
+        - `name` is ignored when it is an empty string.
+        - `secondaryEmail` is ignored when it is not a valid address. Send `""` to remove it.
+        - `birthYear` is ignored when it is `0` or negative.
+        - `method` and `temperatureTracking` are stored together as one value. If you send only
+          one of the two, **the other falls back to its default** (`billings`, and `false`).
+          Always send both together. Both appear in `fieldsUpdated` under the single
+          name `method`.
+        - This endpoint cannot change the login email or the password. Use
+          `POST /password_change` for the password.
       requestBody:
+        required: true
+        description: Every field is optional. An empty object `{}` is valid and changes nothing.
         content:
           application/json:
             schema:
@@ -521,37 +1100,43 @@ paths:
               properties:
                 name:
                   type: string
-                  description: The first names of the people to whom this account belongs
+                  description: First name, or both first names when a couple shares the account. An empty string is ignored.
+                  example: Marie
                 secondaryEmail:
                   type: string
-                  description: Second email address to receive the cycles via email on a different address
+                  description: A second address, to also receive charts by email. Send `""` to remove it.
+                  example: partner@example.org
                 method:
                   type: string
-                  enum:
-                    - billings
-                    - fertilityCare
+                  enum: [billings, fertilityCare]
+                  description: Tracking method. **Always send `temperatureTracking` with it.**
                 temperatureTracking:
                   type: boolean
-                  description: Whether body temperature is also tracked alongside `method`. Only applied if `method` or `temperatureTracking` is present.
+                  description: Does the user also record basal temperature? **Always send `method` with it.**
                 birthYear:
                   type: integer
+                  description: Year of birth, for anonymous statistics. Ignored when `0` or negative.
+                  example: 1994
                 timelineAscending:
                   type: boolean
-                  description: Order of displaying observations (true => today at the beginning of the table).
+                  description: |-
+                    Display preference only: `true` puts today at the top of the table. The API itself
+                    always returns days in ascending date order, whatever this is set to.
                 research:
                   type: boolean
-                  description: Consent to contribute anonymously to research programs.
+                  description: Consent to contribute anonymous data to research programs.
                 sponsor:
                   type: boolean
+                  description: Marks the account as a financial supporter of the project.
                 lastWriteClientUtc:
                   type: string
-                  description: Client-side UTC update timestamp, ISO 8601. Set by the server if not present.
                   format: date-time
-                  example: "2025-01-23T15:30:45Z"
-        required: true
+                  description: Your own clock, ISO 8601 UTC. The server uses its own clock if this is absent or invalid.
+                  example: "2026-03-10T15:30:45Z"
       responses:
-        200:
-          description: OK -- the fields that were actually updated are listed in `fieldsUpdated`.
+        "200":
+          description: |-
+            Request accepted. Read `fieldsUpdated` to see what really changed — it can be empty.
           content:
             application/json:
               schema:
@@ -562,84 +1147,93 @@ paths:
                     properties:
                       name:
                         type: string
+                        description: The account name after the update.
                       fieldsUpdated:
                         type: array
+                        description: Names of the settings that were really changed. Empty when nothing was.
                         items:
                           type: string
+                          enum: [name, secondaryEmail, method, birthYear, timelineAscending, research, sponsor]
+                        example: [method]
                       lastWriteClientUtc:
                         type: string
                         format: date-time
-        401:
-          description: Authentication required
+                        description: The timestamp that was stored, whether it came from you or from the server.
+        "400":
+          description: "`invalid_json` — the body is not a JSON object."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
-
+        "401":
+          $ref: '#/components/responses/Unauthorized'
 
     delete:
-      tags:
-        - account
-      summary: User account deletion
+      tags: [account]
+      summary: Delete the account for good
+      description: |-
+        Deletes the logged-in account **permanently**. There is no undo and no grace period.
+        Days, descriptions, links and tokens all go with it, removed by database cascade.
+
+        The current password must be sent **in the body**, as a confirmation. Note that this
+        `DELETE` therefore carries a JSON body, which some HTTP clients do not send by default.
+
+        Offer `GET /all_of_my_data_plz` to the user before calling this, so they can keep a copy
+        of their data.
+
+        After `204`, throw your token away: it no longer exists.
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              required:
-                - password
               type: object
+              required: [password]
               properties:
                 password:
                   type: string
-                  description: Account password
-        required: true
+                  description: The current account password, as a confirmation.
       responses:
-        204:
-          description: Account deleted.
-        400:
-          description: "`missing_password`"
+        "204":
+          description: Account deleted. No body. Your token is now invalid.
+        "400":
+          description: "`missing_password` | `invalid_json`"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: "Authentication required, or `invalid_password`."
+        "401":
+          description: |-
+            `unauthorized` — no valid token.
+            `invalid_password` — wrong password. Nothing was deleted.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
 
-
-
-  /all_of_my_data_plz:
-    get:
-      tags:
-        - account
-      summary: Export of all account-related data in CSV format (for GDPR)
-      responses:
-        200:
-          description: OK
-        401:
-          description: Authentication required
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
+  # ---------------------------------------------------------------------------
+  # OBSERVATIONS
+  # ---------------------------------------------------------------------------
 
   /key_infos:
     get:
-      tags:
-        - observations
-      summary: Reading key informations from user and menstrual cycle.
+      tags: [observations]
+      summary: Account summary — call this first
+      description: |-
+        Everything a client needs at startup, in one call: who the user is, their settings, and
+        the shape of their timeline.
+
+        Call it right after login. `method` and `temperatureTracking` tell you **which fields of
+        a day to show**, so you need them before you can draw anything.
+
+        `allCyclesFirstDay` is the list of every day flagged `cycleFirstDay: true`, newest
+        first. Together with `allPregnancyDates` it is enough to draw a cycle navigator without
+        downloading the whole timeline.
+
+        This endpoint is read-only and cheap. Nothing here is a secret: no password hash and no
+        TOTP secret is ever returned.
       responses:
-        200:
+        "200":
           description: OK
           content:
             application/json:
@@ -647,102 +1241,87 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
-                    properties:
-                      userId:
-                        type: integer
-                      email:
-                        type: string
-                      secondaryEmail:
-                        type: string
-                        nullable: true
-                      method:
-                        type: string
-                        enum: [billings, fertilityCare]
-                      temperatureTracking:
-                        type: boolean
-                      birthYear:
-                        type: integer
-                      name:
-                        type: string
-                      inscriptionDate:
-                        type: string
-                        format: date-time
-                      sponsor:
-                        type: boolean
-                      research:
-                        type: boolean
-                      timelineAscending:
-                        type: boolean
-                      allCyclesFirstDay:
-                        type: array
-                        items:
-                          type: string
-                          format: date
-                      allPregnancyDates:
-                        type: array
-                        items:
-                          type: string
-                          format: date
-                      totpState:
-                        type: string
-                        enum: [never_used, disabled, init, active]
-                      lastWriteClientUtc:
-                        type: string
-                        format: date-time
-                        nullable: true
-        401:
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
-
+                    $ref: '#/components/schemas/KeyInfos'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
 
   /day:
-
-
     get:
-      tags:
-        - observations
-      summary: Reading daily observations.
-      description: >-
-        It either returns the specific dates requested (via the "date" parameter) or all dates
-        within a specified range (using the "start_date" and "end_date" parameters). If no
-        dates or parameters are specified, it returns all daily observations for that account.
-        The result is an object keyed by date (`"YYYY-MM-DD": Day`), except when there is no
-        matching data at all, in which case `data` is an empty array rather than an empty
-        object (a plain artifact of PHP's array/object JSON encoding, not a distinct shape to
-        handle).
+      tags: [observations]
+      summary: Read days
+      description: |-
+        Reads days from the timeline. The result is **an object keyed by date**, so you can look
+        a date up directly: `data["2026-03-10"]`.
+
+        ### Three ways to ask
+
+        | Parameters | What you get |
+        |---|---|
+        | none | **every** day stored on the account |
+        | `date=2026-03-10,2026-03-11` | exactly those dates |
+        | `start_date=...&end_date=...` | the days stored in that range, both ends **included** |
+
+        You may combine `date` with a range. The results are merged into one object.
+
+        ### Two behaviours worth knowing
+
+        **1. `date` never returns "not found".** If you ask for a date with no data, you get a
+        full day object with empty values instead of a `404`. A client can therefore render any
+        date without a special case:
+
+        ```json
+        { "data": { "2026-03-15": { "date": "2026-03-15", "stampColor": null, "isPeak": false, "comment": "", "...": null } } }
+        ```
+
+        **2. A range only returns days that exist.** It does not pad the gaps. So `date` gives
+        you one entry per date you asked for, while a 30-day range can come back with 4 entries.
+        Fill the gaps in your client if your view needs a continuous month.
+
+        ### One quirk to handle
+
+        When there is **no matching data at all**, `data` is an empty **array** `[]` instead of
+        an empty object `{}`:
+
+        ```json
+        { "data": [] }
+        ```
+
+        This comes from how PHP encodes an empty array as JSON. It is not a different shape to
+        support — in a typed language, treat an empty array here as an empty map.
+
+        Days always come back in **ascending date order**, whatever `timelineAscending` says in
+        the account settings: that flag is only a display preference for the web app.
       parameters:
         - name: date
           in: query
-          description: Multiple dates (at least one) in the format YYYY-MM-DD, separated by commas
+          description: |-
+            One or more dates `YYYY-MM-DD`, separated by commas. Spaces around them are allowed.
+            Every date you list is returned, even when it holds no data.
           schema:
             type: string
-            format: date
             pattern: '^\s*\d{4}-\d{2}-\d{2}(\s*,\s*\d{4}-\d{2}-\d{2})*\s*$'
+          example: "2026-03-10,2026-03-11"
         - name: start_date
           in: query
-          description: One date in the format YYYY-MM-DD (should be used with 'end_date' param)
+          description: First date of the range, included. **Must be used together with `end_date`.**
           schema:
             type: string
             format: date
             pattern: '^\s*\d{4}-\d{2}-\d{2}\s*$'
+          example: "2026-03-01"
         - name: end_date
           in: query
-          description: One date in the format YYYY-MM-DD (should be used with 'start_date' param)
+          description: Last date of the range, included. **Must be used together with `start_date`.**
           schema:
             type: string
             format: date
             pattern: '^\s*\d{4}-\d{2}-\d{2}\s*$'
+          example: "2026-03-31"
       responses:
-        200:
-          description: OK
+        "200":
+          description: |-
+            An object keyed by date. Can be an empty array `[]` when nothing matched — see the
+            description above.
           content:
             application/json:
               schema:
@@ -752,40 +1331,121 @@ paths:
                     type: object
                     additionalProperties:
                       $ref: '#/components/schemas/Day'
-        400:
-          description: "`invalid_date` | `invalid_date_range`"
+        "400":
+          description: |-
+            `invalid_date` — a date does not match `YYYY-MM-DD`.
+            `invalid_date_range` — you sent only one of `start_date` / `end_date`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
+        "401":
+          $ref: '#/components/responses/Unauthorized'
 
     post:
-      tags:
-        - observations
-      summary: Writing of a daily observation
-      description: >-
-        Upsert semantics, same as before: this writes the full state of the day, not a sparse
-        patch, so a field omitted from the body is written as empty/false (send the current
-        full Day, not just the fields that changed).
+      tags: [observations]
+      summary: Write one day (replaces the whole day)
+      description: |-
+        Creates or replaces one day. The date in the body is the identifier — there is no id to
+        pass and no separate "create" and "update" call.
+
+        ### Read this before your first write
+
+        **This is not a partial update.** The body must carry the *complete* state of the day.
+        Any field you leave out is written as empty or `false`. There is no `PATCH`.
+
+        ```
+        correct:   GET the day -> change one field -> POST the whole object back
+        wrong:     POST {"date": "...", "comment": "new"}      <- clears everything else
+        ```
+
+        The response body is the day as the server stored it, including the computed
+        `cycleStartDate` and `cycleDay`. Use it to refresh your local copy — you do not need a
+        second `GET`.
+
+        ### Starting a cycle
+
+        Send `cycleFirstDay: true`. That is the only thing needed. The server recomputes
+        `cycleStartDate` and `cycleDay` for that day and for every later day, on every read.
+
+        ### Free-text labels
+
+        Names you put in `freeMucusSensation` and `freeMucusObservation` are resolved for you:
+        an existing name is reused, a new name is created. You do not need `POST /description`
+        first. Sending a name that exists under the other type links the existing label and
+        keeps its original type.
+
+        ### Values the server quietly ignores
+
+        Validation here is minimal. Only the date is checked strictly. These cases are **not**
+        errors — the value is simply dropped:
+
+        | What you send | What is stored |
+        |---|---|
+        | `stampColor` outside Red / Green / Yellow / White | no colour |
+        | `codifiedArrow` outside Up / Down / Right | `null` |
+        | `temperature` of `0` or less | `null` |
+        | `temperatureTime` without a valid `temperature` | `null` |
+        | `counterStart` of `0` or less | `null` |
+
+        So check your spelling: a typo in `stampColor` loses the stamp without telling you.
+        Compare the response body with what you sent if you are unsure.
+
+        ### Side effect
+
+        Writing a day marks the account as active again. This matters because accounts with no
+        activity for 4 years are deleted automatically.
       requestBody:
+        required: true
+        description: The **complete** day. `date` is required; everything else is optional but omitting it clears it.
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/Day'
-        required: true
+            examples:
+              billings:
+                summary: Billings — first day of a cycle
+                value:
+                  date: "2026-03-10"
+                  cycleFirstDay: true
+                  stampColor: Red
+                  freeMucusSensation: [dry]
+                  comment: cramps in the morning
+                  lastWriteClientUtc: "2026-03-10T07:12:00Z"
+              billingsPeak:
+                summary: Billings — peak day, with temperature
+                value:
+                  date: "2026-03-22"
+                  stampColor: White
+                  stampBaby: true
+                  isPeak: true
+                  counterStart: 3
+                  freeMucusSensation: [slippery]
+                  freeMucusObservation: [clear and stretchy]
+                  temperature: 36.75
+                  temperatureTime: "06:45:00"
+                  sexUnion: true
+              fertilityCare:
+                summary: FertilityCare — codified day
+                value:
+                  date: "2026-03-22"
+                  stampColor: White
+                  stampBaby: true
+                  isPeak: true
+                  codifiedMucusSensation: "10"
+                  codifiedMucusObservation: KL
+                  codifiedNumberObservations: X2
+                  codifiedArrow: Up
+              notObserved:
+                summary: A day the user did not observe
+                value:
+                  date: "2026-03-14"
+                  dayNotObserved: true
       responses:
-        200:
-          description: Existing day updated.
+        "200":
+          description: |-
+            The day already existed and was replaced. You also get `200` for a date you deleted
+            earlier, because `DELETE` keeps the row — see `DELETE /day`.
           content:
             application/json:
               schema:
@@ -793,8 +1453,8 @@ paths:
                 properties:
                   data:
                     $ref: '#/components/schemas/Day'
-        201:
-          description: New day created.
+        "201":
+          description: A new day was created on the timeline.
           content:
             application/json:
               schema:
@@ -802,70 +1462,96 @@ paths:
                 properties:
                   data:
                     $ref: '#/components/schemas/Day'
-        400:
-          description: "`invalid_json` | `invalid_date`"
+        "400":
+          description: |-
+            `invalid_json` — the body is not a JSON object.
+            `invalid_date` — `date` is absent, malformed, or not a real calendar date (for example
+            `2026-02-30`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: Authentication required
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "405":
+          description: "`method_not_allowed` — only `GET`, `POST` and `DELETE` are supported on `/day`."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
 
     delete:
-      tags:
-        - observations
-      summary: Deletion of a daily observation
+      tags: [observations]
+      summary: Clear one day
+      description: |-
+        Clears the content of one day.
+
+        ### It clears, it does not remove
+
+        The day **stays on the timeline** as an empty day. This has three visible consequences:
+
+        - the date still appears in `GET /day`, with all values empty;
+        - a later `POST` on that date answers `200`, not `201`;
+        - `GET /sync` reports it as a changed day, which is how other clients learn about the
+          deletion.
+
+        ### Two things it does not clear
+
+        **Free-text labels survive.** `freeMucusSensation` and `freeMucusObservation` stay
+        linked to the day. If you want a truly empty day, send a `POST` with only the date
+        instead of calling `DELETE`:
+
+        ```
+        POST /day  {"date": "2026-03-10"}     <- clears everything, labels included
+        DELETE /day?date=2026-03-10           <- clears the fields, keeps the labels
+        ```
+
+        **The cycle flag is cleared**, so deleting a day that started a cycle merges that cycle
+        into the previous one. Every later day gets a new `cycleStartDate` and `cycleDay`. Check
+        before deleting a day where `cycleFirstDay` is `true`.
+
+        The call is idempotent, and a date that was never written is not an error.
       parameters:
         - name: date
           in: query
-          description: Date of observation in the format YYYY-MM-DD
           required: true
+          description: The date to clear, `YYYY-MM-DD`.
           schema:
             type: string
             format: date
-            pattern: '^\d{4}-\d{2}-\d{2}$'
+            pattern: '^\s*\d{4}-\d{2}-\d{2}\s*$'
+          example: "2026-03-10"
       responses:
-        204:
-          description: OK
-        400:
-          description: "`invalid_date`"
+        "204":
+          description: Cleared. No body. Also returned for a date that held nothing.
+        "400":
+          description: "`invalid_date` — `date` is absent or does not match `YYYY-MM-DD`."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
+        "401":
+          $ref: '#/components/responses/Unauthorized'
 
   /description:
-    # NOTE: kept singular (not renamed to /descriptions) because this pass doesn't update the
-    # JS frontend that calls it -- renaming the URL would break it with no way to fix it in
-    # the same pass. Revisit when the frontend is updated to match.
-
-
+    # NOTE: the path stays singular (not /descriptions) because the JS frontend calls this URL.
+    # Renaming it would break the frontend, so it is left as is on purpose.
     get:
-      tags:
-        - observations
-      summary: Reading of all descriptions existing in DB sorted by most used.
-      description: Field 'useCount' gives the number of days an observation is used on.
+      tags: [observations]
+      summary: List the free-text labels
+      description: |-
+        Lists every free-text label of the account, **most used first** (`useCount` descending).
+        This order is meant to be used directly: show the list as it comes, and the labels the
+        user picks most often are at the top.
+
+        `useCount` is the number of days currently linked to the label. A label with
+        `useCount: 0` is unused, and safe to delete.
+
+        Labels are created for you by `POST /day`, so a client usually only reads this endpoint.
+        Call it to fill a picklist, and after a rename or a delete to refresh the list.
       responses:
-        200:
-          description: OK
+        "200":
+          description: OK. An empty array when the account has no labels yet.
           content:
             application/json:
               schema:
@@ -875,150 +1561,176 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/Description'
-        401:
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
-
+        "401":
+          $ref: '#/components/responses/Unauthorized'
 
     post:
-      tags:
-        - observations
-      summary: Creating or updating descriptions.
+      tags: [observations]
+      summary: Create or rename a free-text label
+      description: |-
+        One call does two jobs:
+
+        - **no `id`** → create a new label;
+        - **with `id`** → rename that label, or change its type.
+
+        A rename applies **everywhere at once**. Every day linked to the label shows the new
+        name immediately, because days point at the label by id, not by name.
+
+        You rarely need this to create a label: `POST /day` already creates any unknown name you
+        send. Use this endpoint for the "manage my labels" screen.
+
+        Names are **unique per account** and **case-sensitive**. `"Dry"` and `"dry"` can both
+        exist. A name already in use answers `409`.
+
+        Note that the response does **not** contain `useCount`. Call `GET /description` when you
+        need the counts again.
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               type: object
+              required: [name, type]
               properties:
                 name:
                   type: string
-                  description: description to be created (or renamed)
+                  maxLength: 256
+                  description: The label text. Unique per account, case-sensitive. Leading and trailing spaces are removed.
+                  example: clear and stretchy
                 type:
                   type: string
-                  enum:
-                    - undefined
-                    - observation
-                    - sensation
+                  enum: [undefined, observation, sensation]
+                  description: "`sensation` = what the user feels. `observation` = what the user sees."
                 id:
                   type: integer
-                  description: ID of the description to rename/retype. Omit to create a new one.
+                  description: The label to rename or retype. Omit it to create a new label.
+                  example: 58
                 lastWriteClientUtc:
                   type: string
                   format: date-time
-              required:
-                - name
-                - type
-        required: true
+                  description: Your own clock, ISO 8601 UTC. The server uses its own clock if this is absent or invalid.
+                  example: "2026-03-10T15:30:45Z"
       responses:
-        200:
-          description: Existing description updated.
+        "200":
+          description: The existing label was renamed or retyped.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data:
-                    $ref: '#/components/schemas/Description'
-        201:
-          description: New description created.
+                    $ref: '#/components/schemas/DescriptionWritten'
+        "201":
+          description: A new label was created.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data:
-                    $ref: '#/components/schemas/Description'
-        400:
-          description: "`missing_fields` | `invalid_id` | `invalid_type`"
+                    $ref: '#/components/schemas/DescriptionWritten'
+        "400":
+          description: |-
+            `missing_fields` — `name` or `type` is absent or empty.
+            `invalid_id` — `id` is not an integer.
+            `invalid_type` — `type` is not one of the three allowed values.
+            `invalid_json` — the body is not a JSON object.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: Authentication required
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          description: "`not_found` — no label with this `id` on your account."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        404:
-          description: "`not_found`: `id` does not match a known description."
+        "409":
+          description: "`duplicate_name` — another label of this account already has this exact name."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        409:
-          description: "`duplicate_name`"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
 
     delete:
-      tags:
-        - observations
-      summary: Deletion of a description.
+      tags: [observations]
+      summary: Delete a free-text label
+      description: |-
+        Deletes a label **permanently, and unlinks it from every day at once**.
+
+        This is a real delete, not a clear. It is the one destructive operation in this group,
+        so check `useCount` from `GET /description` first and warn the user when it is not `0`.
+        The days themselves are kept; only the label disappears from them.
+
+        **Other clients cannot detect this through `GET /sync`.** A deleted label leaves no
+        trace there (see introduction, section 8). After a delete, refresh with a full
+        `GET /description`.
       parameters:
         - name: id
           in: query
-          description: ID of the description to delete
           required: true
+          description: The label to delete.
           schema:
             type: integer
+          example: 58
       responses:
-        204:
-          description: OK
-        400:
-          description: "`missing_id` | `invalid_id`"
+        "204":
+          description: Deleted. No body.
+        "400":
+          description: |-
+            `missing_id` — the `id` parameter is absent or empty.
+            `invalid_id` — `id` is not an integer.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: Authentication required
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          description: "`not_found` — no label with this `id` on your account."
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        404:
-          description: "`not_found`"
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
-
 
   /sync:
-
     get:
-      tags:
-        - observations
-      summary: List of daily observations and description modified since specified date for synchronization between clients and the server.
+      tags: [observations]
+      summary: What changed since a given time?
+      description: |-
+        Returns every day and every label whose `lastWriteClientUtc` is **greater than or equal
+        to** `fromTimestamp`. This is how two clients of the same account stay consistent
+        without downloading the whole timeline.
+
+        Read **section 8** of the introduction for the loop and for the three limits. In short:
+
+        - the filter uses the **client** clock, so subtract a safety margin from your last sync
+          time, and make your merge idempotent;
+        - the bound is **inclusive**, so the last record comes back again next time;
+        - a deleted **day** appears as a blanked day, but a deleted **label** leaves no trace.
+
+        The two lists are independent. Both can be empty, which simply means "nothing changed".
+        A first full download is `fromTimestamp=1970-01-01T00:00:00Z`.
+
+        Days returned here carry the same computed `cycleStartDate` and `cycleDay` as in
+        `GET /day`. Labels carry `useCount`.
       parameters:
         - name: fromTimestamp
           in: query
-          description: A UTC timestamp, ISO 8601 or the bare "YYYY-MM-DD hh:mm:ss" form.
           required: true
+          description: |-
+            A UTC timestamp. Both ISO 8601 (`2026-03-10T15:30:45Z`) and the bare form
+            (`2026-03-10 15:30:45`) are accepted. Any timezone offset you send is ignored, and the
+            value is read as UTC.
           schema:
             type: string
             format: date-time
-            example: "2025-01-23T15:30:45Z"
+          example: "2026-03-10T15:30:45Z"
       responses:
-        200:
-          description: OK
+        "200":
+          description: OK. Either list can be empty.
           content:
             application/json:
               schema:
@@ -1029,311 +1741,879 @@ paths:
                     properties:
                       days:
                         type: array
+                        description: Changed days, as a flat array — not keyed by date like `GET /day`.
                         items:
                           $ref: '#/components/schemas/Day'
                       descriptions:
                         type: array
+                        description: Changed labels. Deleted labels are **not** listed.
                         items:
                           $ref: '#/components/schemas/Description'
-        400:
-          description: "`missing_parameter` | `invalid_timestamp`"
+        "400":
+          description: |-
+            `missing_parameter` — `fromTimestamp` was not sent.
+            `invalid_timestamp` — it is not a valid UTC timestamp.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        401:
-          description: Authentication required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
+        "401":
+          $ref: '#/components/responses/Unauthorized'
 
-
+  # ---------------------------------------------------------------------------
+  # FILES
+  # ---------------------------------------------------------------------------
 
   /export:
     get:
-      tags:
-        - observations
-      summary: Export cycle data in NFP, CSV or PDF format
+      tags: [files]
+      summary: Export a period as NFP, CSV or PDF
+      description: |-
+        Downloads a period of the timeline as a file. Three formats, three purposes:
+
+        | `type` | Content type | Purpose |
+        |---|---|---|
+        | `nfp` | `application/json` | **Portable data.** The NFP file format, to move data to another app. See the `NfpFile` schema. |
+        | `csv` | `application/csv` | A spreadsheet, for a quick look at raw values. |
+        | `pdf` | `application/pdf` | A printable chart, laid out for the account's method. |
+
+        ### Reading errors from this endpoint
+
+        This endpoint is older than the JSON API. **It does not use the `error` envelope.**
+        Failures answer a plain-text message, in French, with content type `text/html`. So test
+        the HTTP status, not the body.
+
+        Unauthenticated requests answer `401` with **no body** and a `Location: auth` header.
+
+        ### Rules on the parameters
+
+        - `start_date` must be **strictly before** `end_date`. Equal dates are rejected. So you
+          cannot export a single day.
+        - The period must contain at least one recorded day, otherwise you get `400`.
+        - For `type=nfp` the export is widened backwards to the **first day of the cycle**
+          containing `start_date`, so a cycle is never exported cut in half. The `csv` and `pdf`
+          formats use exactly the dates you asked for.
+        - `anonymous=1` only affects `pdf`: it leaves the user's name off the chart, which is
+          what you want before sharing it with a practitioner.
+        - `json_in_page=1` only affects `nfp`: it returns indented JSON inline instead of
+          triggering a file download. Useful for a quick look in a browser or in curl.
+
+        By default the response carries `Content-Disposition: attachment`, so a browser saves a
+        file named `moncycle_app_<date>.<ext>`.
       parameters:
         - name: type
           in: query
-          description: File format to be returned
           required: true
+          description: The file format.
           schema:
             type: string
-            enum:
-              - nfp
-              - pdf
-              - csv
+            enum: [nfp, csv, pdf]
         - name: start_date
           in: query
-          description: Date of first day to export in YYYY-MM-DD format
           required: true
+          description: First date, `YYYY-MM-DD`. Must be **strictly before** `end_date`.
           schema:
             type: string
             format: date
             pattern: '^\d{4}-\d{2}-\d{2}$'
+          example: "2026-03-01"
         - name: end_date
           in: query
-          description: Date of last day to export in YYYY-MM-DD format
           required: true
+          description: Last date, `YYYY-MM-DD`.
           schema:
             type: string
             format: date
             pattern: '^\d{4}-\d{2}-\d{2}$'
+          example: "2026-03-31"
         - name: json_in_page
           in: query
-          description: 1 => return NFP data (JSON) directly in the current page, 0 => start a file download
           required: false
+          description: "`type=nfp` only. `1` = return indented JSON inline. `0` = download a `.nfp` file."
           schema:
             type: integer
+            enum: [0, 1]
             default: 0
-            enum:
-              - 1
-              - 0
         - name: anonymous
           in: query
-          description: Make anonymous pdf export (0 => no, 1 => yes)
           required: false
+          description: "`type=pdf` only. `1` = leave the user's name off the chart."
           schema:
             type: integer
+            enum: [0, 1]
             default: 0
-            enum:
-              - 1
-              - 0
       responses:
-        200:
-          description: OK
-        401:
-          description: Authentication required
-      security:
-        - HTTPcookie: []
-        - HTTPtoken: []
+        "200":
+          description: The file.
+          headers:
+            Content-Disposition:
+              description: "`attachment; filename=\"moncycle_app_<date>.<ext>\"`. Absent when `json_in_page=1`."
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NfpFile'
+            application/csv:
+              schema:
+                type: string
+                description: One header row, then one row per day.
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: |-
+            A plain-text message in French, **not** the `error` envelope. Causes: a missing or
+            malformed date; `start_date` not before `end_date`; a `type` outside the three values;
+            `anonymous` or `json_in_page` outside `0` / `1`; or no recorded day in the period.
+          content:
+            text/html:
+              schema:
+                type: string
+                example: "ERREUR: la 'start_date' doit être antérieure à la 'end_date'."
+        "401":
+          description: "Not authenticated. No body, and a `Location: auth` header."
 
   /import:
     post:
-      tags:
-        - observations
-      summary: Import NFP files (a JSON based file type)
-      description: Raw JSON string import from a NFP file.
+      tags: [files]
+      summary: Validate an NFP file
+      description: |-
+        Sends an NFP file to the server for checking.
+
+        ### Important: this endpoint only validates
+
+        **Nothing is written to the account.** The current implementation checks the file and
+        reports what is wrong with it. A successful call answers `{"import": "ok"}`, which means
+        *"this file is valid"*, not *"the data was imported"*. Use it today as a "check my file
+        before I send it" step. The `overide` parameter is accepted and parsed, but it has no
+        effect yet.
+
+        ### The checks, in order
+
+        1. the body is valid JSON;
+        2. `schemaVersion` is present, looks like `N.N`, and is exactly `1.0` — the only
+           supported version;
+        3. the whole file matches the `NfpFile` schema (`source_app`, `source_app_version`,
+           `file_creation_timestamp`, `cycles`, and each cycle's `method` / `cycleStartDate` /
+           `days`);
+        4. every day of every cycle matches the day schema.
+
+        The first failing step stops the process and decides `err_code`.
+
+        ### Its own error shape
+
+        This endpoint has **its own error format**, not the `error` envelope of the rest of the
+        API:
+
+        ```json
+        {
+          "err_code": 120,
+          "err_message": "JSON file structure is not a valid NFP input",
+          "err_list": ["[source_app] The property source_app is required"]
+        }
+        ```
+
+        | `err_code` | Meaning |
+        |---|---|
+        | `101` | `overide` is not `1` or `0` |
+        | `102` | the body is not valid JSON (see `err_detail`) |
+        | `103` | `schemaVersion` is missing or empty |
+        | `104` | `schemaVersion` is not a version number like `1.0` |
+        | `105` | that `schemaVersion` is not supported (see `err_detail`) |
+        | `120` | the file structure is invalid (see `err_list`) |
+        | `121` | at least one day is invalid (see `err_list`, which names the cycle and the day index) |
+
+        `err_list` is built for humans: each line is `[where] what is wrong`. Show it to the
+        user as is.
       parameters:
         - name: overide
           in: query
-          description: Overide existing data (0 => no, 1 => yes)
           required: false
+          description: |-
+            Intended to allow overwriting existing days. Accepted and validated, but **it has no
+            effect** while this endpoint only validates.
           schema:
             type: integer
+            enum: [0, 1]
             default: 0
-            enum:
-              - 1
-              - 0
       requestBody:
         required: true
+        description: The content of an `.nfp` file, as a JSON body.
         content:
           application/json:
             schema:
-              type: string
-              example: {"metadata": {"version": "1.2"}, "data": [{"id": 1, "value": 10}]}
+              $ref: '#/components/schemas/NfpFile'
       responses:
-        200:
-          description: Successfully imported
-        400:
-          description: Import error
-        401:
-          description: Authentication required
+        "200":
+          description: The file is valid. Nothing was written to the account.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  import:
+                    type: string
+                    enum: [ok]
+        "400":
+          description: The file was rejected. See the `err_code` table above.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportError'
+        "401":
+          description: "Not authenticated. No body, and a `Location: auth` header."
 
+  /all_of_my_data_plz:
+    get:
+      tags: [files]
+      summary: Download everything (GDPR)
+      description: |-
+        Returns **all** data held about the logged-in account, as one CSV file. This covers the
+        GDPR right of access, and it is also the right thing to offer a user before
+        `DELETE /account`.
+
+        The file is not a clean table. It is three blocks, one after another, each with its own
+        header row:
+
+        1. the account record;
+        2. the authentication tokens (one row per device);
+        3. every recorded day.
+
+        Columns are the **internal database column names**, in French in places, and the
+        separator is `;` by default. The file starts with a UTF-8 BOM so that Excel opens
+        accented characters correctly.
+
+        Secrets are masked, not exported: the password hash, the TOTP secret and the token
+        strings appear as `abc [masqué] xyz`.
+
+        This is a human-readable dump for the user, not a machine format. To move data to
+        another app, use `GET /export?type=nfp`.
+      responses:
+        "200":
+          description: The CSV file.
+          headers:
+            Content-Disposition:
+              description: '`attachment; filename="export_moncycle_app.csv"`'
+              schema:
+                type: string
+          content:
+            application/csv:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: "Not authenticated. No body, and a `Location: auth` header."
+
+# =============================================================================
+# COMPONENTS
+# =============================================================================
 
 components:
-  schemas:
 
+  responses:
+
+    Unauthorized:
+      description: |-
+        `unauthorized` — no token, an unknown token, or the account is deactivated. Send the user
+        back to `POST /login`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: unauthorized
+              message: Authentication required.
+
+  schemas:
 
     Error:
       type: object
-      required:
-        - code
-        - message
+      description: The content of the `error` key. See introduction, section 2.
+      required: [code, message]
       properties:
         code:
           type: string
-          description: >-
-            Stable, machine-readable slug. See each endpoint's responses for the codes it can
-            return (e.g. `invalid_credentials`, `unauthorized`, `not_found`, `duplicate_name`).
+          description: |-
+            A stable slug, meant for your program. It does not change, so you can branch on it
+            safely. Each endpoint lists the codes it can return.
+
+            Codes you may meet anywhere: `unauthorized` (no valid token), `invalid_json` (the body
+            is not a JSON object), `unexpected_error` (a server fault — retry, then report it).
+          example: invalid_credentials
         message:
           type: string
-          description: Human-readable explanation, not meant to be parsed.
+          description: |-
+            A sentence in English for a human. Log it, or show it. **Never parse it** — the wording
+            can change at any release.
+          example: Incorrect password or non-existent account.
         details:
           type: object
-          description: Optional extra structured context (e.g. `captchaRequired`).
+          description: |-
+            Optional extra context. For example `/login` adds `captchaRequired: true`, and
+            `/register` adds `userId` on `already_authenticated`.
+          additionalProperties: true
 
     ErrorEnvelope:
       type: object
-      required:
-        - error
+      description: Every failure of a JSON endpoint looks like this.
+      required: [error]
       properties:
         error:
           $ref: '#/components/schemas/Error'
 
     LoginRequest:
-      required:
-        - email
-        - password
       type: object
+      required: [email, password]
       properties:
         email:
           type: string
+          format: email
+          description: The login address of the account.
           example: demo.bill@moncycle.app
-          description: Login email address
         password:
           type: string
+          format: password
+          description: The account password.
           example: demo
-          description: Login password
         code:
           type: integer
-          description: One time pass code (TOTP)
+          description: |-
+            The 6-digit TOTP code. Required only once a login answered `401 totp_required` — that
+            is, only for accounts where two-factor is active.
+          example: 492013
         captcha:
           type: string
-          description: >-
-            Answer to the image served by /captcha (same challenge/cookie mechanism
-            as account registration). Only required once the response to a previous /login
-            call came back with captchaRequired = true.
+          description: |-
+            The answer to the image from `GET /captcha`. Required only once a login answered
+            `403 captcha_required`, or once a response carried `captchaRequired: true`. The same
+            cookie must be sent with both calls.
+          example: a7k2f
 
-    Day:
+    KeyInfos:
       type: object
-      required:
-        - date
-      description: >-
-        The shape used by /day and /sync, and (inside cycles[].days[]) by the NFP file format
-        served by /export and /import -- see that endpoint's docs for the differences between
-        this live-resource shape and the portable file format.
+      description: The account summary returned by `GET /key_infos`.
       properties:
-        date:
-          type: string
-          format: date
-          description: Date of observation in YYYY-MM-DD format. Required on write; ignored on read.
-        cycleStartDate:
-          type: string
-          format: date
-          nullable: true
-          description: Read-only. First day of the cycle this date belongs to.
-        cycleDay:
+        userId:
           type: integer
-          nullable: true
-          description: Read-only. 1-based position of this date within its cycle.
-        cycleFirstDay:
-          type: boolean
-          description: Start of a new cycle on this date.
-        dayNotObserved:
-          type: boolean
-          description: No observation of any kind was recorded for this date.
-        stampColor:
+          example: 42
+        email:
+          type: string
+          format: email
+          description: The login address.
+        secondaryEmail:
           type: string
           nullable: true
-          enum: [Red, Green, Yellow, White]
-          description: >-
-            Stamp color. Note: "White" with stampBaby=false is indistinguishable from "no
-            stamp at all" (both are stored as the same empty code) and round-trips back as
-            null -- this app has never had a distinct code for a plain, colorless stamp.
-        stampBaby:
+          description: An optional second address, used to also receive charts by email.
+        method:
+          type: string
+          enum: [billings, fertilityCare]
+          description: The tracking method. It decides which fields of a day to display.
+        temperatureTracking:
           type: boolean
-          description: Baby label on top of the stamp color.
-        isPeak:
-          type: boolean
-          description: Peak day for the current cycle. Could be multiple per cycle.
-        counterStart:
+          description: Does the user also record basal body temperature?
+        birthYear:
           type: integer
-          nullable: true
-          description: Start an extra days counter from this day, for this many days.
-        sexUnion:
+          description: Year of birth, approximate, used for anonymous statistics.
+          example: 1994
+        name:
+          type: string
+          description: First name, or both first names when a couple shares the account.
+          example: Marie
+        inscriptionDate:
+          type: string
+          format: date-time
+          description: When the account was created, UTC.
+          example: "2024-06-14T09:21:03Z"
+        sponsor:
           type: boolean
-          description: Sexual intercourse on that day.
-        booleanPregnancyDetected:
+          description: Is this account a financial supporter of the project?
+        research:
           type: boolean
-          description: Beginning of a pregnancy.
-        freeMucusSensation:
+          description: Has the user agreed to contribute anonymous data to research?
+        timelineAscending:
+          type: boolean
+          description: |-
+            Display preference: `true` puts today at the top of the table. The API itself always
+            returns days in ascending date order.
+        allCyclesFirstDay:
           type: array
+          description: |-
+            Every date flagged `cycleFirstDay: true`, **newest first**. Enough to draw a cycle
+            navigator without downloading the timeline.
           items:
             type: string
-          description: >-
-            Free-text sensation labels (Billings method). Writing a name that doesn't exist
-            yet creates it; writing an existing name that was created under
-            freeMucusObservation keeps its original type (names are unique per account
-            regardless of type, same as before this change).
-        freeMucusObservation:
+            format: date
+          example: ["2026-03-10", "2026-02-11", "2026-01-14"]
+        allPregnancyDates:
           type: array
+          description: "Every date flagged `booleanPregnancyDetected: true`, newest first."
           items:
             type: string
-          description: Free-text observation labels (Billings method). See freeMucusSensation.
-        temperature:
-          type: number
-          nullable: true
-        temperatureTime:
+            format: date
+        totpState:
           type: string
-          nullable: true
-          description: Time the temperature was taken, hh:mm:ss.
-        codifiedBleedingObservation:
-          type: string
-          nullable: true
-          description: FertilityCare method only. One of VH|H|M|VL|B, optionally suffixed "L" for spotting (e.g. "BL"), or just "L" for spotting alone.
-        codifiedMucusSensation:
-          type: string
-          nullable: true
-          description: FertilityCare method only. One of 0|2|2W|4|6|8|10|10DL|10SL|10WL.
-        codifiedMucusObservation:
-          type: string
-          nullable: true
-          description: FertilityCare method only. Any combination of C|G|K|P|Y|L.
-        codifiedNumberObservations:
-          type: string
-          nullable: true
-          description: FertilityCare method only. One of X1|X2|X3|AD.
-        codifiedPainObservations:
-          type: string
-          nullable: true
-          description: FertilityCare method only. One of AP|RAP|LAP.
-        codifiedArrow:
-          type: string
-          nullable: true
-          enum: [Up, Down, Right]
-          description: FertilityCare method only.
-        comment:
-          type: string
+          enum: [never_used, disabled, init, active, unknown]
+          description: |-
+            Where the account stands with two-factor authentication.
+
+            | Value | Meaning |
+            |---|---|
+            | `active` | On. `POST /login` needs a `code`. |
+            | `init` | `GET /totp` was called but never confirmed. Login still works with the password alone. |
+            | `disabled` | It was on, and the user turned it off. |
+            | `never_used` | Never set up. |
+            | `unknown` | No state stored. A brand-new account reports this; treat it exactly like `never_used`. |
         lastWriteClientUtc:
           type: string
           format: date-time
           nullable: true
-          description: Client-side UTC update timestamp. Set by the server if not present on write.
+          description: When the account settings were last written, from the client clock. `null` if never.
+
+    Day:
+      type: object
+      description: |-
+        One day of the timeline — the central object of this API. Used by `GET /day`,
+        `POST /day` and `GET /sync`.
+
+        **On write, send the whole object.** Any field you leave out is cleared. See
+        `POST /day`.
+
+        Three groups of fields:
+
+        - **read-only**, computed by the server: `cycleStartDate`, `cycleDay`, `lastWriteDb`;
+        - **common** to both methods: the stamp, `isPeak`, `cycleFirstDay`, `sexUnion`,
+          `temperature`, `comment`…;
+        - **method-specific**: `freeMucus*` for Billings, `codified*` for FertilityCare.
+
+        Sending a field from the other method is not an error, but the app will not display it.
+      required: [date]
+      properties:
+
+        date:
+          type: string
+          format: date
+          description: |-
+            `YYYY-MM-DD`. This is the identifier of the day. **Required on write**; ignored in the
+            body on read. Must be a real calendar date.
+          example: "2026-03-10"
+
+        cycleStartDate:
+          type: string
+          format: date
+          nullable: true
+          description: |-
+            **Read-only, computed.** The first day of the cycle this date belongs to: the closest
+            day at or before it with `cycleFirstDay: true`. `null` when no cycle has started yet.
+          example: "2026-03-10"
+        cycleDay:
+          type: integer
+          nullable: true
+          description: |-
+            **Read-only, computed.** Position of this date inside its cycle, starting at `1`.
+            `null` when `cycleStartDate` is `null`.
+          example: 1
+
+        cycleFirstDay:
+          type: boolean
+          default: false
+          description: |-
+            `true` marks this date as **day 1 of a new cycle**. This single flag is how cycles exist
+            in this API — see introduction, section 1. Setting it back to `false` merges the cycle
+            into the previous one.
+        dayNotObserved:
+          type: boolean
+          default: false
+          description: |-
+            The user explicitly recorded **no observation** for this date. Different from a date
+            with no data at all: this one says "I looked and I have nothing to note".
+
+        stampColor:
+          type: string
+          nullable: true
+          enum: [Red, Green, Yellow, White]
+          description: |-
+            The colour of the stamp on the chart. An unknown value is silently dropped.
+
+            Known limit: `"White"` together with `stampBaby: false` cannot be stored. Both "white
+            stamp" and "no stamp" use the same empty code in the database, and both read back as
+            `null`. This app has never had a distinct code for a plain colourless stamp.
+        stampBaby:
+          type: boolean
+          default: false
+          description: A baby picture on top of the stamp, marking a potentially fertile day.
+
+        isPeak:
+          type: boolean
+          default: false
+          description: |-
+            Peak day: the last day with the most fertile type of mucus. A cycle **can** have more
+            than one, so do not assume it is unique.
+        counterStart:
+          type: integer
+          nullable: true
+          description: |-
+            Start a visible counter on this day and show it for this many days. A value of `0` or
+            less is stored as `null`. Keep it small — the stored range is 0 to 255.
+          example: 3
+
+        sexUnion:
+          type: boolean
+          default: false
+          description: Sexual intercourse on this date.
+        booleanPregnancyDetected:
+          type: boolean
+          default: false
+          description: A pregnancy was detected on this date. These dates are also listed in `GET /key_infos`.
+
+        freeMucusSensation:
+          type: array
+          description: |-
+            **Billings only.** What the user *feels*, as free-text labels, for example `["dry"]`.
+
+            A name that does not exist yet is created for you. A name that already exists under
+            `freeMucusObservation` is reused and keeps its original type — names are unique per
+            account whatever their type. Names are case-sensitive.
+
+            In the NFP **file** format these labels are one comma-joined string, not an array.
+          items:
+            type: string
+            maxLength: 256
+          example: [dry, slippery]
+        freeMucusObservation:
+          type: array
+          description: "**Billings only.** What the user *sees*, as free-text labels. Same rules as `freeMucusSensation`."
+          items:
+            type: string
+            maxLength: 256
+          example: [clear and stretchy]
+
+        temperature:
+          type: number
+          format: float
+          nullable: true
+          description: |-
+            Basal body temperature. A value of `0` or less is stored as `null`. Stored with 2
+            decimals, so the range is 0.00 to 99.99 — the unit is whatever the user records,
+            usually °C.
+          example: 36.75
+        temperatureTime:
+          type: string
+          nullable: true
+          description: |-
+            When the temperature was taken, `hh:mm:ss`. **Ignored unless a valid `temperature` is
+            sent in the same request.**
+          example: "06:45:00"
+
+        codifiedBleedingObservation:
+          type: string
+          nullable: true
+          description: |-
+            **FertilityCare only.** One of `VH`, `H`, `M`, `VL`, `B`, with an optional `L` suffix for
+            spotting (for example `BL`), or `L` alone for spotting only.
+          example: BL
+        codifiedMucusSensation:
+          type: string
+          nullable: true
+          description: "**FertilityCare only.** One of `0`, `2`, `2W`, `4`, `6`, `8`, `10`, `10DL`, `10SL`, `10WL`."
+          example: "10"
+        codifiedMucusObservation:
+          type: string
+          nullable: true
+          description: "**FertilityCare only.** Any combination of `C`, `G`, `K`, `P`, `Y`, `L`."
+          example: KL
+        codifiedNumberObservations:
+          type: string
+          nullable: true
+          description: "**FertilityCare only.** One of `X1`, `X2`, `X3`, `AD`."
+          example: X2
+        codifiedPainObservations:
+          type: string
+          nullable: true
+          description: "**FertilityCare only.** One of `AP`, `RAP`, `LAP`."
+          example: AP
+        codifiedArrow:
+          type: string
+          nullable: true
+          enum: [Up, Down, Right]
+          description: "**FertilityCare only.** The arrow drawn on the chart. An unknown value is stored as `null`."
+
+        comment:
+          type: string
+          maxLength: 256
+          default: ""
+          description: A free note from the user. Read back as `""` when empty, never `null`.
+          example: cramps in the morning
+
+        lastWriteClientUtc:
+          type: string
+          format: date-time
+          nullable: true
+          description: |-
+            Your own clock, ISO 8601 UTC. The server uses its own clock if this is absent or
+            invalid. **This is the field `GET /sync` filters on** — see introduction, section 8.
+          example: "2026-03-10T07:12:00Z"
         lastWriteDb:
           type: string
           format: date-time
           nullable: true
-          description: Read-only. Server-side last-write timestamp.
+          description: "**Read-only.** The server clock at the last write."
+          example: "2026-03-10T07:12:03Z"
 
     Description:
       type: object
+      description: A reusable free-text label, as returned by `GET /description` and `GET /sync`.
       properties:
         id:
           type: integer
+          description: The identifier. Days point at the label by this id, so a rename applies everywhere.
+          example: 58
         name:
           type: string
+          maxLength: 256
+          description: The label text. Unique per account, case-sensitive.
+          example: clear and stretchy
         type:
           type: string
           enum: [undefined, observation, sensation]
+          description: |-
+            `sensation` = what the user feels. `observation` = what the user sees. `undefined` =
+            neither was recorded.
         useCount:
           type: integer
-          description: Number of days this description is currently associated with.
+          description: How many days are linked to this label right now. `0` means unused, so safe to delete.
+          example: 12
 
+    DescriptionWritten:
+      type: object
+      description: |-
+        What `POST /description` returns. It is the same label as `Description`, but with
+        `lastWriteClientUtc` instead of `useCount`. Call `GET /description` when you need the
+        counts.
+      properties:
+        id:
+          type: integer
+          example: 58
+        name:
+          type: string
+          description: The stored name, with leading and trailing spaces removed.
+          example: clear and stretchy
+        type:
+          type: string
+          enum: [undefined, observation, sensation]
+        lastWriteClientUtc:
+          type: string
+          format: date-time
+          description: The timestamp that was stored, whether it came from you or from the server.
+          example: "2026-03-10T15:30:45Z"
+
+    NfpFile:
+      type: object
+      description: |-
+        The **NFP file format**: a portable JSON file for moving cycle data between NFP apps.
+        Produced by `GET /export?type=nfp`, checked by `POST /import`.
+
+        It is **not** the live API shape, and it has its own version number. Two differences
+        catch people out:
+
+        - most day values are written as **strings**, including booleans (`"true"`);
+        - `freeMucusSensation` and `freeMucusObservation` are **comma-joined strings** here,
+          while the live `Day` object uses arrays.
+
+        Only `schemaVersion` `"1.0"` is supported.
+      required: [schemaVersion, source_app, source_app_version, file_creation_timestamp, cycles]
+      properties:
+        schemaVersion:
+          type: string
+          pattern: '^[0-9]\.[0-9]$'
+          description: Version of this file format. Must be `"1.0"`.
+          example: "1.0"
+        source_app:
+          type: string
+          description: The app that wrote the file.
+          example: moncycle.app
+        source_app_version:
+          type: string
+          description: The version of that app.
+          example: "15"
+        file_creation_timestamp:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+          description: When the file was written, `YYYY-MM-DD hh:mm:ss`. Note the space — this is **not** ISO 8601.
+          example: "2026-03-31 18:04:22"
+        cycles:
+          type: array
+          description: The exported cycles, in order.
+          items:
+            $ref: '#/components/schemas/NfpCycle'
+
+    NfpCycle:
+      type: object
+      description: One cycle inside an NFP file.
+      required: [method, cycleStartDate, days]
+      properties:
+        method:
+          type: string
+          description: |-
+            The method used for this cycle: `billings`, `fertilityCare` or `symptothermic_fr`
+            (case-insensitive). Unlike the live API, the file records the method **per cycle**, so
+            a user who changed method keeps a correct history.
+          example: billings
+        cycleStartDate:
+          type: string
+          format: date
+          description: Day 1 of this cycle. The first entry in `days` is this date.
+          example: "2026-03-10"
+        days:
+          type: array
+          description: |-
+            The days of the cycle, in date order, starting at `cycleStartDate`. Days with nothing
+            recorded are present as empty objects, so the position in the array is the day number.
+          items:
+            $ref: '#/components/schemas/NfpFileDay'
+
+    NfpFileDay:
+      type: object
+      description: |-
+        One day inside an NFP file. **Every field is optional**, and a field with no value is
+        left out entirely rather than set to `null`.
+
+        Remember the two format differences: booleans are strings here, and the free-text
+        labels are comma-joined strings rather than arrays.
+      properties:
+        stampColor:
+          type: string
+          description: "`Green`, `Red`, `Yellow` or `White`, case-insensitive."
+          example: White
+        stampBaby:
+          type: string
+          description: "`\"true\"` or `\"false\"` — a string, not a boolean."
+          example: "true"
+        isPeak:
+          type: string
+          description: "`\"true\"` or `\"false\"`. A cycle can hold more than one peak day."
+          example: "true"
+        counterStart:
+          type: string
+          description: Number of days to show a counter for, as a string.
+          example: "3"
+        sexUnion:
+          type: string
+          description: |-
+            `Union` or `LastReportedUnion`, case-insensitive. The second one means the user will not
+            record further unions in this cycle. This API only ever writes the simple case.
+          example: Union
+        freeMucusSensation:
+          type: string
+          description: "**Billings.** The labels joined with `, ` — a string here, an array in the live `Day`."
+          example: "dry, slippery"
+        freeMucusObservation:
+          type: string
+          description: "**Billings.** The labels joined with `, `."
+          example: "clear and stretchy"
+        codifiedBleedingObservation:
+          type: string
+          description: "**FertilityCare.** See the matching field on `Day`."
+          example: BL
+        codifiedMucusSensation:
+          type: string
+          description: "**FertilityCare.** See the matching field on `Day`."
+          example: "10"
+        codifiedMucusObservation:
+          type: string
+          description: "**FertilityCare.** See the matching field on `Day`."
+          example: KL
+        codifiedNumberObservations:
+          type: string
+          description: "**FertilityCare.** See the matching field on `Day`."
+          example: X2
+        codifiedPainObservations:
+          type: string
+          description: "**FertilityCare.** See the matching field on `Day`."
+          example: AP
+        codifiedArrow:
+          type: string
+          description: "**FertilityCare.** `Up`, `Down` or `Right`."
+          example: Up
+        mucusNotObserved:
+          type: string
+          description: |-
+            `"true"` or `"false"`. The file-format name for `dayNotObserved` on the live `Day`
+            object.
+          example: "true"
+        booleanPregnancyDetected:
+          type: string
+          description: "`\"true\"` or `\"false\"`."
+          example: "false"
+        temperature:
+          type: number
+          description: Basal body temperature. A real number here, not a string.
+          example: 36.75
+        temperatureTime:
+          type: string
+          pattern: '^\s*\d\d:\d\d:\d\d\s*$'
+          description: When it was taken, `hh:mm:ss`.
+          example: "06:45:00"
+        comment:
+          type: string
+          description: The user's free note.
+          example: cramps in the morning
+
+    ImportError:
+      type: object
+      description: |-
+        The error shape of `POST /import` only. The rest of the API uses `ErrorEnvelope`
+        instead.
+      required: [err_code, err_message]
+      properties:
+        err_code:
+          type: integer
+          enum: [101, 102, 103, 104, 105, 120, 121]
+          description: Which check failed. See the table on `POST /import`.
+          example: 120
+        err_message:
+          type: string
+          description: A short English sentence describing that check.
+          example: JSON file structure is not a valid NFP input
+        err_list:
+          type: array
+          description: |-
+            On `120` and `121`: one line per problem found, as `[where] what is wrong`. On `121` the
+            location names the cycle and the index of the day. Built to be shown to a user as is.
+          items:
+            type: string
+          example:
+            - "[source_app] The property source_app is required"
+            - "[2026-03-10 - 4][temperature] String value found, but a number is required"
+        err_detail:
+          type: string
+          description: "On `102`: the JSON parser message. On `105`: the unsupported version that was found."
+          example: Syntax error
 
   securitySchemes:
+
     HTTPtoken:
-      description: Token in the HTTP Authorization header
       type: http
       scheme: Bearer
+      description: |-
+        The token from `POST /login`, in the `Authorization` header:
+
+        ```
+        Authorization: Bearer <token>
+        ```
+
+        Use this for apps, scripts and mobile clients. It wins over the cookie if both are sent.
+        The token does not expire. `GET /logout` destroys the one you send.
+
     HTTPcookie:
-      description: Token in an HTTP cookie
       type: apiKey
       in: cookie
       name: MONCYCLEAPP_TOKEN
+      description: |-
+        The same token, in a cookie. `POST /login` sets it for you (HttpOnly, 5 years), so a
+        browser client has nothing to store.
+
+        The same cookie name also carries the **captcha** session before login, which is why
+        `GET /captcha` and the call that follows it must share a cookie jar.
