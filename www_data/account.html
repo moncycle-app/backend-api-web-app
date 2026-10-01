@@ -83,7 +83,36 @@
 			Comme demandé par la RGPD, vous avez aussi la possibilité d’exporter l’ensemble des données liées à votre compte. Cet export sera au format CSV.</p>
 			<a href="api/all_of_my_data_plz"><input type="button" value="📦 Exporter l'ensemble des données brutes de mon compte" /></a>
 			<br /><br /><br /><br />
-	
+
+
+
+			<h2>Importer mes données <span class="net_stat" id="import_net_stat"></span></h2>
+			<p>
+				Vous pouvez réinjecter dans votre tableau un fichier au format <b>NFP</b>: un export de cette
+				application, ou l’export d’une autre application compatible. Les cycles du fichier
+				s’ajoutent à ceux que vous avez déjà.
+			</p>
+			<form method="post" action="api/import" id="f_import">
+				<input type="file" id="i_import_file" name="file" accept=".nfp,.json,application/json" /><br /><br />
+				<input type="checkbox" id="i_import_overide" name="overide" value="1" /> <label for="i_import_overide"><b>Écraser les jours déjà renseignés.</b></label><br />
+				<span class="label_info">
+					Quand une date du fichier est déjà renseignée dans votre tableau: case <b>décochée</b> (par
+					défaut), votre journée est conservée telle quelle et celle du fichier est ignorée; case
+					<b>cochée</b>, la journée du fichier remplace entièrement la vôtre (glaire, sensations,
+					observations, température, commentaire, union…) et votre version actuelle est
+					définitivement perdue.
+				</span><br /><br />
+				<input type="button" id="i_import_check" value="🔍 Vérifier le fichier" />
+				<input type="submit" id="i_import_submit" value="📥 Importer" />
+				<br />
+				<span class="label_info">
+					<b>Vérifier le fichier</b> n’écrit rien: la simulation vous dit ce que l’import ferait,
+					quels jours sont déjà renseignés, et ce qui ne peut pas être repris.
+				</span>
+			</form>
+			<div id="import_report"></div>
+			<br /><br /><br /><br />
+
 
 
 			<h2>Modifier mes informations & préférences<span class="net_stat" id="net_stat"></span></h2>

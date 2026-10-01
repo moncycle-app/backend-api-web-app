@@ -19,8 +19,12 @@
 **   3. nfp_file_build_plan()   calendar, ranges, lengths, cycle overlap -> the write plan
 **   4. nfp_file_write_plan()   inside one transaction
 **
-** ?dryRun=1 stops after stage 3, which is the "check my file first" behaviour this endpoint
-** used to be limited to.
+** ?dryRun=1 answers for stage 4 without running it: nfp_file_preview_plan() reads the account
+** and reports what the write would have done -- which days of the file the account already
+** holds, and which free-text labels are new -- so the user can see what is at stake, and in
+** particular decide on 'overide', before anything is written. A dry run that is refused also
+** answers with everything the checks found, not only the first thing that rejects the file,
+** because a diagnosis is the whole point of asking for one.
 **
 ** ?overide=<0|1> decides what happens to a date the account already has data on: 0 (the
 ** default) leaves it alone and reports it, 1 replaces it.
@@ -99,10 +103,23 @@ if (!empty($schema_errors)) {
 $checked = nfp_file_build_plan($nfp_file, $user_account);
 
 if (!empty($checked["issues"])) {
-	http_error(400, "inconsistent_nfp_data", "The file is valid JSON but its contents are inconsistent.", [
+	$details = [
 		"issues" => array_slice($checked["issues"], 0, 50),
 		"issueCount" => count($checked["issues"]),
-	]);
+	];
+	// On a dry run the caller asked what is wrong with the file, so the answer carries
+	// everything stage 3 found: the dates the file holds twice as a list of their own (the
+	// commonest reason a file is refused, and the one a user can act on by splitting a cycle),
+	// and the warnings and field reports, which a bare list of issues would hide.
+	if ($dry_run) {
+		$details["duplicatedDaysInFile"] = $checked["duplicates"];
+		$details["warnings"] = $checked["warnings"];
+		$details["mappedFields"] = $checked["mapped"];
+		$details["ignoredFields"] = $checked["ignored"];
+		$details["cyclesRead"] = $checked["cyclesRead"];
+		$details["daysRead"] = $checked["daysRead"];
+	}
+	http_error(400, "inconsistent_nfp_data", "The file is valid JSON but its contents are inconsistent.", $details);
 }
 
 $report = [
@@ -116,13 +133,19 @@ $report = [
 	"warnings" => $checked["warnings"],
 	"mappedFields" => $checked["mapped"],
 	"ignoredFields" => $checked["ignored"],
+	// always empty at this point -- a file holding a date twice does not get here -- and
+	// reported anyway so the field exists in every answer this endpoint gives
+	"duplicatedDaysInFile" => $checked["duplicates"],
 ];
 
 if ($dry_run) {
-	$report["daysCreated"] = [];
-	$report["daysOverwritten"] = [];
-	$report["daysSkipped"] = [];
-	$report["descriptionsCreated"] = 0;
+	$previewed = nfp_file_preview_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide);
+
+	// same merge as the real run below, because the preview answers in the writer's shape
+	$report["mappedFields"] = array_merge($report["mappedFields"], $previewed["narrowed"]);
+	unset($previewed["narrowed"]);
+
+	$report = array_merge($report, $previewed);
 	http_data(200, $report);
 }
 

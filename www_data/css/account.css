@@ -95,3 +95,56 @@ form {
 	height: 1.2em;
 	padding: 5px;
 }
+
+#i_import_file {
+	width: 90%;
+	font-size: .9em;
+}
+
+/* --- NFP import report ------------------------------------------------
+** The answer to an import, or to the dry run that only reports what one would do. It is a
+** block of counts plus foldable lists, and the lists can hold thousands of dates, so they
+** start closed and the block scrolls rather than pushing the rest of the page away.
+*/
+
+#import_report:not(:empty) {
+	margin-top: 15px;
+	padding: 10px 12px;
+	border-radius: 5px;
+	background-color: #f0f0f0;
+	font-size: .9em;
+	max-height: 60vh;
+	overflow-y: auto;
+}
+
+.import_line {
+	margin: 0 0 .5em 0;
+}
+
+.import_head {
+	font-weight: bold;
+}
+
+.import_list {
+	margin-bottom: .5em;
+}
+
+.import_list summary {
+	cursor: pointer;
+}
+
+.import_list ul {
+	margin: .3em 0 .8em 0;
+	padding-left: 1.5em;
+}
+
+.import_list li {
+	margin-bottom: .2em;
+	overflow-wrap: anywhere;
+}
+
+@media (prefers-color-scheme: dark) {
+	#import_report:not(:empty) {
+		background-color: #191919;
+	}
+}

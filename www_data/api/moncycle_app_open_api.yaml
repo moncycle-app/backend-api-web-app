@@ -1811,6 +1811,11 @@ paths:
         normalisations of the FertilityCare notation: `Br` is written `B`, `x1`/`x2`/`x3` are
         written uppercase, and `C/K` is written `CK`.
 
+        This holds for every account, including ones carrying shapes the file format calls
+        invalid — `POST /import` warns about those rather than refusing them, precisely so that
+        what this app exports it can read back. See "A file from `GET /export?type=nfp` always
+        imports" on `POST /import`.
+
         By default the response carries `Content-Disposition: attachment`, so a browser saves a
         file named `moncycle_app_<date>.<ext>`.
       parameters:
@@ -1902,8 +1907,9 @@ paths:
         > **Changed in 15.** This endpoint used to validate only, answer `{"import": "ok"}` and
         > report failures in its own `err_code` / `err_message` / `err_list` shape. It now
         > writes, answers an `ImportReport` inside the standard `data` envelope, and reports
-        > failures with the standard `error` envelope. `dryRun=1` reproduces the old
-        > check-only behaviour, and `overide` now does something.
+        > failures with the standard `error` envelope. `overide` now does something, and
+        > `dryRun=1` replaces the old check-only behaviour with a full preview: it reports what
+        > the write would do, down to which days the account already holds.
 
         ### All or nothing
 
@@ -1924,7 +1930,9 @@ paths:
 
         `overide=0` (the default) leaves those dates untouched and lists them in `daysSkipped`.
         `overide=1` replaces them whole — including their free-text labels — exactly like a
-        `POST /day`, which also carries the full state of a day.
+        `POST /day`, which also carries the full state of a day. Either way they are counted in
+        `daysAlreadyInAccount`, and `dryRun=1` fills all three without writing, so the choice
+        can be made with the dates in hand.
 
         A day the file leaves empty (`{}`) is a gap: it is not written, and it does not count as
         a conflict. The **first** day of each cycle is always written even when empty, because
@@ -1940,8 +1948,9 @@ paths:
         - `mappedFields` — stored, but less precisely than the file said (a `symptothermic_fr`
           bleeding value becomes a Red stamp; `sexUnion: "ReservedUnion"` becomes a plain
           union).
-        - `warnings` — accepted, but worth showing the user: usually a cycle whose `method`
-          differs from the account's.
+        - `warnings` — accepted and imported, but worth showing the user: a cycle whose
+          `method` differs from the account's, or one of the file shapes listed under
+          "A file from `GET /export?type=nfp` always imports" below.
 
         A cycle of **any** `method` imports, `symptothermic_fr` included: the fields every
         method shares are kept, and the rest is reported.
@@ -1952,23 +1961,53 @@ paths:
         cannot rename the account, change its address, or switch its method — that is what
         `POST /account` is for. Both appear in `ignoredFields`.
 
-        ### Limits
+        ### A file from `GET /export?type=nfp` always imports
 
-        Rejected with `400` (or `413` for the first): **256 KB** per request (the server's
-        `post_max_size`; raising it means raising `memory_limit` too), 120 cycles per file,
-        400 days per cycle, 4000 days per file, 20 free-text labels per day, 256 characters per
-        label and per joined comment, temperature between 30 and 45 °C.
+        Whatever this app writes, it reads back. That is a property the endpoint is built to
+        hold, not a coincidence: anything `/export` can emit and the import would rather not
+        see is reported in `warnings` and imported anyway, never refused. Re-importing an
+        export over its own account with `overide=1` leaves that account byte-identical.
+
+        It is why several things the format calls invalid are only warned about here. The
+        account is the source of truth, and `day_timeline` has no rule against them:
+
+        - `mucusNotObserved` alongside an observation, a stamp or a label. The format calls
+          these incompatible; the column does not, so both are kept as the account had them.
+        - more than 20 free-text labels on a day — nothing caps how many a day is linked to.
+        - more than 400 days in a cycle. A cycle runs until the next first day is marked, so
+          an account left alone for a year exports one cycle padded with gaps to today.
+        - more than 120 cycles, or 4000 days, in one file. `/export` is bounded by the date
+          range asked for, not by these.
+        - a temperature the column holds (`0.00`–`99.99`) but a body does not reach
+          (under 30 °C or over 45 °C), and a `temperatureTime` that is not a time of day —
+          `time_temp_taken` is a `TIME`, which MariaDB lets run past `23:59:59`. The reading
+          is kept; only the unreadable hour is dropped.
+
+        ### Hard limits
+
+        These refuse the file, because the value cannot be stored at all. Rejected with `400`,
+        or `413` for the first:
+
+        - **256 KB** per request (the server's `post_max_size`; raising it means raising
+          `memory_limit` too). This is the one limit that bounds the work: stages 1 and 2
+          decode and validate the whole body before any count above is looked at.
+        - 256 characters per label and per joined comment — `varchar(256)` either way.
+        - 32 characters for the packed FertilityCare notes of a day — `varchar(32)`. The
+          widest note set the app can write packs to 18, so `/export` cannot reach this.
+        - a temperature outside `0.00`–`99.99`, which `decimal(4,2) unsigned` cannot hold.
 
         Dates must be real calendar dates, no earlier than `1900-01-01`, and not in the future
         (one day of slack, for a client in a timezone ahead of the server). Two cycles covering
-        the same date reject the file, since the day would belong to both.
+        the same date reject the file, since the day would belong to both — `/export` never
+        writes overlapping cycles.
       parameters:
         - name: overide
           in: query
           required: false
           description: |-
             `0` leaves dates that already have data alone and reports them in `daysSkipped`.
-            `1` replaces them. (The spelling is kept for compatibility.)
+            `1` replaces them. (The spelling is kept for compatibility.) It is read on a dry
+            run too, which answers the lists the way the value given would have them.
           schema:
             type: integer
             enum: [0, 1]
@@ -1977,8 +2016,22 @@ paths:
           in: query
           required: false
           description: |-
-            `1` runs every check and answers the same report with `daysToWrite` filled in,
-            **without writing anything**. Use it for a "check my file first" step.
+            `1` answers what a real import would do, **without writing anything**.
+
+            Every check runs, and the account is read to resolve what stage 4 would otherwise
+            only discover as it writes, so the report is the one the real run would answer —
+            same `daysCreated` / `daysOverwritten` / `daysSkipped` / `descriptionsCreated`,
+            for the `overide` that was sent, plus `daysAlreadyInAccount` which does not depend
+            on it. Only `daysWritten` is absent, because nothing was.
+
+            A dry run that is **refused** also answers with everything the checks found and not
+            just the first thing that rejects the file: `error.details` carries the `warnings`,
+            `mappedFields` and `ignoredFields` of an accepted answer, and
+            `duplicatedDaysInFile` listing the dates two cycles of the file share. See the
+            `400` response.
+
+            So: send `dryRun=1` to show the user what is at stake and let them decide on
+            `overide`, then send the same file again without it.
           schema:
             type: integer
             enum: [0, 1]
@@ -2033,6 +2086,13 @@ paths:
             one line per problem, `[where] what is wrong`, with `where` a path inside the file
             (`cycles[0].days[7].temperature`) or the date of the day. Capped at 50 lines, with
             `error.details.issueCount` giving the true total. Built to be shown as is.
+
+            On a **dry run**, `inconsistent_nfp_data` carries the rest of the diagnosis as
+            well, since that is what was asked for: `duplicatedDaysInFile` (the dates two
+            cycles of the file share — the commonest reason a file is refused, and the one the
+            user can act on), plus `warnings`, `mappedFields`, `ignoredFields`, `cyclesRead`
+            and `daysRead`, each as described in `ImportReport`. A real run answers `issues`
+            and `issueCount` alone.
           content:
             application/json:
               schema:
@@ -2774,10 +2834,15 @@ components:
             The user recorded nothing that day — the file-format name for `dayNotObserved` on
             the live `Day`.
 
-            It cannot be combined with an observation: `codifiedMucusObservation`,
+            The format calls it incompatible with an observation — `codifiedMucusObservation`,
             `codifiedMucusSensation`, `codifiedBleedingObservation`, `codifiedCervixHeight`,
             `codifiedCervixConsistency`, `freeMucusObservation`, `freeMucusSensation`,
-            `booleanCervixMucus` or `booleanCervixAperture` on the same day rejects the file.
+            `booleanCervixMucus` or `booleanCervixAperture` on the same day.
+
+            `day_timeline` has no such rule: `day_not_observed` is one column among the rest,
+            and a day can carry it next to a stamp or a label, so `GET /export` writes that
+            combination. `POST /import` therefore **accepts** it, keeps both exactly as the
+            account had them, and reports the contradiction in `warnings`.
           example: true
         booleanPregnancyDetected:
           type: boolean
@@ -2899,8 +2964,9 @@ components:
     ImportReport:
       type: object
       description: |-
-        What `POST /import` did. Returned inside the usual `data` envelope, on success and on a
-        dry run alike.
+        What `POST /import` did — or, on a dry run, what it would have done: `dryRun=1` reads
+        the account to fill the same lists without writing, so one shape describes both and a
+        client can render them the same way. Returned inside the usual `data` envelope.
 
         The three report lists are the point of this answer: **nothing the file carries is
         dropped without appearing in one of them.** Show them to the user.
@@ -2941,7 +3007,7 @@ components:
           example: 54
         daysCreated:
           type: array
-          description: Dates that had no data and were created.
+          description: Dates that had no data and were created (or would be, on a dry run).
           items:
             type: string
             format: date
@@ -2962,9 +3028,33 @@ components:
             type: string
             format: date
           example: ["2026-03-09"]
+        daysAlreadyInAccount:
+          type: array
+          description: |-
+            Dates of the file the account already held a day on: `daysOverwritten` and
+            `daysSkipped` together. It is the one list that does not depend on `overide`, which
+            is what makes it the one to show next to that choice — `dryRun=1` fills it without
+            writing anything.
+          items:
+            type: string
+            format: date
+          example: ["2026-03-09"]
+        duplicatedDaysInFile:
+          type: array
+          description: |-
+            Dates **the file itself** carries twice, because two of its cycles cover them. The
+            file is refused over them, so this is empty in every `200`; it is filled in
+            `error.details` on a refused dry run, where it is the list that says what to fix.
+          items:
+            type: string
+            format: date
+          example: []
         descriptionsCreated:
           type: integer
-          description: Free-text labels that did not exist on the account yet and were added.
+          description: |-
+            Free-text labels that did not exist on the account yet and were added. On a dry
+            run, how many would be — counted over the days that would actually be written, so
+            a skipped day contributes none.
           example: 3
         warnings:
           type: array

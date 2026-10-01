@@ -351,6 +351,8 @@ function nfp_file_schema_errors(object $file): array {
 **   warnings[] accepted, but the caller should know (method mismatch, ...)
 **   ignored[]  a field the file carries and this app has nowhere to store
 **   mapped[]   a field stored as something narrower than the file said
+**   duplicates[] dates the file itself carries twice -- also in issues[], where they do the
+**              rejecting; here as bare dates, because a dry run has to show them as a list
 **   plan[]     one entry per day to write, already encoded for db_update_day_timeline()
 **   read       cycles and days counted in the file
 **
@@ -361,6 +363,7 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 	$warnings = [];
 	$ignored = [];
 	$mapped = [];
+	$duplicates = [];
 	$plan = [];
 	$dates_seen = [];
 
@@ -386,10 +389,18 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 	}
 
 	$cycles = nfp_format_get($file, "cycles");
-	if (!is_array($cycles)) return nfp_file_plan_result(["[file] 'cycles' must be an array."], [], [], [], [], 0, 0);
+	if (!is_array($cycles)) return nfp_file_plan_result(["[file] 'cycles' must be an array."], [], [], [], [], [], 0, 0);
 
+	// The three count limits below are advisory (see the NFP_LIMIT_ block in nfp_format.php):
+	// /export is bounded by the date range asked for, not by them, so a long enough export
+	// breaks all three. They are reported and the file is read in full. The body size, already
+	// enforced in stage 1, is what bounds the work -- stages 1 and 2 have decoded and validated
+	// the whole file before any of these is looked at.
 	if (count($cycles) > NFP_LIMIT_CYCLES) {
-		$issues[] = sprintf("[file] %d cycles; the limit is %d per file.", count($cycles), NFP_LIMIT_CYCLES);
+		$warnings[] = sprintf(
+			"[file] %d cycles, more than the %d a file usually carries. All of them were read.",
+			count($cycles), NFP_LIMIT_CYCLES
+		);
 	}
 
 	$days_read = 0;
@@ -456,15 +467,22 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 			$issues[] = sprintf("[%s] 'days' must be an array.", $where);
 			continue;
 		}
+		// a cycle runs until the next first day is marked, so an account left alone for years
+		// exports one cycle padded with gaps all the way to today
 		if (count($days) > NFP_LIMIT_DAYS_PER_CYCLE) {
-			$issues[] = sprintf("[%s] %d days; the limit is %d per cycle.", $where, count($days), NFP_LIMIT_DAYS_PER_CYCLE);
-			continue;
+			$warnings[] = sprintf(
+				"[%s] %d days, more than the %d a cycle usually runs. The cycle was read in full.",
+				$where, count($days), NFP_LIMIT_DAYS_PER_CYCLE
+			);
 		}
 
+		$was_under_total = $days_read <= NFP_LIMIT_DAYS_TOTAL;
 		$days_read += count($days);
-		if ($days_read > NFP_LIMIT_DAYS_TOTAL) {
-			$issues[] = sprintf("[file] more than %d days in one file.", NFP_LIMIT_DAYS_TOTAL);
-			break;
+		if ($was_under_total && $days_read > NFP_LIMIT_DAYS_TOTAL) {
+			$warnings[] = sprintf(
+				"[file] more than %d days in one file. All of them were read.",
+				NFP_LIMIT_DAYS_TOTAL
+			);
 		}
 
 		$cursor = new DateTime($start_date);
@@ -487,6 +505,7 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 					"[%s] %s appears twice in the file (also in %s): the cycles overlap.",
 					$where, $date, $dates_seen[$date]
 				);
+				$duplicates[] = $date;
 				continue;
 			}
 			$dates_seen[$date] = $where;
@@ -495,6 +514,7 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 			$mapping = nfp_file_day_from_nfp($nfp_day, $method, $date);
 
 			$issues = array_merge($issues, $mapping["issues"]);
+			$warnings = array_merge($warnings, $mapping["warnings"]);
 			$ignored = array_merge($ignored, $mapping["ignored"]);
 			$mapped = array_merge($mapped, $mapping["mapped"]);
 
@@ -536,15 +556,16 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 		}
 	}
 
-	return nfp_file_plan_result($issues, $warnings, $ignored, $mapped, $plan, count($cycles), $days_read);
+	return nfp_file_plan_result($issues, $warnings, $ignored, $mapped, $duplicates, $plan, count($cycles), $days_read);
 }
 
-function nfp_file_plan_result(array $issues, array $warnings, array $ignored, array $mapped, array $plan, int $cycles_read, int $days_read): array {
+function nfp_file_plan_result(array $issues, array $warnings, array $ignored, array $mapped, array $duplicates, array $plan, int $cycles_read, int $days_read): array {
 	return [
 		"issues" => $issues,
 		"warnings" => $warnings,
 		"ignored" => array_values(array_unique($ignored)),
 		"mapped" => $mapped,
+		"duplicates" => array_values(array_unique($duplicates)),
 		"plan" => $plan,
 		"cyclesRead" => $cycles_read,
 		"daysRead" => $days_read,
@@ -555,8 +576,13 @@ function nfp_file_plan_result(array $issues, array $warnings, array $ignored, ar
 ** One NFP day -> the structured day shape day_from_json() consumes.
 **
 ** Returns ["day" =>, "sensations" =>, "observations" =>, "content" =>, "issues" =>,
-** "ignored" =>, "mapped" =>]. "content" is false for a day the file leaves empty, which is a
-** gap in the timeline and is not written at all.
+** "warnings" =>, "ignored" =>, "mapped" =>]. "content" is false for a day the file leaves
+** empty, which is a gap in the timeline and is not written at all.
+**
+** issues[] refuse the file; warnings[] do not. The line between them is whether the value can
+** be stored at all: a temperature the column cannot hold is an issue, a storable one outside
+** the plausible band is a warning. Anything this app's own /export can write has to end up on
+** the warning side, or the app would be emitting files it refuses to read back.
 **
 ** How a field is treated depends on the cycle's method, because the format reuses the same
 ** key for different vocabularies: codifiedMucusSensation is "0".."10WL" under FertilityCare
@@ -566,6 +592,7 @@ function nfp_file_plan_result(array $issues, array $warnings, array $ignored, ar
 function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): array {
 	$day = [];
 	$issues = [];
+	$warnings = [];
 	$ignored = [];
 	$mapped = [];
 	$sensations = [];
@@ -597,14 +624,19 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 	}
 
 	// --- mucusNotObserved ------------------------------------------------
+	// The format calls mucusNotObserved incompatible with any observation, but day_timeline
+	// has no such rule: day_not_observed is just another column, and a day can carry it
+	// alongside a stamp or a label -- so /export writes that combination, and refusing it
+	// here would make this app's own files unimportable. Both are kept, exactly as the
+	// account had them, and the contradiction is only reported.
 	if (nfp_format_get($nfp_day, "mucusNotObserved") === true) {
 		$clash = [];
 		foreach (NFP_MUCUS_NOT_OBSERVED_INCOMPATIBLE as $field) {
 			if (nfp_format_has($nfp_day, $field)) $clash[] = $field;
 		}
 		if (!empty($clash)) {
-			$issues[] = sprintf(
-				"[%s] mucusNotObserved says nothing was recorded, but the day also carries %s.",
+			$warnings[] = sprintf(
+				"[%s] mucusNotObserved says nothing was recorded, but the day also carries %s. Both were imported as they are.",
 				$date, implode(", ", $clash)
 			);
 		}
@@ -701,12 +733,14 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 			$names[] = $name;
 		}
 		$names = array_values(array_unique($names));
+		// Nothing caps how many labels a day is linked to -- link_day_timeline_description
+		// has no such key -- so /export can write more than the format's advisory count. They
+		// are all imported; dropping the overflow would lose data the account already had.
 		if (count($names) > NFP_LIMIT_DESCRIPTIONS_PER_DAY) {
-			$issues[] = sprintf(
-				"[%s] %d %s entries; the limit is %d per day.",
+			$warnings[] = sprintf(
+				"[%s] %d %s entries, more than the %d a day usually carries. All of them were imported.",
 				$date, count($names), $field, NFP_LIMIT_DESCRIPTIONS_PER_DAY
 			);
-			continue;
 		}
 		if (!empty($names)) {
 			if ($field === "freeMucusSensation") $sensations = $names;
@@ -747,20 +781,36 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 	$temperature = nfp_format_get($nfp_day, "temperature");
 	if (is_int($temperature) || is_float($temperature)) {
 		$value = floatval($temperature);
-		if ($value < NFP_TEMPERATURE_MIN || $value > NFP_TEMPERATURE_MAX) {
+		$printed = rtrim(rtrim(number_format($value, 2, '.', ''), '0'), '.');
+
+		// Outside what decimal(4,2) unsigned holds there is nothing to write, so the file is
+		// refused. Inside the column but outside the band a body reaches, the reading is kept:
+		// nothing stopped it being recorded in the first place, and /export writes it back.
+		if ($value < NFP_TEMPERATURE_STORABLE_MIN || $value > NFP_TEMPERATURE_STORABLE_MAX) {
 			$issues[] = sprintf(
-				"[%s] temperature %s is outside the plausible range %.1f-%.1f C.",
-				$date, rtrim(rtrim(number_format($value, 2, '.', ''), '0'), '.'), NFP_TEMPERATURE_MIN, NFP_TEMPERATURE_MAX
+				"[%s] temperature %s cannot be stored: the column holds %.1f-%.2f C.",
+				$date, $printed, NFP_TEMPERATURE_STORABLE_MIN, NFP_TEMPERATURE_STORABLE_MAX
 			);
 		}
 		else {
+			if ($value < NFP_TEMPERATURE_MIN || $value > NFP_TEMPERATURE_MAX) {
+				$warnings[] = sprintf(
+					"[%s] temperature %s is outside the plausible range %.1f-%.1f C. It was imported as it is.",
+					$date, $printed, NFP_TEMPERATURE_MIN, NFP_TEMPERATURE_MAX
+				);
+			}
 			// decimal(4,2): round here rather than letting MariaDB do it silently
 			$day["temperature"] = round($value, 2);
 			$content = true;
 			$time = nfp_format_get($nfp_day, "temperatureTime");
 			if (is_string($time) && trim($time) !== '') {
+				// a TIME column can hold values outside a clock day (MariaDB goes to 838:59:59),
+				// so this is reachable from stored data: keep the reading, drop the hour
 				if (nfp_file_valid_time(trim($time))) $day["temperatureTime"] = trim($time);
-				else $issues[] = sprintf("[%s] temperatureTime '%s' is not a valid hh:mm:ss time.", $date, trim($time));
+				else $warnings[] = sprintf(
+					"[%s] temperatureTime '%s' is not an hh:mm:ss time of day; the temperature was imported without it.",
+					$date, trim($time)
+				);
 			}
 		}
 	}
@@ -784,14 +834,109 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 		"observations" => $observations,
 		"content" => $content,
 		"issues" => $issues,
+		"warnings" => $warnings,
 		"ignored" => $ignored,
 		"mapped" => $mapped,
 	];
 }
 
 // ===========================================================================
+// IMPORT -- stage 3b: what stage 4 would do, read instead of written
+// ===========================================================================
+
+/*
+** The dry run's answer, in the same shape nfp_file_write_plan() returns, so one report
+** describes a checked file and an imported one alike.
+**
+** Re-running the checks is not enough on its own: the question a user has before importing is
+** "what does this file touch that I already have?", and the answer only exists in the account.
+** So this resolves, by reading, the two things stage 4 would otherwise discover as it writes:
+**
+**   - the dates the account already holds a day on. A real run skips them (overide=0) or
+**     replaces them whole (overide=1); both lists are filled the way the passed $overide
+**     would have it, and daysAlreadyInAccount carries them regardless of it, since that is the
+**     set the user needs in order to choose.
+**   - the free-text labels the file uses: the ones the account does not have yet would be
+**     created, and the ones it records under the other type keep the type they have, which is
+**     the single narrowing nfp_file_resolve_description() reports.
+**
+** Read-only: two SELECTs, no transaction, nothing here can write.
+*/
+function nfp_file_preview_plan($db, int $no_user_account, array $plan, bool $overide): array {
+	$already = [];
+	$created = [];
+	$overwritten = [];
+	$skipped = [];
+
+	if (!empty($plan)) {
+		// the plan holds no duplicate date -- a file carrying one is rejected in stage 3 --
+		// so one range query over its span answers every date in it
+		$dates = array_column($plan, "date");
+		$existing = array_flip(db_select_day_timeline_dates_frame($db, min($dates), max($dates), $no_user_account));
+
+		foreach ($dates as $date) {
+			if (!isset($existing[$date])) {
+				$created[] = $date;
+				continue;
+			}
+			$already[] = $date;
+			if ($overide) $overwritten[] = $date;
+			else $skipped[] = $date;
+		}
+	}
+
+	// Same walk as nfp_file_write_plan(): over the days it would write (a skipped day writes no
+	// labels either), sensations before observations, each name resolved once with its first
+	// use deciding the type. $recorded plays the part its $cache does, holding only the type.
+	$recorded = [];
+	foreach (db_select_description_name_type($db, $no_user_account) as $description) {
+		$recorded[$description["name"]] = intval($description["type"]);
+	}
+
+	$descriptions_created = 0;
+	$narrowed = [];
+	$is_skipped = array_flip($skipped);
+
+	foreach ($plan as $entry) {
+		if (isset($is_skipped[$entry["date"]])) continue;
+		foreach ([2 => $entry["sensations"], 1 => $entry["observations"]] as $type => $names) {
+			foreach ($names as $name) {
+				if (!isset($recorded[$name])) {
+					$recorded[$name] = $type;
+					$descriptions_created += 1;
+				}
+				elseif ($recorded[$name] !== $type) {
+					$narrowed[] = nfp_file_narrowed_description_note($entry["date"], $name, $recorded[$name]);
+				}
+			}
+		}
+	}
+
+	return [
+		"daysCreated" => $created,
+		"daysOverwritten" => $overwritten,
+		"daysSkipped" => $skipped,
+		"daysAlreadyInAccount" => $already,
+		"descriptionsCreated" => $descriptions_created,
+		"narrowed" => $narrowed,
+	];
+}
+
+// ===========================================================================
 // IMPORT -- stage 4: the write
 // ===========================================================================
+
+// The one narrowing a label can go through: the file uses a name under one type and the
+// account already records it under the other. The label keeps the type it has, so this is a
+// report and not a change. nfp_file_preview_plan() has to predict exactly what
+// nfp_file_resolve_description() says, hence the shared wording.
+function nfp_file_narrowed_description_note(string $date, string $name, int $recorded_type): string {
+	$type_names = [1 => "observation", 2 => "sensation"];
+	return sprintf(
+		"[%s] '%s' is recorded as a %s on this account and stays one: a label carries a single type here.",
+		$date, $name, $type_names[$recorded_type] ?? "label"
+	);
+}
 
 // Resolves a description name to its id, creating it on first use. Same dedupe-by-name as
 // api/day.php's day_resolve_description_id(), with two differences that matter when the names
@@ -816,11 +961,7 @@ function nfp_file_resolve_description($db, int $no_user_account, string $name, i
 
 	// asking for the other type is a narrowing: the label keeps the one it has
 	if ($cache[$name]["type"] !== $type) {
-		$type_names = [1 => "observation", 2 => "sensation"];
-		$narrowed[] = sprintf(
-			"[%s] '%s' is recorded as a %s on this account and stays one: a label carries a single type here.",
-			$date, $name, $type_names[$cache[$name]["type"]] ?? "label"
-		);
+		$narrowed[] = nfp_file_narrowed_description_note($date, $name, $cache[$name]["type"]);
 	}
 
 	return $cache[$name]["id"];
@@ -838,6 +979,7 @@ function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overi
 	$created = [];
 	$overwritten = [];
 	$skipped = [];
+	$already = [];
 	$descriptions_created = 0;
 	$description_cache = [];
 	$narrowed = [];
@@ -847,6 +989,8 @@ function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overi
 
 		$existing = db_select_day_timeline($db, $date, $no_user_account);
 		$exists = isset($existing[0]["no_day"]);
+
+		if ($exists) $already[] = $date;
 
 		if ($exists && !$overide) {
 			$skipped[] = $date;
@@ -885,10 +1029,15 @@ function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overi
 		else $created[] = $date;
 	}
 
+	// daysAlreadyInAccount is the union of the two lists above, and it is reported on its own
+	// because it is the one that does not depend on $overide: it says which days of the file
+	// the account already had, whichever way they were treated. nfp_file_preview_plan() answers
+	// with the same keys, so a dry run and a real one report the same shape.
 	return [
 		"daysCreated" => $created,
 		"daysOverwritten" => $overwritten,
 		"daysSkipped" => $skipped,
+		"daysAlreadyInAccount" => $already,
 		"descriptionsCreated" => $descriptions_created,
 		"narrowed" => $narrowed,
 	];

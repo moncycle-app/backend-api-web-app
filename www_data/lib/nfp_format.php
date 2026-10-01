@@ -35,19 +35,41 @@ const NFP_SUPPORTED_SCHEMA_VERSIONS = ["1.0"];
 // hostile or broken file from exhausting memory or the request timeout.
 // ---------------------------------------------------------------------------
 
+// Two kinds of limit live here, and the difference decides whether breaking one refuses a
+// file or only reports it.
+//
+// HARD -- the body size, and the widths of the columns a value has to land in. Breaking one
+// of these means the data cannot be stored at all, so it refuses the file.
+//
+// ADVISORY -- the counts below marked as such. They describe a file of a reasonable shape;
+// they do not describe what this app's own /export can emit, which is bounded only by the
+// date range the user asks for. An account dormant for years exports one cycle padded with
+// thousands of gap days, and twenty years of tracking exports hundreds of cycles. Refusing
+// those would mean this app writing files it will not read back, so they are reported as
+// warnings by lib/nfp_file.php and the data is imported anyway.
+//
+// Nothing is lost by that: NFP_LIMIT_BODY_BYTES is the guard that actually bounds the work,
+// and it bites first -- stages 1 and 2 decode and validate the whole body before any count
+// below is consulted, so these counts never protected memory in the first place.
 const NFP_LIMIT_BODY_BYTES = 262144;        // 256K -- matches post_max_size in server_conf
 const NFP_LIMIT_JSON_DEPTH = 32;            // the format nests 4 deep; 32 is already generous
-const NFP_LIMIT_CYCLES = 120;               // ~10 years of cycles in one file
-const NFP_LIMIT_DAYS_PER_CYCLE = 400;       // a pregnancy-length cycle still fits
-const NFP_LIMIT_DAYS_TOTAL = 4000;
+const NFP_LIMIT_CYCLES = 120;               // advisory -- ~10 years of cycles in one file
+const NFP_LIMIT_DAYS_PER_CYCLE = 400;       // advisory -- a pregnancy-length cycle still fits
+const NFP_LIMIT_DAYS_TOTAL = 4000;          // advisory
 const NFP_LIMIT_COMMENT_CHARS = 256;        // day_timeline.comment    varchar(256)
 const NFP_LIMIT_DESCRIPTION_CHARS = 256;    // description.name        varchar(256)
-const NFP_LIMIT_DESCRIPTIONS_PER_DAY = 20;
+const NFP_LIMIT_DESCRIPTIONS_PER_DAY = 20;  // advisory -- nothing caps the links of a day
 const NFP_LIMIT_FC_SCORE_CHARS = 32;        // day_timeline.fc_score   varchar(32)
 const NFP_LIMIT_COUNTER_START = 255;        // day_timeline.counter_start tinyint unsigned
 const NFP_LIMIT_SOURCE_APP_CHARS = 255;
-const NFP_TEMPERATURE_MIN = 30.0;           // day_timeline.temperature decimal(4,2) unsigned,
-const NFP_TEMPERATURE_MAX = 45.0;           // narrowed to a body temperature a human can have
+// day_timeline.temperature is decimal(4,2) unsigned, so 0.00-99.99 is what the column holds
+// and anything outside it is refused. The band a human body actually reaches is narrower, but
+// nothing stops a reading outside it being stored, and /export then writes it back out, so
+// leaving that band is only worth a warning.
+const NFP_TEMPERATURE_STORABLE_MIN = 0.0;
+const NFP_TEMPERATURE_STORABLE_MAX = 99.99;
+const NFP_TEMPERATURE_MIN = 30.0;           // advisory
+const NFP_TEMPERATURE_MAX = 45.0;           // advisory
 const NFP_DATE_FLOOR = "1900-01-01";
 const NFP_FUTURE_GRACE_DAYS = 1;            // a client a timezone ahead of the server is fine
 
@@ -120,6 +142,14 @@ function nfp_format_fc_vocabulary(): array {
 // nfp_format_normalize() first. They cover structure and types only; range,
 // calendar, length and cross-field consistency checks live in lib/nfp_file.php,
 // which can report the cycle and day a problem belongs to.
+//
+// Deliberately absent: maxItems on "cycles", on a cycle's "days", and on the two
+// freeMucus arrays, and the hh:mm:ss pattern on a day's "temperatureTime". Those
+// counts are advisory (see the NFP_LIMIT_ block above), and day_timeline.time_temp_taken
+// is a TIME column, which MariaDB lets run to 838:59:59 -- so this app's own /export can
+// write all four. Capping them here would reject the file at stage 2, before stage 3 has
+// any chance to report it as a warning instead; stage 3 still checks the time, and keeps
+// the temperature while dropping an hour it cannot read.
 // ---------------------------------------------------------------------------
 
 const NFP_FILE_SCHEMA = <<<'JSON'
@@ -169,7 +199,6 @@ const NFP_FILE_SCHEMA = <<<'JSON'
 		"cycles": {
 			"type": "array",
 			"minItems": 1,
-			"maxItems": 120,
 			"items": {
 				"type": "object",
 				"required": ["method", "cycleStartDate", "days"],
@@ -190,7 +219,6 @@ const NFP_FILE_SCHEMA = <<<'JSON'
 					"temperatureThermometerType": {"type": "string", "maxLength": 64},
 					"days": {
 						"type": "array",
-						"maxItems": 400,
 						"items": {
 							"type": "object",
 							"properties": {
@@ -198,10 +226,10 @@ const NFP_FILE_SCHEMA = <<<'JSON'
 								"codifiedBleedingObservation": {"type": "string", "maxLength": 32},
 								"nonUsualBleeding": {"type": "boolean"},
 								"codifiedMucusSensation": {"type": "string", "maxLength": 32},
-								"freeMucusSensation": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 256}},
+								"freeMucusSensation": {"type": "array", "items": {"type": "string", "maxLength": 256}},
 								"codifiedMucusObservation": {"type": "string", "maxLength": 32},
 								"mucusNotObserved": {"type": "boolean"},
-								"freeMucusObservation": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 256}},
+								"freeMucusObservation": {"type": "array", "items": {"type": "string", "maxLength": 256}},
 								"codifiedArrow": {"type": "string", "maxLength": 16},
 								"codifiedNumberObservations": {"type": "string", "maxLength": 16},
 								"codifiedPainObservations": {"type": "string", "maxLength": 16},
@@ -211,7 +239,7 @@ const NFP_FILE_SCHEMA = <<<'JSON'
 								"codifiedCervixHeight": {"type": "string", "maxLength": 32},
 								"temperature": {"type": "number"},
 								"codifiedTemperatureParasitic": {"type": "string", "maxLength": 64},
-								"temperatureTime": {"type": "string", "pattern": "^\\d{2}:\\d{2}:\\d{2}$"},
+								"temperatureTime": {"type": "string", "maxLength": 32},
 								"temperatureCaptureOffset": {"type": "integer", "minimum": -12, "maximum": 12},
 								"booleanPregnancyDetected": {"type": "boolean"},
 								"isPeak": {"type": "boolean"},

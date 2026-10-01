@@ -167,6 +167,21 @@ function db_select_description_exact_name($db, $no_user_account, $name) {
 	return $statement->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// Every label of the account, as name + type and nothing more. The read-only sibling of
+// db_select_description_exact_name() above, for when the question is asked about many names
+// at once: the NFP import's dry run has to say which of a file's labels are new without
+// creating any, and an account holds few enough descriptions that one query beats one
+// exact-name lookup per distinct name in the file.
+function db_select_description_name_type($db, $no_user_account) {
+	static $sql = "SELECT d.name, d.type FROM description AS d WHERE d.no_user_account = :no_user_account";
+
+	static $statement = $db->prepare($sql);
+	$statement->bindValue(":no_user_account", $no_user_account, PDO::PARAM_INT);
+	$statement->execute();
+
+	return $statement->fetchAll(PDO::FETCH_ASSOC);
+}
+
 function db_insert_description($db, $no_user_account, $name, $desc_type, $last_write_client_UTC) {
 	static $sql = "INSERT INTO `description` (`no_user_account`, `name`, `type`, `last_write_client_UTC`) VALUES (:no_user_account, :name, :desc_type, :last_write_client_UTC)";
 
@@ -446,6 +461,25 @@ function db_select_day_timelines_frame ($db, $start_date, $end_date, $no_user_ac
 	$statement->execute();
 
 	return $statement->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// The dates in the range this account already has a day on, and nothing else.
+//
+// date_obs is a DATE column, so the inclusive bounds are exact. Equality on no_user_account
+// followed by a range on date_obs is exactly unique_user_account_and_date, and both columns
+// live in that index, so this reads the whole span from the index alone -- which is what makes
+// it usable as the import dry run's collision check: one query for a file covering years,
+// instead of one db_select_day_timeline() per day.
+function db_select_day_timeline_dates_frame ($db, $start_date, $end_date, $no_user_account) {
+	static $sql = "SELECT date_obs FROM day_timeline WHERE no_user_account = :no_user_account AND date_obs >= :start_date AND date_obs <= :end_date ORDER BY date_obs ASC";
+
+	static $statement = $db->prepare($sql);
+	$statement->bindValue(":start_date", $start_date, PDO::PARAM_STR);
+	$statement->bindValue(":end_date", $end_date, PDO::PARAM_STR);
+	$statement->bindValue(":no_user_account", $no_user_account, PDO::PARAM_INT);
+	$statement->execute();
+
+	return $statement->fetchAll(PDO::FETCH_COLUMN);
 }
 
 function db_insert_day_timeline ($db, $date, $no_user_account) {
