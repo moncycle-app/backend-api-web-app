@@ -31,6 +31,6 @@ else define("SMTP_PASSWORD", getenv("SMTP_PASSWORD") ?? "");
 define("CREATION_COMPTE",  getenv("CREATION_COMPTE")  ? filter_var(getenv("CREATION_COMPTE"),  FILTER_VALIDATE_BOOLEAN) : true);
 define("CONNEXION_COMPTE", getenv("CONNEXION_COMPTE") ? filter_var(getenv("CONNEXION_COMPTE"), FILTER_VALIDATE_BOOLEAN) : true);
 
-define("CSV_SEP", getenv("CSV_SEP") ?? ";");
+define("CSV_SEP", getenv("CSV_SEP") ? getenv("CSV_SEP") : ";");
 
 define("PHP_SECURE_COOKIES", getenv("PHP_SECURE_COOKIES")=="Off" ? false : true);

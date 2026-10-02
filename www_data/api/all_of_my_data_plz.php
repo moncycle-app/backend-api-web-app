@@ -44,7 +44,7 @@ foreach ($export_user_account[0] as $key => $value) {
 fputs($out, PHP_EOL);
 if (isset($export_user_account[0]["password"])) $export_user_account[0]["password"] = sec_offuscate_str($export_user_account[0]["password"]);
 if (isset($export_user_account[0]["totp_secret"])) $export_user_account[0]["totp_secret"] = sec_offuscate_str($export_user_account[0]["totp_secret"]);
-fputcsv($out, $export_user_account[0], CSV_SEP);
+fputcsv($out, $export_user_account[0], CSV_SEP, '"', '\\');
 fputs($out, PHP_EOL);
 
 // exports des auth_tokens
@@ -56,7 +56,7 @@ if (isset($export_auth_tokens[0])) {
 	
 	foreach ($export_auth_tokens as $key => $value) {
 		if (isset($value["auth_token_str"])) $value["auth_token_str"] = sec_offuscate_str($value["auth_token_str"]);
-		fputcsv($out, $value, CSV_SEP);
+		fputcsv($out, $value, CSV_SEP, '"', '\\');
 	}
 	
 	fputs($out, PHP_EOL);
@@ -64,13 +64,34 @@ if (isset($export_auth_tokens[0])) {
 
 // exports des observations
 if (isset($export_obs[0])) {
-	foreach ($export_obs[0] as $key => $value) {
+	// descriptions (type 1 = observation, type 2 = sensation) are joined into the day lines;
+	// the legacy day_timeline.sensation column is unused, so it is overridden by the sensation descriptions
+	$descriptions_by_day = [];
+	foreach (db_select_descriptions_for_day_timeline_frame($db, "0000-00-00", "9999-12-31", $user_account["no_user_account"]) as $description) {
+		$descriptions_by_day[$description["no_day"]][intval($description["type"])][] = $description["name"];
+	}
+
+	$export_rows = [];
+	foreach ($export_obs as $day) {
+		$row = [];
+		foreach ($day as $key => $value) {
+			if ($key === "sensation") {
+				$row["sensation"] = implode(" | ", $descriptions_by_day[$day["no_day"]][2] ?? []);
+				$row["observation"] = implode(" | ", $descriptions_by_day[$day["no_day"]][1] ?? []);
+			} else {
+				$row[$key] = $value;
+			}
+		}
+		$export_rows[] = $row;
+	}
+
+	foreach ($export_rows[0] as $key => $value) {
 		fputs($out, $key . CSV_SEP);
 	}
 	fputs($out, PHP_EOL);
 	
-	foreach ($export_obs as $key => $value) {
-		fputcsv($out, $value, CSV_SEP);
+	foreach ($export_rows as $row) {
+		fputcsv($out, $row, CSV_SEP, '"', '\\');
 	}
 	
 	fputs($out, PHP_EOL);

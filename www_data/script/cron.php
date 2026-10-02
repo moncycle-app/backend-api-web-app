@@ -40,24 +40,21 @@ $cycles = db_select_cycles_recent($db);
 
 foreach($cycles as $cyc) {
 	
-	$debut_cycle = db_select_cycle($db, $cyc["cycle_complet"], $cyc["no_user_account"]);
+	$cycle_start = db_select_cycle($db, $cyc["cycle_complet"], $cyc["no_user_account"]);
 	
-	if(!empty($debut_cycle)) {
+	if(!empty($cycle_start)) {
 
-		$debut_cycle = $debut_cycle[0]["cycle"];
-		$cycle_complet = db_select_cycle_complet($db, $debut_cycle,  $cyc["cycle_complet"], $cyc["no_user_account"]);
-		$cycle_complet = doc_preparation_jours_pour_affichage($cycle_complet, $cyc["nfp_method"]);
+		$cycle_start = $cycle_start[0]["cycle"];
+		$days = doc_export_days($db, $cycle_start, $cyc["cycle_complet"], $cyc);
 
-		$nb_j = count($cycle_complet);
+		$nb_j = count($days);
 		
 		if ($nb_j>=5) {
 
-			$pdf = null;
-			if ($cyc["nfp_method"] == 3 || $cyc["nfp_method"] == 4) $pdf = doc_cycle_fc_vers_pdf($cycle_complet, $cyc["nfp_method"], $cyc["name"]);
-			else $pdf = doc_cycle_bill_vers_pdf ($cycle_complet, $cyc["nfp_method"], $cyc["name"]);
+			$pdf = doc_cycle_to_pdf($days, intval($cyc["nfp_method"]), $cyc["name"]);
 
 			$csv = fopen('php://memory','rw');
-			doc_cycle_vers_csv ($csv, $cycle_complet, $cyc["nfp_method"]);
+			doc_cycle_to_csv($csv, $days, intval($cyc["nfp_method"]));
 			rewind($csv);
 
 			$mail = mail_init();
@@ -65,17 +62,17 @@ foreach($cycles as $cyc) {
 			$mail->addAddress($cyc["email1"], $cyc["email1"]);
 			if (!empty($cyc["email2"])) $mail->addAddress($cyc["email2"], $cyc["email2"]);
 
-			$dh = date_humain(new Datetime($cycle_complet[0]["date_obs"]));
-			$fh = date_humain(new Datetime(end($cycle_complet)["date_obs"]));
+			$dh = date_humain(new Datetime($days[0]["date"]));
+			$fh = date_humain(new Datetime(end($days)["date"]));
 
 			$mail->isHTML(true);
 			$mail->Subject = "Cycle de $nb_j jours du $dh";
 			$mail->Body = mail_body_cycle($cyc['name'], $dh, $fh, $nb_j);
 			$mail->AltBody = "Export de votre cycle du $dh au $fh de $nb_j jours.\n\nmoncycle.app";
 
-			$filename_start_date = date_humain(new DateTime($debut_cycle), '_');
+			$filename_start_date = date_humain(new DateTime($cycle_start), '_');
 
-			$mail->addStringAttachment($pdf->Output('', 'S'), 'moncycle_app_'. $filename_start_date . '.pdf');
+			$mail->addStringAttachment($pdf->Output('S'), 'moncycle_app_'. $filename_start_date . '.pdf');
 			$mail->addStringAttachment(stream_get_contents($csv), 'moncycle_app_'. $filename_start_date . '.csv');
 
 			$mail->send();

@@ -463,6 +463,26 @@ function db_select_day_timelines_frame ($db, $start_date, $end_date, $no_user_ac
 	return $statement->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// Every recorded day of a range, with only the columns the CSV and PDF exports read.
+//
+// Not db_select_day_timelines_frame(): that one is SELECT *, and these exports must never see
+// the deprecated day_timeline.sensation column -- sensations live in `description` (type 2).
+// Same range shape as db_select_day_timeline_dates_frame() below: equality on no_user_account
+// then a range on date_obs is a range scan of unique_user_account_and_date, which also gives
+// the ORDER BY for free. date_obs is a DATE, so the inclusive bounds are exact, and it is
+// unique per account, so it needs no tiebreaker.
+function db_select_day_timelines_export ($db, $start_date, $end_date, $no_user_account) {
+	static $sql = "SELECT dt.no_day, dt.date_obs, dt.day_not_observed, dt.fc_score, dt.fc_arrow, dt.stamp, dt.temperature, dt.time_temp_taken, dt.is_peak, dt.counter_start, dt.union_sex, dt.cycle_1st_day, dt.pregnancy, dt.comment FROM day_timeline AS dt WHERE dt.no_user_account = :no_user_account AND dt.date_obs >= :start_date AND dt.date_obs <= :end_date ORDER BY dt.date_obs ASC";
+
+	static $statement = $db->prepare($sql);
+	$statement->bindValue(":start_date", $start_date, PDO::PARAM_STR);
+	$statement->bindValue(":end_date", $end_date, PDO::PARAM_STR);
+	$statement->bindValue(":no_user_account", $no_user_account, PDO::PARAM_INT);
+	$statement->execute();
+
+	return $statement->fetchAll(PDO::FETCH_ASSOC);
+}
+
 // The dates in the range this account already has a day on, and nothing else.
 //
 // date_obs is a DATE column, so the inclusive bounds are exact. Equality on no_user_account
@@ -544,18 +564,6 @@ function db_select_cycle_pregnancy($db, $date, $no_user_account) {
 
 	static $statement = $db->prepare($sql);
 	$statement->bindValue(":date", $date, PDO::PARAM_STR);
-	$statement->bindValue(":no_user_account", $no_user_account, PDO::PARAM_INT);
-	$statement->execute();
-
-	return $statement->fetchAll(PDO::FETCH_ASSOC);
-}
-
-function db_select_cycle_complet($db, $date_start, $date_end, $no_user_account) {
-	static $sql = "SELECT date_obs, COALESCE(day_not_observed,'') as '?', COALESCE(fc_score,'') as fc_score, COALESCE(fc_arrow,'') as fc_arrow, stamp, COALESCE(temperature,'') as temperature, COALESCE(time_temp_taken,'') as time_temp_taken, COALESCE(is_peak, '') as sommet, COALESCE(counter_start, '') as counter_start, COALESCE(union_sex, '') as 'unions', COALESCE(pregnancy, '') as 'pregnancy', comment, COALESCE(cycle_1st_day, 0) as 'cycle_1st_day' FROM day_timeline WHERE date_obs>=:date_start AND date_obs<=:date_end AND no_user_account = :no_user_account ORDER BY date_obs ASC";
-
-	static $statement = $db->prepare($sql);
-	$statement->bindValue(":date_start", $date_start, PDO::PARAM_STR);
-	$statement->bindValue(":date_end", $date_end, PDO::PARAM_STR);
 	$statement->bindValue(":no_user_account", $no_user_account, PDO::PARAM_INT);
 	$statement->execute();
 

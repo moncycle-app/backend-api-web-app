@@ -1776,7 +1776,7 @@ paths:
         | `type` | Content type | Purpose |
         |---|---|---|
         | `nfp` | `application/json` | **Portable data.** The NFP file format, to move data to another app, and what `POST /import` reads. See the `NfpFile` schema. |
-        | `csv` | `application/csv` | A spreadsheet, for a quick look at raw values. |
+        | `csv` | `text/csv; charset=utf-8` | A spreadsheet, one row per day, for a quick look at the values. |
         | `pdf` | `application/pdf` | A printable chart, laid out for the account's method. |
 
         ### Reading errors from this endpoint
@@ -1801,6 +1801,57 @@ paths:
         - `json_in_page=1` only affects `nfp`: it returns indented JSON inline instead of
           triggering a file download. Useful for a quick look in a browser or in curl.
 
+        ### What a CSV export contains
+
+        One header row, then **one row per calendar day** of the period, oldest first. Every row
+        has exactly as many fields as the header. The file is UTF-8 with a BOM, fields are
+        separated by `;` (the server's `CSV_SEP`), quoted per RFC 4180, and lines end in CRLF —
+        what Excel (French and English), LibreOffice, Google Sheets and text editors all read.
+
+        The header names are the NFP day fields, or the API's day fields (`date`, `cycleDay`,
+        `cycleFirstDay`) where NFP has none. The columns depend on the account's method:
+
+        | `nfp_method` | Columns |
+        |---|---|
+        | 1, 2 (Billings) | `date` `cycleDay` `cycleFirstDay` `mucusNotObserved` `stampColor` `stampBaby` `freeMucusSensation` `freeMucusObservation` [`freeOther`] [`temperature` `temperatureTime`] `isPeak` `counterStart` `sexUnion` `booleanPregnancyDetected` `comments` |
+        | 3, 4 (FertilityCare) | `date` `cycleDay` `cycleFirstDay` `mucusNotObserved` `stampColor` `stampBaby` `codifiedBleedingObservation` `codifiedMucusSensation` `codifiedMucusObservation` `codifiedNumberObservations` `codifiedPainObservations` `codifiedArrow` [`temperature` `temperatureTime`] `isPeak` `sexUnion` `booleanPregnancyDetected` `comments` |
+
+        - `temperature` and `temperatureTime` only for methods 1 and 4.
+        - `freeOther` holds the free text the v15 migration could not class as sensation or
+          observation (descriptions of type 0, which the API and the NFP file leave out). The
+          column only appears when at least one exported day shows such a text.
+
+        Values:
+
+        - booleans are `1`, or empty for false;
+        - lists (`freeMucusSensation`, `freeMucusObservation`, `freeOther`) are joined with ` | `;
+        - dates are `YYYY-MM-DD`, `temperatureTime` is `HH:MM`;
+        - `temperature` has a decimal comma when the separator is `;` (`36,45`), a point otherwise;
+        - `cycleDay` counts from the latest `cycleFirstDay` inside the period, and is empty before
+          the first one;
+        - FertilityCare codes are written as stored, `0` included;
+        - a free-text cell (descriptions, `comments`) starting with `=`, `+`, `-`, `@`, a tab or a
+          carriage return gets a leading `'`, so a spreadsheet does not run it as a formula.
+
+        **Gaps.** A date with no recorded day, between the first and the last recorded day of the
+        period, is a row with only `date` and `cycleDay`. Gaps are never written past today.
+
+        **`mucusNotObserved` days.** That flag only means the mucus was not observed. On such a
+        row the mucus columns are empty, even if old values are still stored for that day:
+        `freeMucusSensation`, `freeMucusObservation`, `freeOther`, `stampColor`, `stampBaby`,
+        `codifiedBleedingObservation`, `codifiedMucusSensation`, `codifiedMucusObservation` and
+        `codifiedNumberObservations`. Every other column is filled as usual — `sexUnion`,
+        `counterStart`, `isPeak`, `temperature`, `temperatureTime`, `codifiedPainObservations`,
+        `codifiedArrow`, `booleanPregnancyDetected`, `comments`, `cycleFirstDay`. The NFP export
+        writes both, as it is a data file. The PDF chart follows the same rule.
+
+        ### What a PDF export contains
+
+        A chart of the period: one line per day for Billings (with the temperature curve for
+        method 1, two columns of days per page for method 2), a grid of 35 days per row and one
+        row per cycle for FertilityCare. A day not observed still shows its union, counter, peak,
+        temperature, pain codes, arrow and comment. The PDF is always sent as an attachment.
+
         ### What an NFP export contains
 
         `fileInformation` (this app and its version), `userMethodPreferences.preferredMethod`,
@@ -1816,8 +1867,8 @@ paths:
         what this app exports it can read back. See "A file from `GET /export?type=nfp` always
         imports" on `POST /import`.
 
-        By default the response carries `Content-Disposition: attachment`, so a browser saves a
-        file named `moncycle_app_<date>.<ext>`.
+        The response carries `Content-Disposition: attachment`, so a browser saves a file named
+        `moncycle_app_<date>.<ext>` — except for `type=nfp` with `json_in_page=1`.
       parameters:
         - name: type
           in: query
@@ -1874,10 +1925,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NfpFile'
-            application/csv:
+            text/csv:
               schema:
                 type: string
-                description: One header row, then one row per day.
+                description: |-
+                  UTF-8 with a BOM, `;`-separated, RFC 4180 quoting, CRLF line ends. One header
+                  row of NFP field names, then one row per calendar day. See "What a CSV export
+                  contains" above.
             application/pdf:
               schema:
                 type: string

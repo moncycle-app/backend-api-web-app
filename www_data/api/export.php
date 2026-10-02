@@ -28,7 +28,7 @@ $user_account = sec_auth_token($db);
 sec_redirect_non_connecte($user_account);
 
 
-// LECTURE D'UNE DATE DE DEBUT DE CYCLE
+// START DATE
 if (isset($_GET['start_date']) && preg_match("/^\s*\d{4}-\d{2}-\d{2}$/", $_GET["start_date"])) {
 	$result["start_date"] = trim($_GET['start_date']);
 }
@@ -38,7 +38,7 @@ else {
 	exit;
 }
 
-// LECTURE D'UNE DATE DE FIN DE CYCLE
+// END DATE
 if (isset($_GET['end_date']) && preg_match("/^\s*\d{4}-\d{2}-\d{2}$/", $_GET["end_date"])) {
 	$result["end_date"] = trim($_GET['end_date']);
 }
@@ -48,14 +48,14 @@ else {
 	exit;
 }
 
-// VERIFICATION D'ANTERIORITE
+// THE START DATE MUST COME FIRST
 if (new DateTime($result["start_date"]) >= new DateTime($result["end_date"])) {
 	http_response_code(400);
 	print("ERREUR: la 'start_date' doit être antérieure à la 'end_date'.");
 	exit;
 }
 
-// VERIFICATION DU FORMAT DE L'EXPORT
+// EXPORT FORMAT
 $available_type = ["pdf", "csv", "nfp"];
 if (!isset($_GET['type']) || !in_array($_GET['type'], $available_type)) {
 	http_response_code(400);
@@ -81,60 +81,56 @@ if ($_GET['type'] == "nfp" && isset($_GET['json_in_page']) && !in_array($_GET['j
 }
 $json_in_page = boolval($_GET['json_in_page'] ?? "0");
 
-// RECUPERATION DU CYCLE
-$data = db_select_cycle_complet($db, $result["start_date"],$result["end_date"], $user_account["no_user_account"]);
+$nfp_method = intval($user_account["nfp_method"]);
 
-// VERIFICATION SI IL Y A DE LA DONNEE
-if (!isset($data[0])) {
+// THE DAYS OF THE PERIOD -- csv and pdf read exactly the period asked for; the nfp export reads
+// its own, widened back to the cycle start, so here it only needs to know there is something
+if ($_GET['type'] == "nfp") {
+	$days = [];
+	$has_data = !empty(db_select_day_timeline_dates_frame($db, $result["start_date"], $result["end_date"], $user_account["no_user_account"]));
+}
+else {
+	$days = doc_export_days($db, $result["start_date"], $result["end_date"], $user_account);
+	$has_data = !empty($days);
+}
+
+if (!$has_data) {
 	http_response_code(400);
 	print("ERREUR: il n'y a pas d'observation pour la période demandée.");
 	exit;
 }
 
-// AJOUT DES JOURS MANQUANTS DU CYCLE
-$cycle = doc_preparation_jours_pour_affichage($data, $user_account["nfp_method"]);
+$filename = 'moncycle_app_' . date_humain(new DateTime($result["start_date"]), '_');
 
-$filename_start_date = date_humain(new DateTime($result["start_date"]), '_');
-
-try {
-
-	if ($_GET['type'] == "csv") {
-		header("content-type:application/csv;charset=UTF-8");
-		header('Content-Disposition: attachment; filename="moncycle_app_'. $filename_start_date .'.csv"');
-		$out = fopen('php://output', 'w');
-		doc_cycle_vers_csv ($out, $cycle, $user_account["nfp_method"]);
-		fclose($out);
-	}
-
-	elseif ($_GET['type'] == "pdf") {
-		$pdf = null;
-		if ($user_account["nfp_method"] == 3 || $user_account["nfp_method"] == 4) $pdf = doc_cycle_fc_vers_pdf($cycle, $user_account["nfp_method"], $user_account["name_user_account"], $anonymous);
-		else $pdf = doc_cycle_bill_vers_pdf($cycle, $user_account["nfp_method"], $user_account["name_user_account"], $anonymous);
-		header("content-type:application/pdf");
-		header('Content-Disposition: attachment; filename="moncycle_app_'. $filename_start_date .'.pdf"');
-		$pdf->Output('I', 'moncycle_app_'. $filename_start_date . '.pdf');
-	}
-
-	elseif ($_GET['type'] == "nfp") {
-
-		$json_version = json_decode(file_get_contents("version.json"), true);
-
-		$nfp_data = nfp_file_export(
-			$db, $result["start_date"], $result["end_date"], $user_account,
-			$anonymous, $json_version["version"] ?? ""
-		);
-
-		header('Content-Type: application/json');
-		if (!$json_in_page) header('Content-Disposition: attachment; filename="moncycle_app_'. $filename_start_date .'.nfp"');
-
-		// JSON_UNESCAPED_UNICODE / _SLASHES keep accented comments and the ISO-8601 timestamp
-		// readable in the file; JSON_PRESERVE_ZERO_FRACTION keeps a round 37.0 a number.
-		$flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION;
-		print(json_encode($nfp_data, $json_in_page ? ($flags | JSON_PRETTY_PRINT) : $flags));
-
-	}
-
-} catch (\Throwable $th) {
-	throw $th;
+if ($_GET['type'] == "csv") {
+	header("Content-Type: text/csv; charset=utf-8");
+	header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
+	$out = fopen('php://output', 'w');
+	doc_cycle_to_csv($out, $days, $nfp_method);
+	fclose($out);
 }
 
+elseif ($_GET['type'] == "pdf") {
+	$pdf = doc_cycle_to_pdf($days, $nfp_method, $user_account["name_user_account"], $anonymous);
+	// 'D' sends the Content-Type and an attachment Content-Disposition itself
+	$pdf->Output('D', $filename . '.pdf', true);
+}
+
+elseif ($_GET['type'] == "nfp") {
+
+	$json_version = json_decode(file_get_contents("version.json"), true);
+
+	$nfp_data = nfp_file_export(
+		$db, $result["start_date"], $result["end_date"], $user_account,
+		$anonymous, $json_version["version"] ?? ""
+	);
+
+	header('Content-Type: application/json');
+	if (!$json_in_page) header('Content-Disposition: attachment; filename="' . $filename . '.nfp"');
+
+	// JSON_UNESCAPED_UNICODE / _SLASHES keep accented comments and the ISO-8601 timestamp
+	// readable in the file; JSON_PRESERVE_ZERO_FRACTION keeps a round 37.0 a number.
+	$flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION;
+	print(json_encode($nfp_data, $json_in_page ? ($flags | JSON_PRETTY_PRINT) : $flags));
+
+}

@@ -65,7 +65,7 @@ const moncycle_app_text = {
 	but_export_nfp : "🚀 export NFP",
 	but_export_csv : "&#x1F522; export CSV",
 	but_export_pdf : "&#x1F4C4; export PDF",
-	label_anonymous_export : " anonymiser l'export PDF",
+	label_anonymous_export : " anonymiser les exports PDF et NFP",
 
 	/* --- new cycle form ------------------------------------------------- */
 	new_cycle_title : "Créer un nouveau cycle",
@@ -486,7 +486,7 @@ moncycle_app = {
 		else moncycle_app.charger_cycle();
 	},
 	redirection_connexion : function(err) {
-		if (err.status == 401 || err.status == 403 || err.status == 407) {	
+		if (err.status == 401 || err.status == 403 || err.status == 407) {
 			window.localStorage.clear();
 			window.location.replace('/auth');
 		}
@@ -501,7 +501,7 @@ moncycle_app = {
 				localStorage.actu_lu = $("#actu_contenu").find("h4").text();
 				$("#actu").hide();
 			});
-		});	
+		});
 	},
 	loading_day_timeline : {date_obs: "", pos: 0, chargement: true, temperature: NaN, cycle: ""},
 	charger_cycle : function() {
@@ -609,7 +609,7 @@ moncycle_app = {
 		}
 		let instruction = moncycle_app_text.new_cycle_ask_1st_day;
 		if (!prepend) instruction = moncycle_app_text.new_cycle_ask_restart;
-		let html = `<div class="cycle" id="nouveau_cycle"><h2 class="title">${moncycle_app_text.new_cycle_title}</h2><div class="nouveau_cycle_form">${instruction}<br><input id="nouveau_cycle_date" type="date" value="${max_date}" max="${max_date}" min="${min_date}" /> <input type="button" id="but_creer_cycle" value="${moncycle_app_text.new_cycle_submit}" /></div></div>`;	
+		let html = `<div class="cycle" id="nouveau_cycle"><h2 class="title">${moncycle_app_text.new_cycle_title}</h2><div class="nouveau_cycle_form">${instruction}<br><input id="nouveau_cycle_date" type="date" value="${max_date}" max="${max_date}" min="${min_date}" /> <input type="button" id="but_creer_cycle" value="${moncycle_app_text.new_cycle_submit}" /></div></div>`;
 		let nocycle = `<div id="nocycle">${moncycle_app_text.all_cycles_shown}</div>`;
 		if (moncycle_app.cycle_curseur == 0) nocycle = `<div id="nocycle">${moncycle_app_text.create_cycle_hint}</div>`;
 		if (prepend && !moncycle_app.timeline_asc) {
@@ -696,20 +696,24 @@ moncycle_app = {
 	cycle_option : function (c_date_str, c_date_fin_str, discri) {
 		let id_buts = c_date_str.replace("-", "_").replace("-", "_");
 		let c_action = $(`<div class='cycle_options c_options_${c_date_str}' style='display:none'></div>`);
-		c_action.append(`<a href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=nfp'><button>${moncycle_app_text.but_export_nfp}</button></a> `);
+		c_action.append(`<a id='nfp_but_${id_buts}_${discri}' href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=nfp&anonymous=0'><button>${moncycle_app_text.but_export_nfp}</button></a> `);
 		c_action.append(`<a href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=csv'><button>${moncycle_app_text.but_export_csv}</button></a> `);
 		c_action.append(`<a id='pdf_but_${id_buts}_${discri}' href='api/export?start_date=${c_date_str}&end_date=${c_date_fin_str}&type=pdf&anonymous=0'><button>${moncycle_app_text.but_export_pdf}</button></a> `);
-		let anonymiser_checkbox = $(`<input type='checkbox' value='1' id='anonymous_${id_buts}_${discri}' name="privacy" />`);
-		anonymiser_checkbox.change(function () {
-			let url = $(`#pdf_but_${id_buts}_${discri}`).attr("href").split('?');
-			let params = new URLSearchParams(url[1]);
-			if ($(this).is(':checked')) params.set("anonymous", 1);
-			else params.set("anonymous", 0);
-			url[1] = params.toString();
-			$(`#pdf_but_${id_buts}_${discri}`).attr("href", url.join("?"));
+		// the checkbox applies to every export that can carry the user's identity: the PDF
+		// (name on the chart) and the NFP file (userInformation block). The CSV never does.
+		let anonymous_checkbox = $(`<input type='checkbox' value='1' id='anonymous_${id_buts}_${discri}' name="privacy" />`);
+		anonymous_checkbox.change(function () {
+			let anonymous = $(this).is(':checked') ? 1 : 0;
+			c_action.find(`#nfp_but_${id_buts}_${discri}, #pdf_but_${id_buts}_${discri}`).each(function () {
+				let url = $(this).attr("href").split('?');
+				let params = new URLSearchParams(url[1]);
+				params.set("anonymous", anonymous);
+				url[1] = params.toString();
+				$(this).attr("href", url.join("?"));
+			});
 		});
 		c_action.append("<br />");
-		c_action.append(anonymiser_checkbox);
+		c_action.append(anonymous_checkbox);
 		c_action.append(`<label for='anonymous_${id_buts}_${discri}' class='label_anonymous_export'>${moncycle_app_text.label_anonymous_export}</label>`);
 		return c_action;
 	},
@@ -824,7 +828,7 @@ moncycle_app = {
 			index_couleur = index_couleur.replace("BB", "");
 			baby = true;
 		}
-		if (moncycle_app.stamp_class[index_couleur]) color = moncycle_app.stamp_class[index_couleur]; 
+		if (moncycle_app.stamp_class[index_couleur]) color = moncycle_app.stamp_class[index_couleur];
 		let car_du_milieu = baby ? moncycle_app_text.stamp_glyph["BB"] : "";
 		let car_du_bas = j.union_sex ? moncycle_app_text.union : "";
 		if (j.err && j.err.includes("no data")) car_du_milieu = moncycle_app_text.to_fill_in_glyph;
@@ -850,7 +854,7 @@ moncycle_app = {
 			car_du_bas = moncycle_app_text.pregnancy_glyph;
 		}
 		if (j.day_not_observed) {
-			car_du_milieu = moncycle_app_text.not_observed_glyph;		
+			car_du_milieu = moncycle_app_text.not_observed_glyph;
 			color = "jcpas";
 		}
 		if (car_du_milieu=="" && j.stamp=="") car_du_milieu = moncycle_app_text.to_fill_in_glyph;
@@ -1216,10 +1220,10 @@ moncycle_app = {
 			moncycle_app.graph_data[o_data.cycle][label] = parseFloat(o_data.temperature);
 			if (moncycle_app.graphs[o_data.cycle]) moncycle_app.graph_update(o_data.cycle);
 		});
-	},	
+	},
 	fc_note_regex : /^((h|m|l|vl|H|M|L|VL|VH)\s*(b|B)?\s*)?(2W|10KL|10SL|10DL|10WL|2w|10kl|10sl|10dl|10wl|[024]|(([68]|10)\s*[BCGKLPYRbcgklpyr]{1,8}))?\s*([xX][123]|AD|ad)?(\s*[RrLl]?(ap|AP))?$/,
 	fc_test_note : function() {
-		if (!$("#form_fc").val()) {	
+		if (!$("#form_fc").val()) {
 			$("#fc_msg").empty();
 		}
 		else if (moncycle_app.fc_note_regex.test($("#form_fc").val().toUpperCase())) {
@@ -1325,4 +1329,3 @@ moncycle_app = {
 		}
 	}
 }
-
