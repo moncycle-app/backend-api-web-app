@@ -1847,10 +1847,16 @@ paths:
 
         ### What a PDF export contains
 
-        A chart of the period: one line per day for Billings (with the temperature curve for
-        method 1, two columns of days per page for method 2), a grid of 35 days per row and one
-        row per cycle for FertilityCare. A day not observed still shows its union, counter, peak,
+        A chart of the period. For Billings, a table with one line per day and a header on every
+        page: date, day of the cycle, stamp, peak, counter and union (only when the period has
+        one), sensations, observations, comment, and for method 1 the temperature with its curve
+        (only when the period has a reading). Every cycle starts a new page, and a long text wraps
+        inside its column, or ends with an ellipsis past ten lines. A day not observed and a day
+        never filled in both show a light grey `?` stamp. For FertilityCare, a grid of 35 days per
+        row and one row per cycle. A day not observed still shows its union, counter, peak,
         temperature, pain codes, arrow and comment. The PDF is always sent as an attachment.
+
+        The server setting `PDF_BILLINGS_BORDERS` (`Off`) draws the Billings table with no line.
 
         ### What an NFP export contains
 

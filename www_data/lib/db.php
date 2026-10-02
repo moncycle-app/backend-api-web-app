@@ -7,14 +7,11 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
-// RGPD data retention: an account gets erased after this many years with no sign of
-// activity (login, or any write tied to it); ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE sets how
-// long before that deletion the warning email goes out. Both are re-evaluated fresh on every
-// cron run, so there's no "warning already sent" flag to maintain: any real activity bumps
-// last_activity in db_select_user_account_to_warn_before_deletion() / _to_delete() and drops
-// the account out of both queries.
-define("ACCOUNT_INACTIVITY_DELETE_YEARS", 4);
-define("ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE", 10);
+// RGPD data retention (ACCOUNT_INACTIVITY_DELETE_YEARS, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE,
+// constants.php) is re-evaluated fresh on every cron run, so there's no "warning already
+// sent" flag to maintain: any real activity bumps last_activity in
+// db_select_user_account_to_warn_before_deletion() / _to_delete() and drops the account out of
+// both queries.
 
 function db_open() {
 	$db = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME, DB_ID, DB_PASSWORD);
@@ -251,11 +248,12 @@ function db_update_user_account_connecte($db, $no_user_account){
 }
 
 // increments the failed-attempt counter, but restarts it at 1 instead of compounding when the
-// last failure is old (60 MINUTE, must match LOGIN_ATTEMPTS_DECAY_MINUTES in lib/sec.php)
+// last failure is old (LOGIN_ATTEMPTS_DECAY_MINUTES, the same value lib/sec.php decays by)
 function db_update_co_echoue($db, $mail){
-	static $sql ="update user_account set nb_connection_attempts = IF(last_failed_attempt IS NULL OR last_failed_attempt < NOW() - INTERVAL 60 MINUTE, 1, nb_connection_attempts + 1), last_failed_attempt = now() where email1 like :email1";
+	static $sql ="update user_account set nb_connection_attempts = IF(last_failed_attempt IS NULL OR last_failed_attempt < NOW() - INTERVAL :decay_minutes MINUTE, 1, nb_connection_attempts + 1), last_failed_attempt = now() where email1 like :email1";
 
 	$statement = $db->prepare($sql);
+	$statement->bindValue(":decay_minutes", LOGIN_ATTEMPTS_DECAY_MINUTES, PDO::PARAM_INT);
 	$statement->bindValue(":email1", $mail, PDO::PARAM_STR);
 	$statement->execute();
 

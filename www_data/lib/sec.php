@@ -7,30 +7,12 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
-define("TOTP_STATE_NEVER_USED", 0);
-define("TOTP_STATE_DISABLED", 1);
-define("TOTP_STATE_INIT", 2);
-define("TOTP_STATE_ACTIVE", 3);
-
-// the string vocabulary the JSON API exposes instead of the raw 0-3 DB int -- shared by
-// api/totp.php and api/key_infos.php so the two never drift apart.
+// the string vocabulary (TOTP_STATE_NAMES, constants.php) the JSON API exposes instead of
+// the raw 0-3 DB int -- shared by api/totp.php and api/key_infos.php so the two never drift apart.
 function sec_totp_state_name($state) {
-	return match ($state) {
-		TOTP_STATE_NEVER_USED => "never_used",
-		TOTP_STATE_DISABLED => "disabled",
-		TOTP_STATE_INIT => "init",
-		TOTP_STATE_ACTIVE => "active",
-		default => "unknown",
-	};
+	if (!is_int($state)) return "unknown";
+	return TOTP_STATE_NAMES[$state] ?? "unknown";
 }
-
-// login brute-force defense thresholds. LOGIN_ATTEMPTS_DECAY_MINUTES must match the
-// "60 MINUTE" literal in db_update_co_echoue()'s SQL (lib/db.php) since that query decays
-// the counter itself; keep both in sync if this changes.
-define("LOGIN_ATTEMPTS_DECAY_MINUTES", 60);
-define("LOGIN_CAPTCHA_THRESHOLD", 3);
-define("LOGIN_LOCKOUT_THRESHOLD", 15);
-define("LOGIN_IP_MAX_ATTEMPTS", 30);
 
 function sec_password_aleatoire($taille=12){
 	$alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
@@ -117,8 +99,11 @@ function sec_client_ip() {
 }
 
 // number of recent failed login attempts on this account, ignoring attempts older than
-// LOGIN_ATTEMPTS_DECAY_MINUTES so a stale streak doesn't linger forever
+// LOGIN_ATTEMPTS_DECAY_MINUTES so a stale streak doesn't linger forever. The login settings are
+// in the config file, and each one at 0 turns its feature off: a decay of 0 counts no attempt
+// at all, so neither the captcha nor the lockout can trigger.
 function sec_login_effective_attempts($user_account) {
+	if (LOGIN_ATTEMPTS_DECAY_MINUTES <= 0) return 0;
 	if (!isset($user_account["nb_connection_attempts"]) || empty($user_account["last_failed_attempt"])) return 0;
 
 	$cutoff = new DateTime("-" . LOGIN_ATTEMPTS_DECAY_MINUTES . " minutes");
@@ -128,11 +113,11 @@ function sec_login_effective_attempts($user_account) {
 }
 
 function sec_login_captcha_required($user_account) {
-	return sec_login_effective_attempts($user_account) >= LOGIN_CAPTCHA_THRESHOLD;
+	return LOGIN_CAPTCHA_THRESHOLD > 0 && sec_login_effective_attempts($user_account) >= LOGIN_CAPTCHA_THRESHOLD;
 }
 
 function sec_login_account_locked($user_account) {
-	return sec_login_effective_attempts($user_account) >= LOGIN_LOCKOUT_THRESHOLD;
+	return LOGIN_LOCKOUT_THRESHOLD > 0 && sec_login_effective_attempts($user_account) >= LOGIN_LOCKOUT_THRESHOLD;
 }
 
 // validates the captcha answer against the phrase tied to the visitor's MONCYCLEAPP_TOKEN

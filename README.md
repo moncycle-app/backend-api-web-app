@@ -65,9 +65,18 @@ Tested with:
 | CREATION_COMPTE | Enable account creation for MONCYCLE.APP (boolean, default: true) |
 | CONNEXION_COMPTE | Enable authentication for MONCYCLE.APP (boolean, default: true) |
 | CSV_SEP | Separator for CSV exports |
+| PDF_BILLINGS_BORDERS | Draw the lines of the Billings PDF chart (boolean, default: true; false for a chart with no line at all) |
+| LOGIN_ATTEMPTS_DECAY_MINUTES | Failed logins on an account older than this restart the count (integer, default: 60; 0 counts nothing, so no captcha and no lockout) |
+| LOGIN_CAPTCHA_THRESHOLD | Failed logins on an account after which a captcha is asked (integer, default: 3; 0 never asks) |
+| LOGIN_LOCKOUT_THRESHOLD | Failed logins on an account after which a wrong password locks it (integer, default: 15; 0 never locks) |
+| LOGIN_IP_MAX_ATTEMPTS | Failed logins from one IP before HTTP 429 (integer, default: 30; 0 for no limit) |
 | APP_URL | URL of the hosted app (used for correct links in emails) |
 | PHP_CACHE | Enable PHP OPcache (default: `On`) |
 | PHP_SHOW_ERR | Show PHP errors in browser (default: `Off`) |
-| PHP_SECURE_COOKIES | Restrict cookies to HTTPS only (default: `On`) |
+| PHP_SECURE_COOKIES | Restrict cookies to HTTPS only (boolean, default: true) |
 
 > For development, it is recommended to disable cache, display PHP errors, and disable cookie security.
+
+Booleans read `true`/`false`, `on`/`off`, `yes`/`no` or `1`/`0`, in any case; an unset or empty variable takes its default.
+
+> **Configuration files:** the internal constants of the app (DB codes, API vocabularies, limits, PDF layouts, ...) are all in [www_data/constants.php](www_data/constants.php), loaded by `config.php`. A `config.php` written by hand (from `config.exemple.php`, outside Docker) must start with `require_once __DIR__ . "/constants.php";`, as the example does.

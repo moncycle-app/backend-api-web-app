@@ -25,13 +25,7 @@ $pregnancys = db_select_pregnancys($db, $user_account["no_user_account"]);
 
 // split the single 1-4 "nfp_method" int (stored value, unchanged) into an explicit
 // method + temperatureTracking pair, same vocabulary as /api/register
-$method_by_nfp_method = [
-	1 => ["method" => "billings", "temperatureTracking" => true],
-	2 => ["method" => "billings", "temperatureTracking" => false],
-	3 => ["method" => "fertilityCare", "temperatureTracking" => true],
-	4 => ["method" => "fertilityCare", "temperatureTracking" => false],
-];
-$method_info = $method_by_nfp_method[intval($user_account["nfp_method"])] ?? ["method" => "billings", "temperatureTracking" => false];
+$method_info = NFP_METHOD_API_BY_ID[intval($user_account["nfp_method"])] ?? NFP_METHOD_API_BY_ID[NFP_METHOD_ID_BILLINGS];
 
 http_data(200, [
 	"userId" => $user_account["no_user_account"],

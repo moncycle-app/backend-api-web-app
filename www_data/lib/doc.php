@@ -35,9 +35,6 @@ require_once __DIR__ . "/day_format.php";
 require_once __DIR__ . "/nfp_format.php";
 require_once __DIR__ . "/nfp_file.php";
 
-const DOC_WEEK_DAYS = ["D", "L", "M", "M", "J", "V", "S"];
-const DOC_BABY_IMAGE = __DIR__ . "/../img/baby.png";
-
 // ===========================================================================
 // DATA -- one entry per calendar day of the period
 // ===========================================================================
@@ -111,7 +108,7 @@ function doc_export_day(array $row): array {
 
 	$day["freeOther"] = [];
 	foreach ($row["description"] ?? [] as $description) {
-		if (intval($description["type"]) === 0) $day["freeOther"][] = $description["name"];
+		if (intval($description["type"]) === DESCRIPTION_TYPE_UNDEFINED) $day["freeOther"][] = $description["name"];
 	}
 
 	$day["isGap"] = false;
@@ -140,13 +137,7 @@ function doc_cycle_day(?string $cycle_start, string $date): ?int {
 // arrow, pregnancy, comment, cycle start -- shows as usual.
 //
 // The NFP export deliberately writes all of them anyway: it is a data file, not a chart.
-const DOC_MUCUS_FIELDS = [
-	...NFP_MUCUS_NOT_OBSERVED_INCOMPATIBLE,
-	"codifiedNumberObservations",
-	"stampColor",
-	"stampBaby",
-	"freeOther",
-];
+// The list is DOC_MUCUS_FIELDS (constants.php).
 
 function doc_is_mucus_field(string $field): bool {
 	return in_array($field, DOC_MUCUS_FIELDS, true);
@@ -209,8 +200,6 @@ function doc_get_initials(string $name): string {
 // Opened in text editors, Excel (FR and EN), Google Sheets and LibreOffice, so it sticks to the
 // most compatible shape: UTF-8 with a BOM (what makes Excel read it as UTF-8), CSV_SEP between
 // fields, RFC 4180 quoting, CRLF line ends, and as many fields on every row as in the header.
-
-const DOC_CSV_LIST_JOINER = " | ";   // the same as api/all_of_my_data_plz.php
 
 // Named after the NFP fields, or after the API's day where NFP has none (date, cycleDay,
 // cycleFirstDay).
@@ -297,37 +286,6 @@ function doc_cycle_to_pdf(array $days, int $nfp_method, string $name, bool $anon
 
 class DocPdf extends Fpdf {
 
-	// The text styles the charts draw with: [font family, style, size in pt, [r, g, b]].
-	const STYLES = [
-		'bill.title' => ['Courier', 'B', 12, [0, 0, 0]],
-		'bill.subtitle' => ['Courier', '', 10, [0, 0, 0]],
-		'bill.link' => ['Courier', '', 10, [30, 130, 76]],
-		'bill.date' => ['Courier', '', 6, [200, 200, 200]],
-		'bill.date.sunday' => ['Courier', 'B', 6, [145, 145, 145]],
-		'bill.day_number' => ['Courier', '', 8, [0, 0, 0]],
-		'bill.not_observed' => ['Arial', 'I', 8, [100, 100, 100]],
-		'bill.pregnancy' => ['Courier', '', 12, [130, 21, 33]],
-		'bill.peak' => ['ZapfDingbats', '', 10, [139, 69, 19]],
-		'bill.peak_offset' => ['Courier', '', 10, [139, 69, 19]],
-		'bill.counter' => ['Courier', '', 10, [30, 130, 76]],
-		'bill.union' => ['ZapfDingbats', '', 10, [172, 36, 51]],
-		'bill.freeMucusSensation' => ['Arial', '', 8.5, [0, 0, 0]],
-		'bill.freeMucusObservation' => ['Arial', '', 8.5, [90, 90, 90]],
-		'bill.freeOther' => ['Arial', 'I', 8.5, [90, 90, 90]],
-		'bill.temperature' => ['Courier', '', 9, [135, 67, 176]],
-		'bill.comment' => ['Arial', 'I', 7, [0, 0, 0]],
-		'fc.header' => ['Courier', '', 10, [0, 0, 0]],
-		'fc.header.name' => ['Courier', 'B', 10, [0, 0, 0]],
-		'fc.header.link' => ['Courier', 'B', 10, [30, 130, 76]],
-		'fc.day_numbers' => ['Courier', '', 8, [0, 0, 0]],
-		'fc.cell' => ['Courier', '', 6, [0, 0, 0]],
-		'fc.cell.sunday' => ['Courier', 'B', 6, [0, 0, 0]],
-		'fc.baby' => ['Courier', '', 5, [0, 0, 0]],
-		'fc.arrow' => ['Symbol', '', 6, [0, 0, 0]],
-		'fc.temperature' => ['Courier', '', 3.8, [0, 0, 0]],
-		'fc.comment.small' => ['Courier', '', 3, [0, 0, 0]],
-	];
-
 	// $title and $author are UTF-8: the document properties are not limited to windows-1252.
 	public function __construct(string $orientation, string $size, string $title, string $author) {
 		parent::__construct($orientation, 'mm', $size);
@@ -340,7 +298,7 @@ class DocPdf extends Fpdf {
 	}
 
 	public function UseStyle(string $style, ?array $color = null): void {
-		[$family, $font_style, $size, $style_color] = self::STYLES[$style];
+		[$family, $font_style, $size, $style_color] = DOC_PDF_STYLES[$style];
 		$this->SetFont($family, $font_style, $size);
 		$this->SetTextColor(...($color ?? $style_color));
 	}
@@ -350,14 +308,29 @@ class DocPdf extends Fpdf {
 		return $this->cMargin;
 	}
 
-	public function GetLeftMargin(): float {
-		return $this->lMargin;
+	// Draws runs of differently styled text side by side, on the baseline Cell($w, $h, $txt)
+	// would use at ($x, $y) in the first run's style, but with no cell margin. $runs is
+	// [[style, text, space before it in mm], ...], the text already windows-1252.
+	public function TextRuns(float $x, float $y, float $h, array $runs): void {
+		$baseline = null;
+		foreach ($runs as [$style, $text, $gap]) {
+			$this->UseStyle($style);
+			$baseline ??= $y + .5 * $h + .3 * $this->FontSize;
+			$x += $gap;
+			$this->Text($x, $baseline, $text);
+			$x += $this->GetStringWidth($text);
+		}
 	}
 
-	// Draws $txt on the baseline Cell($w, $h, $txt) would use at ($x, $y), but with no cell
-	// margin, so runs of differently styled text can sit side by side on one line.
-	public function TextInLine(float $x, float $y, float $h, string $txt): void {
-		$this->Text($x, $y + .5 * $h + .3 * $this->FontSize, $txt);
+	// $txt, cut short with an ellipsis if it is wider than Cell($w, ..., $txt) can hold, in the
+	// current font.
+	public function FitText(string $txt, float $w): string {
+		$room = $w - 2 * $this->cMargin;
+		if ($this->GetStringWidth($txt) <= $room) return $txt;
+
+		$ellipsis = doc_pdf_text("…");
+		while ($txt !== '' && $this->GetStringWidth($txt . $ellipsis) > $room) $txt = substr($txt, 0, -1);
+		return rtrim($txt) . $ellipsis;
 	}
 
 	// How many lines MultiCell($w, $h, $txt) takes in the current font: MultiCell()'s own line
@@ -401,152 +374,79 @@ class DocPdf extends Fpdf {
 		return $nl;
 	}
 
-	// Lays runs of differently styled text out in lines at most $w wide. $runs is
-	// [[style, text], ...], the text already windows-1252. Breaks at spaces, and inside a word
-	// only when the word alone is wider than a line. Returns the lines, each a list of
-	// [style, text] runs to draw one after the other.
-	public function FlowLines(array $runs, float $w): array {
-		$lines = [];
-		$line = [];
-		$line_w = 0.0;
+	// $txt cut short with an ellipsis, if it needs more than $max lines in MultiCell($w, ...) in
+	// the current font. Returns [the text to draw, the lines it takes].
+	public function FitLines(float $w, string $txt, int $max): array {
+		$lines = $this->NbLines($w, $txt);
+		if ($lines <= $max) return [$txt, $lines];
 
-		foreach ($runs as [$style, $text]) {
-			$this->UseStyle($style);
-			$space_w = $this->GetStringWidth(' ');
-
-			foreach (explode(' ', $text) as $word) {
-				if ($word === '') continue;
-				$word_w = $this->GetStringWidth($word);
-
-				if (!empty($line) && $line_w + $space_w + $word_w > $w) {
-					$lines[] = $line;
-					$line = [];
-					$line_w = 0.0;
-				}
-
-				// a word wider than a whole line is cut where it overflows
-				while (empty($line) && $word_w > $w && strlen($word) > 1) {
-					$cut = 0;
-					$cut_w = 0.0;
-					while ($cut < strlen($word) && $cut_w + $this->GetStringWidth($word[$cut]) <= $w) {
-						$cut_w += $this->GetStringWidth($word[$cut]);
-						$cut++;
-					}
-					$cut = max(1, $cut);
-					$lines[] = [[$style, substr($word, 0, $cut)]];
-					$word = substr($word, $cut);
-					$word_w = $this->GetStringWidth($word);
-				}
-
-				$piece = empty($line) ? $word : ' ' . $word;
-				$line_w += (empty($line) ? 0.0 : $space_w) + $word_w;
-				$last = count($line) - 1;
-				if ($last >= 0 && $line[$last][0] === $style) $line[$last][1] .= $piece;
-				else $line[] = [$style, $piece];
-			}
+		// the longest start of the text that still fits once the ellipsis is on it
+		$ellipsis = doc_pdf_text("…");
+		$low = 0;
+		$high = strlen($txt);
+		while ($low < $high) {
+			$mid = intdiv($low + $high + 1, 2);
+			if ($this->NbLines($w, rtrim(substr($txt, 0, $mid)) . $ellipsis) <= $max) $low = $mid;
+			else $high = $mid - 1;
 		}
 
-		if (!empty($line)) $lines[] = $line;
-		return $lines;
-	}
-
-	public function FlowLineWidth(array $line): float {
-		$w = 0.0;
-		foreach ($line as [$style, $text]) {
-			$this->UseStyle($style);
-			$w += $this->GetStringWidth($text);
-		}
-		return $w;
+		$txt = rtrim(substr($txt, 0, $low)) . $ellipsis;
+		return [$txt, $this->NbLines($w, $txt)];
 	}
 }
 
 // ===========================================================================
-// BILLINGS PDF (nfp_method 1 and 2) -- one line per day, A4 portrait
+// BILLINGS PDF (nfp_method 1 and 2) -- a table, one line per day, A4 portrait
 // ===========================================================================
 //
-// A day's line, left to right: date | day of the cycle | stamp | marker slot (peak, counter,
-// union) | freeMucusSensation | freeMucusObservation | [freeOther] | comment. Method 1 adds the
-// temperature, right aligned on the middle of the page, and its point on the curve beyond.
-// Method 2 has no curve, and fits two columns of days on a page instead. A new cycle always
-// starts a new column.
+// A day's line, left to right: date | day of the cycle | stamp | [peak] | [counter] | [union] |
+// sensations | observations | [other] | comment, and method 1 ends with the temperature and its
+// curve. The columns in brackets only exist when the export uses them.
 //
-// All of the geometry is relative to the left edge of the column of days.
-
-const DOC_BILL_LINE_H = 5;             // a day's line
-const DOC_BILL_ROW_GAP = 0.5;          // the white space under every day, between two stamps
-const DOC_BILL_FLOW_LINE_H = 3.5;      // a line of descriptions laid out as flowing text
-const DOC_BILL_COMMENT_LINE_H = 3;     // a comment line wrapped under the day's line
-const DOC_BILL_BOTTOM_MARGIN = 20;     // FPDF's own default page break margin
-const DOC_BILL_DATE_W = 11;
-const DOC_BILL_DAY_NUMBER_W = 8;
-const DOC_BILL_STAMP_X = 19.5;         // half a millimetre after the day of the cycle
-const DOC_BILL_STAMP_W = 5;
-const DOC_BILL_MIN_COMMENT_W = 15;     // what the description columns always leave to a comment
-const DOC_BILL_CURVE_W = 70;
-const DOC_BILL_TEMPERATURE_MIN_W = 12; // the temperature area, left of the middle of the page
-
-// the narrowest each part of the marker slot gets, when the export uses it at all
-const DOC_BILL_MARKER_MIN_W = ["peak" => 5, "counter" => 5, "union" => 4];
-
-// The description columns, in order: day field => [fallback prefix, style]. The prefixes end in
-// a windows-1252 no-break space, so a wrapped line never leaves one apart from its value.
-const DOC_BILL_DESCRIPTION_COLUMNS = [
-	"freeMucusSensation" => ["S:\xA0", 'bill.freeMucusSensation'],
-	"freeMucusObservation" => ["O:\xA0", 'bill.freeMucusObservation'],
-	"freeOther" => ["A:\xA0", 'bill.freeOther'],
-];
+// A line is as tall as its tallest text: sensations, observations, other and the comment wrap
+// inside their column, and a text that would take more than DOC_BILL_MAX_LINES lines is cut
+// short with an ellipsis. Every line is measured before anything is drawn, so that the pages
+// are known up front: a cycle starts a new page, and one that does not fit carries on to the
+// next, under the same column headers.
+//
+// PDF_BILLINGS_BORDERS (config file) turns every line of the table off at once. The layout
+// (DOC_BILL_*), the text styles (DOC_PDF_STYLES) and the colours are in constants.php.
 
 function doc_cycle_bill_to_pdf(array $days, int $nfp_method, string $name, bool $anonymous = false): DocPdf {
 	$first_date = new DateTime($days[0]["date"]);
 	$last_date = new DateTime(end($days)["date"]);
 	if ($anonymous) $name = doc_get_initials($name) . " (anonyme)";
 
-	$pdf = new DocPdf('P', 'A4', 'MONCYCLE.APP tableau du ' . date_humain($first_date), $name);
-	$pdf->AddPage();
-
-	$title_w = $pdf->GetPageWidth() - 35;
-	$pdf->UseStyle('bill.title');
-	$pdf->Cell($title_w, 10, doc_pdf_text($name), 0, 1, 'C');
-	$pdf->UseStyle('bill.subtitle');
-	$subtitle = sprintf("Tableau de %d jours", count($days));
+	$subtitle = sprintf("Tableau de %d %s", count($days), count($days) > 1 ? "jours" : "jour");
 	if (!$anonymous) $subtitle .= sprintf(" du %s au %s", date_humain($first_date), date_humain($last_date));
-	$pdf->Cell($title_w, 5, $subtitle, 0, 1, 'C');
-	$pdf->UseStyle('bill.link');
-	$pdf->Link($pdf->GetX(), $pdf->GetY(), $pdf->GetPageWidth() - 25, 6, "https://www.moncycle.app");
-	$pdf->Cell($title_w, 5, "MONCYCLE.APP", 0, 1, 'C');
-	$pdf->Ln(5);
+
+	$pdf = new DocPdf('P', 'A4', 'MONCYCLE.APP tableau du ' . date_humain($first_date), $name);
+	$pdf->SetMargins(DOC_PDF_MARGIN, DOC_PDF_MARGIN);
 
 	$rows = doc_bill_rows($days);
-	$layout = doc_bill_layout($pdf, $rows, $nfp_method, $anonymous);
+	$layout = doc_bill_layout($pdf, $rows, nfp_file_method_tracks_temperature($nfp_method));
+	doc_bill_fit_rows($pdf, $rows, $layout);
+	$pages = doc_bill_paginate($pdf, $rows);
 
-	$top_y = $pdf->GetY();
-	$x0 = $pdf->GetLeftMargin();
-	$y = $top_y;
-	$second_column = false;
-	$previous_point = null;   // the last point drawn on the temperature curve
+	foreach ($pages as $page_index => [$first, $count]) {
+		$pdf->AddPage();
+		doc_bill_draw_title($pdf, doc_pdf_text($name), $subtitle, $page_index + 1, count($pages));
+		doc_bill_draw_head($pdf, $layout);
 
-	foreach ($rows as $row) {
-		$fit = doc_bill_fit_row($pdf, $row, $layout);
-
-		$overflows = $y + $fit["height"] - DOC_BILL_ROW_GAP > $pdf->GetPageHeight() - DOC_BILL_BOTTOM_MARGIN;
-		if ($y > $top_y && ($row["day"]["cycleFirstDay"] || $overflows)) {
-			$previous_point = null;
-			// without a temperature curve, the right half of the page takes a second column of days
-			if (!$layout["temperature"] && !$second_column) {
-				$second_column = true;
-				$x0 = $pdf->GetPageWidth() / 2;
-			}
-			else {
-				$pdf->AddPage();
-				$second_column = false;
-				$x0 = $pdf->GetLeftMargin();
-				$top_y = $pdf->GetY();
-			}
-			$y = $top_y;
+		$previous_point = null;   // the last point drawn on the temperature curve
+		$y = DOC_BILL_TABLE_TOP + DOC_BILL_HEAD_H;
+		for ($index = $first; $index < $first + $count; $index++) {
+			doc_bill_draw_row($pdf, $rows[$index], $layout, $y, $anonymous, ($index - $first) % 2 === 1, $previous_point);
+			$y += $rows[$index]["height"];
 		}
+		doc_bill_draw_edges($pdf, $layout, DOC_BILL_TABLE_TOP, $y);
 
-		doc_bill_draw_row($pdf, $row, $fit, $layout, $x0, $y, $previous_point);
-		$y += $fit["height"];
+		// the stamps of this page that need explaining
+		$stamps = array_column(array_slice($rows, $first, $count), "stamp");
+		$legend = [];
+		if (in_array("unknown", $stamps, true)) $legend["unknown"] = "jour non observé ou non renseigné";
+		if (in_array("pregnancy", $stamps, true)) $legend["pregnancy"] = "grossesse";
+		doc_bill_draw_legend($pdf, $legend);
 	}
 
 	return $pdf;
@@ -580,410 +480,347 @@ function doc_bill_rows(array $days): array {
 		if (!is_null($counter) && $counter[0] < $counter[1]) $count = ['bill.counter', "+" . ++$counter[0]];
 		else $counter = null;
 
-		// a label stands in for the stamp and the description columns
-		$label = null;
-		if ($day["booleanPregnancyDetected"]) $label = "pregnancy";
-		elseif ($day["isGap"] || $day["mucusNotObserved"]) $label = "not_observed";
+		// A day that was not observed, and one that was never filled in, show the same stamp. The
+		// stamp is cleared for the first by doc_display_day().
+		$stamp = null;
+		if ($day["booleanPregnancyDetected"]) $stamp = "pregnancy";
+		elseif ($day["isGap"] || $day["mucusNotObserved"]) $stamp = "unknown";
+		elseif (!is_null($day["stampColor"])) $stamp = $day["stampColor"];
 
 		// each description list on one line, comma joined like the old free text
-		$descriptions = [];
-		foreach (array_keys(DOC_BILL_DESCRIPTION_COLUMNS) as $field) {
-			$descriptions[$field] = doc_pdf_text(doc_one_line(implode(", ", $day[$field])));
+		$texts = [];
+		foreach (["freeMucusSensation", "freeMucusObservation", "freeOther"] as $field) {
+			$texts[$field] = doc_pdf_text(doc_one_line(implode(", ", $day[$field])));
 		}
+		$texts["comments"] = doc_pdf_text(doc_one_line($day["comments"]));
 
-		$temperature_label = '';
-		if (!is_null($day["temperature"])) {
-			$temperature_label = $day["temperature"] . "°";
-			$time = doc_time_hhmm($day["temperatureTime"]);
-			if ($time !== '') $temperature_label .= " à " . str_replace(':', 'h', $time);
-		}
+		$temperature_time = doc_time_hhmm($day["temperatureTime"]);
 
 		$rows[] = [
 			"day" => $day,
-			"label" => $label,
-			"markers" => [
-				"peak" => $peak,
-				"counter" => $count,
-				"union" => $day["sexUnion"] ? ['bill.union', chr(164)] : null,   // a heart in ZapfDingbats
-			],
-			"descriptions" => $descriptions,
+			"stamp" => $stamp,
+			"baby" => $day["stampBaby"] && !is_null($day["stampColor"]),
+			"peak" => $peak,
+			"counter" => $count,
+			"union" => $day["sexUnion"] ? ['bill.union', chr(164)] : null,   // a heart in ZapfDingbats
+			"texts" => $texts,
 			"temperature" => $day["temperature"],
-			"temperature_label" => doc_pdf_text($temperature_label),
-			"comment" => doc_pdf_text(doc_one_line($day["comments"])),
+			"temperature_label" => is_null($day["temperature"]) ? '' : doc_pdf_text(number_format($day["temperature"], 2, '.', '') . "°"),
+			"temperature_time" => str_replace(':', 'h', $temperature_time),
 		];
 	}
 
 	return $rows;
 }
 
-// The geometry shared by every day of the export, computed once so that the days line up: the
-// marker slot, the width of each description column, and the temperature scale.
-function doc_bill_layout(DocPdf $pdf, array $rows, int $nfp_method, bool $anonymous): array {
+// The columns shared by every day of the export, computed once so that the days line up: which
+// ones there are, their x and width, and the temperature scale. $temperature is whether the
+// method tracks it.
+//
+// The comment takes the room the description columns leave. Those are as wide as their widest
+// value, within DOC_BILL_TEXT_MIN_W and DOC_BILL_TEXT_MAX_W, and give way to keep the comment
+// DOC_BILL_COMMENT_WANTED_W wide when they would take too much.
+function doc_bill_layout(DocPdf $pdf, array $rows, bool $temperature): array {
 	$margin = $pdf->GetCellMargin();
-	$half = $pdf->GetPageWidth() / 2 - $pdf->GetLeftMargin();
-	$temperature = nfp_file_method_tracks_temperature($nfp_method);
+	$width = $pdf->GetPageWidth() - 2 * DOC_PDF_MARGIN;
 
-	$layout = [
-		"anonymous" => $anonymous,
-		"temperature" => $temperature,
-		// a comment that does not fit on its line wraps under it, this wide
-		"wrap_w" => $pdf->GetPageWidth() / 2 - 11,
-		// where a comment has to stop: the middle of the page for a column of method 2, the
-		// right margin for method 1 (that day's temperature permitting, see doc_bill_fit_row())
-		"right" => $temperature ? $pdf->GetPageWidth() - 2 * $pdf->GetLeftMargin() : $half,
-		// what the descriptions can never cross
-		"columns_end" => $half,
-	];
+	// method 1 draws the curve only when the export has a reading to put on it
+	$readings = array_filter(array_column($rows, "temperature"), fn($t) => !is_null($t));
+	$temperature = $temperature && !empty($readings);
 
-	// only the markers this export uses get room in the slot, each part as wide as its widest
-	$layout["slot"] = ["peak" => 0.0, "counter" => 0.0, "union" => 0.0];
-	foreach ($rows as $row) {
-		foreach ($row["markers"] as $kind => $marker) {
-			if (is_null($marker)) continue;
-			$pdf->UseStyle($marker[0]);
-			$layout["slot"][$kind] = max($layout["slot"][$kind], DOC_BILL_MARKER_MIN_W[$kind], $pdf->GetStringWidth($marker[1]) + $margin);
-		}
+	$columns = [];
+	foreach (DOC_BILL_FIXED_COLUMNS as $key => [$label, $w]) {
+		if (in_array($key, DOC_BILL_MARKERS, true) && empty(array_filter(array_column($rows, $key)))) continue;
+		$columns[$key] = ["label" => $label, "w" => $w, "align" => 'C'];
 	}
-	$layout["slot_w"] = array_sum($layout["slot"]);
-	$layout["columns_x"] = DOC_BILL_STAMP_X + DOC_BILL_STAMP_W + $layout["slot_w"];
 
-	// The room for the columns, keeping DOC_BILL_MIN_COMMENT_W for a comment. Method 1 stops
-	// before the temperature area, which starts DOC_BILL_TEMPERATURE_MIN_W left of the middle of
-	// the page -- further left when a reading's label is wider than that (a time makes it so),
-	// as the columns must never run into one. The comment room can overlap the temperature area:
-	// a comment stops before that day's reading anyway.
-	$columns_room = $half - DOC_BILL_MIN_COMMENT_W;
-	if ($temperature) {
-		$pdf->UseStyle('bill.temperature');
-		$widest = DOC_BILL_TEMPERATURE_MIN_W;
-		$readings = [];
+	$right_w = $temperature ? DOC_BILL_TEMPERATURE_W + DOC_BILL_CURVE_W : 0;
+	$text_room = $width - array_sum(array_column($columns, "w")) - $right_w;
+
+	$text_w = [];
+	$text_min_w = [];
+	foreach (DOC_BILL_TEXT_COLUMNS as $field => [$label, $style]) {
+		if ($field === "comments") continue;
+
+		// the width most values fit in on one line: a single long list does not get a column
+		// wide enough for it, it wraps
+		$pdf->UseStyle($style);
+		$widths = [];
 		foreach ($rows as $row) {
-			if (is_null($row["temperature"])) continue;
-			$widest = max($widest, $pdf->GetStringWidth($row["temperature_label"]) + $margin);
-			$readings[] = $row["temperature"];
+			if ($row["texts"][$field] !== '') $widths[] = $pdf->GetStringWidth($row["texts"][$field]);
 		}
-		$layout["columns_end"] = $half - $widest;
-		$columns_room = min($layout["columns_end"], $half - DOC_BILL_TEMPERATURE_MIN_W - DOC_BILL_MIN_COMMENT_W);
+		// the legacy column only exists for the accounts that have such text
+		if ($field === "freeOther" && empty($widths)) continue;
+		sort($widths);
+		$typical = empty($widths) ? 0.0 : $widths[intval(ceil(DOC_BILL_TEXT_TYPICAL * count($widths))) - 1];
 
-		$layout["temperature_min"] = empty($readings) ? 36 : min($readings);
-		$layout["temperature_max"] = empty($readings) ? 38 : max($readings);
+		// and never narrower than its own header
+		$pdf->UseStyle('bill.head');
+		$text_min_w[$field] = max(DOC_BILL_TEXT_MIN_W, $pdf->GetStringWidth($label) + 2 * $margin);
+		$text_w[$field] = min(DOC_BILL_TEXT_MAX_W, max($text_min_w[$field], $typical + 2 * $margin));
+	}
+
+	$budget = $text_room - DOC_BILL_COMMENT_WANTED_W;
+	if (array_sum($text_w) > $budget) {
+		$scale = $budget / array_sum($text_w);
+		foreach ($text_w as $field => $w) $text_w[$field] = max($text_min_w[$field], $w * $scale);
+	}
+	$text_w["comments"] = $text_room - array_sum($text_w);
+
+	foreach ($text_w as $field => $w) {
+		$columns[$field] = ["label" => DOC_BILL_TEXT_COLUMNS[$field][0], "w" => $w, "align" => 'L'];
+	}
+
+	$layout = ["columns" => [], "temperature" => $temperature, "width" => $width];
+
+	if ($temperature) {
+		$columns["temperature"] = ["label" => "TEMP.", "w" => DOC_BILL_TEMPERATURE_W, "align" => 'L'];
+		$columns["curve"] = ["label" => "", "w" => DOC_BILL_CURVE_W, "align" => 'L'];
+
+		$layout["temperature_min"] = min($readings);
+		$layout["temperature_max"] = max($readings);
+		// one reading, or all the same: a scale around it
 		if ($layout["temperature_max"] == $layout["temperature_min"]) {
-			$layout["temperature_min"] = 36;
-			$layout["temperature_max"] = 38;
+			$layout["temperature_min"] -= 0.5;
+			$layout["temperature_max"] += 0.5;
 		}
 	}
 
-	// what each day with a stamp needs per column -- a label day never draws the columns
-	$needs = [];
-	foreach ($rows as $row) {
-		if (!is_null($row["label"])) continue;
-		$need = [];
-		foreach (DOC_BILL_DESCRIPTION_COLUMNS as $column => [$prefix, $style]) {
-			$pdf->UseStyle($style);
-			$text = $row["descriptions"][$column];
-			$need[$column] = $text === '' ? 0.0 : $pdf->GetStringWidth($text) + 2 * $margin;
-		}
-		$needs[] = $need;
+	$x = DOC_PDF_MARGIN;
+	foreach ($columns as $key => $column) {
+		$layout["columns"][$key] = $column + ["x" => $x];
+		$x += $column["w"];
 	}
-	$layout["column_w"] = doc_bill_column_widths($needs, max(0.0, $columns_room - $layout["columns_x"]));
-	$layout["comment_x"] = $layout["columns_x"] + array_sum($layout["column_w"]);
 
 	return $layout;
 }
 
-// The widths of the description columns, from what each day needs in each of them.
-//
-// When every column can be as wide as its widest value, that is it. When they cannot all fit,
-// the widths are the ones that keep the most days in the aligned columns, the narrowest such
-// set winning a tie; the other days fall back to flowing text. A column no day uses -- or that
-// only days which fall back anyway would use -- takes no room at all.
-function doc_bill_column_widths(array $needs, float $available): array {
-	$columns = array_keys(DOC_BILL_DESCRIPTION_COLUMNS);
-	$widest = array_fill_keys($columns, 0.0);
-	foreach ($needs as $need) {
-		foreach ($columns as $column) $widest[$column] = max($widest[$column], $need[$column]);
-	}
-	if (array_sum($widest) <= $available) return $widest;
-
-	// the days, grouped by what they need
-	$shapes = [];
-	foreach ($needs as $need) {
-		$key = implode('|', array_map(fn($w) => round($w, 2), $need));
-		$shapes[$key] ??= ["need" => $need, "days" => 0];
-		$shapes[$key]["days"]++;
-	}
-
-	// Every combination of candidate widths -- the needs actually met in each column -- for all
-	// the used columns but the last, which takes what is left. Each column's candidates are
-	// thinned out to a few dozen, so a long export cannot make this explode.
-	$used = array_values(array_filter($columns, fn($column) => $widest[$column] > 0));
-	$last = array_pop($used);
-	$combinations = [[]];
-	foreach ($used as $column) {
-		$candidates = array_values(array_unique(array_merge([0.0], array_column(array_column($shapes, "need"), $column))));
-		sort($candidates);
-		if (count($candidates) > 40) {
-			$candidates = array_map(fn($i) => $candidates[intval(round($i * (count($candidates) - 1) / 39))], range(0, 39));
-		}
-		$next = [];
-		foreach ($combinations as $combination) {
-			foreach ($candidates as $w) {
-				if (array_sum($combination) + $w <= $available) $next[] = $combination + [$column => $w];
+// Cuts each day's texts to what its column holds (the ones that are too long end with an
+// ellipsis) and gives the day its height. Texts are measured in the style they are drawn in, on
+// MultiCell()'s own line breaking. $rows is changed in place: a long export has thousands of
+// days, and a copy of them is memory it needs.
+function doc_bill_fit_rows(DocPdf $pdf, array &$rows, array $layout): void {
+	foreach ($rows as &$row) {
+		$lines = 1;
+		foreach (DOC_BILL_TEXT_COLUMNS as $field => [$label, $style]) {
+			if (!isset($layout["columns"][$field])) {
+				// the legacy column, when no day has such text
+				unset($row["texts"][$field]);
+				continue;
 			}
+			$pdf->UseStyle($style);
+			[$row["texts"][$field], $text_lines] = $pdf->FitLines($layout["columns"][$field]["w"], $row["texts"][$field], DOC_BILL_MAX_LINES);
+			$lines = max($lines, $text_lines);
 		}
-		$combinations = $next;
+		$row["height"] = max(DOC_BILL_MIN_ROW_H, 2 * DOC_BILL_PAD + $lines * DOC_BILL_LINE_H);
 	}
-
-	$best = ["days" => -1, "total" => INF, "widths" => array_fill_keys($columns, 0.0)];
-	foreach ($combinations as $combination) {
-		$limits = $combination + [$last => $available - array_sum($combination)];
-		$days = 0;
-		$widths = array_fill_keys($columns, 0.0);
-		foreach ($shapes as $shape) {
-			foreach ($limits as $column => $limit) {
-				if ($shape["need"][$column] > $limit) continue 2;
-			}
-			$days += $shape["days"];
-			foreach ($limits as $column => $limit) $widths[$column] = max($widths[$column], $shape["need"][$column]);
-		}
-		$total = array_sum($widths);
-		if ($days > $best["days"] || ($days === $best["days"] && $total < $best["total"])) {
-			$best = ["days" => $days, "total" => $total, "widths" => $widths];
-		}
-	}
-	return $best["widths"];
 }
 
-// [text, style, x, cell width] of the label that stands in for the stamp and the columns
-function doc_bill_label(DocPdf $pdf, string $label): array {
-	if ($label === "pregnancy") {
-		$pdf->UseStyle('bill.pregnancy');
-		return ["GROSSESSE", 'bill.pregnancy', DOC_BILL_STAMP_X - 0.5, $pdf->GetStringWidth("GROSSESSE") + 5];
+// The pages, each as the [first day, number of days] it holds. A cycle starts a page, and so does
+// a day that would run past the bottom of one. A single day always fits: its height is capped.
+function doc_bill_paginate(DocPdf $pdf, array $rows): array {
+	$limit = $pdf->GetPageHeight() - DOC_BILL_BOTTOM;
+	$pages = [];
+	$first = 0;
+	$y = DOC_BILL_TABLE_TOP + DOC_BILL_HEAD_H;
+
+	foreach ($rows as $index => $row) {
+		if ($index > $first && ($row["day"]["cycleFirstDay"] || $y + $row["height"] > $limit)) {
+			$pages[] = [$first, $index - $first];
+			$first = $index;
+			$y = DOC_BILL_TABLE_TOP + DOC_BILL_HEAD_H;
+		}
+		$y += $row["height"];
 	}
-	$pdf->UseStyle('bill.not_observed');
-	$text = doc_pdf_text("jour non observé ");
-	return [$text, 'bill.not_observed', DOC_BILL_STAMP_X, $pdf->GetStringWidth($text) + 0.25];
+
+	$pages[] = [$first, count($rows) - $first];
+	return $pages;
 }
 
-// Where everything of one day goes and how tall that makes it, worked out before anything is
-// drawn so that the page and column breaks can be decided up front.
-//
-// The descriptions go in the export's aligned columns when each value fits its column. When
-// one does not, that day alone lays them out as prefixed flowing text instead ("S: ... O: ...
-// A: ..."), wrapping onto more lines if it has to. A comment goes on the day's line when it
-// fits there -- lined up with the other comments after the columns if it can, right after the
-// day's own content otherwise -- and under it when it does not.
-function doc_bill_fit_row(DocPdf $pdf, array $row, array $layout): array {
-	$margin = $pdf->GetCellMargin();
-	$fit = ["label" => null, "columns" => false, "flow" => [], "comment" => null];
+// The name, the link to the app, what the chart covers and the page number. $name is windows-1252.
+function doc_bill_draw_title(DocPdf $pdf, string $name, string $subtitle, int $page, int $page_count): void {
+	$width = $pdf->GetPageWidth() - 2 * DOC_PDF_MARGIN;
+	$side_w = 32;
 
-	if (is_null($row["label"])) $fit["slot_x"] = DOC_BILL_STAMP_X + DOC_BILL_STAMP_W;
-	else {
-		$fit["label"] = doc_bill_label($pdf, $row["label"]);
-		$fit["slot_x"] = $fit["label"][2] + $fit["label"][3];
-	}
-	$fit["content_x"] = $fit["slot_x"] + $layout["slot_w"];
+	$pdf->SetXY(DOC_PDF_MARGIN, DOC_PDF_MARGIN);
+	$pdf->UseStyle('bill.title');
+	$pdf->Cell($width - $side_w, 6.5, $pdf->FitText($name, $width - $side_w), 0, 0, 'L');
+	$pdf->UseStyle('bill.link');
+	$pdf->Cell($side_w, 6.5, "MONCYCLE.APP", 0, 1, 'R', false, "https://www.moncycle.app");
 
-	// where the day's own content ends on its line, so far: the stamp or the label, then the
-	// markers it has
-	$content_end = $fit["slot_x"];
-	$x = $fit["slot_x"];
-	foreach ($layout["slot"] as $kind => $w) {
-		$x += $w;
-		if (!is_null($row["markers"][$kind])) $content_end = $x;
-	}
-
-	$descriptions = array_filter($row["descriptions"], fn($text) => $text !== '');
-	if (!empty($descriptions)) {
-		$fit["columns"] = is_null($row["label"]);
-		foreach ($descriptions as $column => $text) {
-			$pdf->UseStyle(DOC_BILL_DESCRIPTION_COLUMNS[$column][1]);
-			if ($pdf->GetStringWidth($text) + 2 * $margin > $layout["column_w"][$column]) $fit["columns"] = false;
-		}
-
-		if ($fit["columns"]) {
-			$x = $layout["columns_x"];
-			foreach ($layout["column_w"] as $column => $w) {
-				$x += $w;
-				if (isset($descriptions[$column])) $content_end = $x;
-			}
-		}
-		else {
-			$runs = [];
-			foreach ($descriptions as $column => $text) {
-				[$prefix, $style] = DOC_BILL_DESCRIPTION_COLUMNS[$column];
-				$runs[] = [$style, $prefix . $text];
-			}
-			$fit["flow"] = $pdf->FlowLines($runs, max(1.0, $layout["columns_end"] - $fit["content_x"] - 2 * $margin));
-			// once they wrap, the descriptions take the whole line
-			$content_end = count($fit["flow"]) > 1 ? null : $fit["content_x"] + 2 * $margin + $pdf->FlowLineWidth($fit["flow"][0]);
-		}
-	}
-
-	$bottom = DOC_BILL_LINE_H;
-	if (count($fit["flow"]) > 1) $bottom = doc_bill_flow_line_y(count($fit["flow"]));
-
-	if ($row["comment"] !== '') {
-		$comment_end = $layout["right"];
-		if ($layout["temperature"] && !is_null($row["temperature"])) {
-			$pdf->UseStyle('bill.temperature');
-			$comment_end = $pdf->GetPageWidth() / 2 - $pdf->GetLeftMargin() - $pdf->GetStringWidth($row["temperature_label"]) - $margin;
-		}
-
-		$starts = [];
-		if (!is_null($content_end)) {
-			if (is_null($row["label"]) && $layout["comment_x"] >= $content_end) $starts[] = $layout["comment_x"];
-			$starts[] = $content_end;
-		}
-
-		$pdf->UseStyle('bill.comment');
-		// the cell's own margin before the text, and as much air after it
-		$comment_w = $pdf->GetStringWidth($row["comment"]) + 2 * $margin;
-		foreach ($starts as $start) {
-			if ($comment_w <= $comment_end - $start) {
-				$fit["comment"] = "inline";
-				$fit["comment_x"] = $start;
-				break;
-			}
-		}
-
-		if (is_null($fit["comment"])) {
-			$fit["comment"] = "wrapped";
-			$fit["comment_y"] = $bottom + DOC_BILL_ROW_GAP;
-			$bottom = $fit["comment_y"] + DOC_BILL_COMMENT_LINE_H * $pdf->NbLines($layout["wrap_w"], $row["comment"]);
-		}
-	}
-
-	$fit["height"] = $bottom + DOC_BILL_ROW_GAP;
-	return $fit;
+	$pdf->UseStyle('bill.subtitle');
+	$pdf->Cell($width - $side_w, 4, $pdf->FitText($subtitle, $width - $side_w), 0, 0, 'L');
+	$pdf->Cell($side_w, 4, sprintf("page %d sur %d", $page, $page_count), 0, 1, 'R');
 }
 
-// The top of flowing description line $index: the first one is centred on the day's line.
-function doc_bill_flow_line_y(int $index): float {
-	return (DOC_BILL_LINE_H - DOC_BILL_FLOW_LINE_H) / 2 + $index * DOC_BILL_FLOW_LINE_H;
+// The table's lines, when borders are on: a rule across the table at $y, which every band of cells
+// (the header, each day) has under it and the first one over it...
+function doc_bill_draw_rule(DocPdf $pdf, array $layout, float $y): void {
+	if (!PDF_BILLINGS_BORDERS) return;
+
+	$pdf->SetDrawColor(...DOC_BILL_BORDER_COLOR);
+	$pdf->SetLineWidth(DOC_BILL_BORDER_W);
+	$pdf->Line(DOC_PDF_MARGIN, $y, DOC_PDF_MARGIN + $layout["width"], $y);
 }
 
-function doc_bill_draw_row(DocPdf $pdf, array $row, array $fit, array $layout, float $x0, float $y, ?array &$previous_point): void {
+// ... and the edges of the columns, drawn once for the whole page, from $top to $bottom.
+function doc_bill_draw_edges(DocPdf $pdf, array $layout, float $top, float $bottom): void {
+	if (!PDF_BILLINGS_BORDERS) return;
+
+	$pdf->SetDrawColor(...DOC_BILL_BORDER_COLOR);
+	$pdf->SetLineWidth(DOC_BILL_BORDER_W);
+	foreach ($layout["columns"] as $column) $pdf->Line($column["x"], $top, $column["x"], $bottom);
+	$pdf->Line(DOC_PDF_MARGIN + $layout["width"], $top, DOC_PDF_MARGIN + $layout["width"], $bottom);
+}
+
+// The column headers, on a light band. The curve's header gives its scale.
+function doc_bill_draw_head(DocPdf $pdf, array $layout): void {
+	$y = DOC_BILL_TABLE_TOP;
+
+	$pdf->SetFillColor(...DOC_BILL_HEAD_FILL);
+	$pdf->Rect(DOC_PDF_MARGIN, $y, $layout["width"], DOC_BILL_HEAD_H, 'F');
+
+	foreach ($layout["columns"] as $column) {
+		$pdf->UseStyle('bill.head');
+		$pdf->SetXY($column["x"], $y);
+		$pdf->Cell($column["w"], DOC_BILL_HEAD_H, doc_pdf_text($column["label"]), 0, 0, $column["align"]);
+	}
+
+	if ($layout["temperature"]) {
+		$curve = $layout["columns"]["curve"];
+		$min = doc_pdf_text(number_format($layout["temperature_min"], 2, '.', '') . "°");
+		$max = doc_pdf_text(number_format($layout["temperature_max"], 2, '.', '') . "°");
+		$pdf->UseStyle('bill.scale');
+		$pdf->SetXY($curve["x"], $y);
+		$pdf->Cell($curve["w"], DOC_BILL_HEAD_H, $min, 0, 0, 'L');
+		$pdf->SetXY($curve["x"], $y);
+		$pdf->Cell($curve["w"], DOC_BILL_HEAD_H, $max, 0, 0, 'R');
+	}
+
+	doc_bill_draw_rule($pdf, $layout, $y);
+	doc_bill_draw_rule($pdf, $layout, $y + DOC_BILL_HEAD_H);
+}
+
+function doc_bill_draw_row(DocPdf $pdf, array $row, array $layout, float $y, bool $anonymous, bool $striped, ?array &$previous_point): void {
 	$day = $row["day"];
+	$columns = $layout["columns"];
+	$h = $row["height"];
+	$text_y = $y + DOC_BILL_PAD;
 	$margin = $pdf->GetCellMargin();
-	$date = new DateTime($day["date"]);
-	$week_day = intval($date->format('w'));
-	$date_label = $layout["anonymous"] ? DOC_WEEK_DAYS[$week_day] : date_humain_week_day($date, DOC_WEEK_DAYS);
-	$date_style = $week_day === 0 ? 'bill.date.sunday' : 'bill.date';
+
+	// without lines, every other day is shaded to keep the eye on its line
+	if ($striped && !PDF_BILLINGS_BORDERS) {
+		$pdf->SetFillColor(...DOC_BILL_STRIPE_FILL);
+		$pdf->Rect(DOC_PDF_MARGIN, $y, $layout["width"], $h, 'F');
+	}
 
 	// the date and the day of the cycle, white on black on a cycle's first day
-	$pdf->SetXY($x0, $y);
+	$date = new DateTime($day["date"]);
+	$week_day = intval($date->format('w'));
+	$date_label = $anonymous ? DOC_WEEK_DAYS[$week_day] : date_humain_week_day($date, DOC_WEEK_DAYS);
+	$date_style = $week_day === 0 ? 'bill.date.sunday' : 'bill.date';
+	$text_color = null;
 	if ($day["cycleFirstDay"]) {
 		$pdf->SetFillColor(0, 0, 0);
-		$pdf->SetDrawColor(0, 0, 0);
-		$pdf->UseStyle($date_style, [255, 255, 255]);
-		$pdf->Cell(DOC_BILL_DATE_W, DOC_BILL_LINE_H, $date_label, 1, 0, 'R', true);
-		$pdf->UseStyle('bill.day_number', [255, 255, 255]);
-		$pdf->Cell(DOC_BILL_DAY_NUMBER_W, DOC_BILL_LINE_H, "1erJ", 1, 0, 'C', true);
+		$pdf->Rect($columns["date"]["x"], $y, $columns["date"]["w"] + $columns["day"]["w"], $h, 'F');
+		$text_color = [255, 255, 255];
 	}
-	else {
-		$pdf->UseStyle($date_style);
-		$pdf->Cell(DOC_BILL_DATE_W, DOC_BILL_LINE_H, $date_label, 0, 0, 'R');
-		$pdf->UseStyle('bill.day_number');
-		$pdf->Cell(DOC_BILL_DAY_NUMBER_W, DOC_BILL_LINE_H, (string) ($day["cycleDay"] ?? "?"), 0, 0, 'C');
-	}
+	$pdf->UseStyle($date_style, $text_color);
+	$pdf->SetXY($columns["date"]["x"], $text_y);
+	$pdf->Cell($columns["date"]["w"], DOC_BILL_LINE_H, $date_label, 0, 0, 'C');
+	$pdf->UseStyle('bill.day_number', $text_color);
+	$pdf->SetXY($columns["day"]["x"], $text_y);
+	$pdf->Cell($columns["day"]["w"], DOC_BILL_LINE_H, (string) ($day["cycleDay"] ?? "?"), 0, 0, 'C');
 
-	if (is_null($fit["label"])) doc_bill_draw_stamp($pdf, $day, $x0 + DOC_BILL_STAMP_X, $y);
-	else {
-		[$text, $style, $x, $w] = $fit["label"];
+	doc_bill_draw_stamp($pdf, $row["stamp"], $row["baby"],
+		$columns["stamp"]["x"] + ($columns["stamp"]["w"] - DOC_BILL_STAMP_SIZE) / 2,
+		$y + (DOC_BILL_MIN_ROW_H - DOC_BILL_STAMP_SIZE) / 2, DOC_BILL_STAMP_SIZE);
+
+	foreach (DOC_BILL_MARKERS as $kind) {
+		if (!isset($columns[$kind]) || is_null($row[$kind])) continue;
+		[$style, $text] = $row[$kind];
 		$pdf->UseStyle($style);
-		$pdf->SetXY($x0 + $x, $y);
-		if ($row["label"] === "pregnancy") {
-			$pdf->SetFillColor(255, 236, 238);
-			$pdf->SetDrawColor(255, 236, 238);
-			$pdf->Cell($w, DOC_BILL_LINE_H, $text, 1, 0, 'C', true);
-		}
-		else $pdf->Cell($w, DOC_BILL_LINE_H, $text);
+		$pdf->SetXY($columns[$kind]["x"], $text_y);
+		$pdf->Cell($columns[$kind]["w"], DOC_BILL_LINE_H, $text, 0, 0, 'C');
 	}
 
-	$x = $x0 + $fit["slot_x"];
-	foreach ($layout["slot"] as $kind => $w) {
-		$marker = $row["markers"][$kind];
-		if (!is_null($marker)) {
-			$pdf->UseStyle($marker[0]);
-			$pdf->SetXY($x, $y);
-			$pdf->Cell($w, DOC_BILL_LINE_H, $marker[1]);
-		}
-		$x += $w;
+	foreach ($row["texts"] as $field => $text) {
+		if ($text === '') continue;
+		$pdf->UseStyle(DOC_BILL_TEXT_COLUMNS[$field][1]);
+		$pdf->SetXY($columns[$field]["x"], $text_y);
+		$pdf->MultiCell($columns[$field]["w"], DOC_BILL_LINE_H, $text, 0, 'L');
 	}
 
-	if ($fit["columns"]) {
-		$x = $x0 + $layout["columns_x"];
-		foreach ($layout["column_w"] as $column => $w) {
-			$text = $row["descriptions"][$column];
-			if ($text !== '') {
-				$pdf->UseStyle(DOC_BILL_DESCRIPTION_COLUMNS[$column][1]);
-				$pdf->SetXY($x, $y);
-				$pdf->Cell($w, DOC_BILL_LINE_H, $text);
-			}
-			$x += $w;
-		}
-	}
-	foreach ($fit["flow"] as $index => $line) {
-		$x = $x0 + $fit["content_x"] + $margin;
-		foreach ($line as [$style, $text]) {
-			$pdf->UseStyle($style);
-			$pdf->TextInLine($x, $y + doc_bill_flow_line_y($index), DOC_BILL_FLOW_LINE_H, $text);
-			$x += $pdf->GetStringWidth($text);
-		}
-	}
-
-	// method 1: the reading right aligned on the middle of the page, then the curve -- a grey
-	// baseline, the reading's point, and the segment from the day before's
+	// method 1: the reading and the time it was taken, then its point on the curve, joined to
+	// the one of the day before. A day without a reading breaks the curve.
 	if ($layout["temperature"] && !is_null($row["temperature"])) {
-		$middle = $pdf->GetPageWidth() / 2;
-		$pdf->UseStyle('bill.temperature');
-		$w = $pdf->GetStringWidth($row["temperature_label"]);
-		$pdf->SetXY($middle - $w, $y);
-		$pdf->Cell($w, DOC_BILL_LINE_H, $row["temperature_label"], 0, 0, 'R');
+		$runs = [['bill.temperature', $row["temperature_label"], 0]];
+		if ($row["temperature_time"] !== '') $runs[] = ['bill.temperature_time', $row["temperature_time"], 1];
+		$pdf->TextRuns($columns["temperature"]["x"] + $margin, $y + DOC_BILL_PAD, DOC_BILL_LINE_H, $runs);
 
-		$pdf->SetDrawColor(200, 200, 200);
-		$pdf->Line($middle, $y + 2.5, $middle + DOC_BILL_CURVE_W, $y + 2.5);
+		$curve = $columns["curve"];
 		$scale = ($row["temperature"] - $layout["temperature_min"]) / ($layout["temperature_max"] - $layout["temperature_min"]);
-		$point_x = $middle + $scale * DOC_BILL_CURVE_W;
-		$pdf->SetFillColor(135, 67, 176);
-		$pdf->Rect($point_x, $y + 2, 1, 1, 'F');
+		$point = [
+			$curve["x"] + DOC_BILL_CURVE_PAD + $scale * ($curve["w"] - 2 * DOC_BILL_CURVE_PAD),
+			$y + DOC_BILL_MIN_ROW_H / 2,
+		];
 		if (!is_null($previous_point)) {
-			$pdf->SetDrawColor(135, 67, 176);
-			$pdf->Line($previous_point[0], $previous_point[1], $point_x + 0.5, $y + 2.5);
+			$pdf->SetDrawColor(...DOC_BILL_TEMPERATURE_COLOR);
+			$pdf->SetLineWidth(0.25);
+			$pdf->Line($previous_point[0], $previous_point[1], $point[0], $point[1]);
 		}
-		$previous_point = [$point_x + 0.5, $y + 2.5];
+		$pdf->SetFillColor(...DOC_BILL_TEMPERATURE_COLOR);
+		$pdf->Rect($point[0] - 0.6, $point[1] - 0.6, 1.2, 1.2, 'F');
+		$previous_point = $point;
 	}
 	else $previous_point = null;
 
-	if ($fit["comment"] === "inline") {
-		$pdf->UseStyle('bill.comment');
-		$pdf->SetXY($x0 + $fit["comment_x"], $y + DOC_BILL_ROW_GAP);
-		$pdf->Cell($pdf->GetStringWidth($row["comment"]) + $margin, DOC_BILL_LINE_H, $row["comment"]);
-	}
-	elseif ($fit["comment"] === "wrapped") {
-		$pdf->UseStyle('bill.comment');
-		$pdf->SetXY($x0, $y + $fit["comment_y"]);
-		$pdf->MultiCell($layout["wrap_w"], DOC_BILL_COMMENT_LINE_H, $row["comment"]);
-	}
+	doc_bill_draw_rule($pdf, $layout, $y + $h);
 }
 
-// The stamp: a coloured square, with the baby on it when there is one.
-function doc_bill_draw_stamp(DocPdf $pdf, array $day, float $x, float $y): void {
-	$color = match ($day["stampColor"]) {
-		"Red" => [172, 36, 51],
-		"Green" => [30, 130, 76],
-		"Yellow" => [251, 202, 11],
-		default => [255, 255, 255],
-	};
-	$pdf->SetFillColor(...$color);
-	// a baby on white gets a grey outline, or it would float
-	if ($day["stampColor"] === "White") $pdf->SetDrawColor(220, 220, 220);
-	else $pdf->SetDrawColor(...$color);
+// The stamp, a square: the colour of the day, with the baby on it when there is one. A day that
+// was not observed or filled in is a light grey "?", a pregnancy a pink "G". A day with no stamp
+// at all draws nothing.
+function doc_bill_draw_stamp(DocPdf $pdf, ?string $kind, bool $baby, float $x, float $y, float $size): void {
+	if (is_null($kind)) return;
 
-	$pdf->SetXY($x, $y);
-	$pdf->Cell(DOC_BILL_STAMP_W, DOC_BILL_LINE_H, '', 1, 0, 'C', true);
-	if ($day["stampBaby"]) $pdf->Image(DOC_BABY_IMAGE, $x + 0.25, $y + 0.25, 4.5, 4.5);
+	$glyph = '';
+	if (isset(DOC_BILL_SPECIAL_STAMPS[$kind])) [$fill, $glyph, $glyph_color] = DOC_BILL_SPECIAL_STAMPS[$kind];
+	else $fill = DOC_BILL_STAMP_COLORS[$kind];
+
+	$pdf->SetFillColor(...$fill);
+	$pdf->Rect($x, $y, $size, $size, 'F');
+	// a baby on white would float without an outline
+	if ($kind === "White" && PDF_BILLINGS_BORDERS) {
+		$pdf->SetDrawColor(...DOC_BILL_BORDER_COLOR);
+		$pdf->SetLineWidth(DOC_BILL_BORDER_W);
+		$pdf->Rect($x, $y, $size, $size, 'D');
+	}
+
+	if ($glyph !== '') {
+		$pdf->UseStyle('bill.stamp', $glyph_color);
+		$pdf->SetFontSize($size * 1.45);
+		$pdf->SetXY($x, $y);
+		$pdf->Cell($size, $size, $glyph, 0, 0, 'C');
+	}
+	if ($baby) $pdf->Image(DOC_BABY_IMAGE, $x + 0.35, $y + 0.35, $size - 0.7, $size - 0.7);
+}
+
+// What the stamps that are not self-explanatory mean, along the bottom of the page.
+function doc_bill_draw_legend(DocPdf $pdf, array $legend): void {
+	if (empty($legend)) return;
+
+	$size = 3.4;
+	$y = $pdf->GetPageHeight() - DOC_PDF_MARGIN - $size;
+	$x = DOC_PDF_MARGIN;
+	foreach ($legend as $kind => $text) {
+		doc_bill_draw_stamp($pdf, $kind, false, $x, $y, $size);
+		$text = doc_pdf_text($text);
+		$pdf->UseStyle('bill.legend');
+		$pdf->SetXY($x + $size + 1, $y);
+		$pdf->Cell($pdf->GetStringWidth($text) + 2 * $pdf->GetCellMargin(), $size, $text, 0, 0, 'L');
+		$x += $size + 1 + $pdf->GetStringWidth($text) + 2 * $pdf->GetCellMargin() + 4;
+	}
 }
 
 // ===========================================================================
@@ -992,34 +829,15 @@ function doc_bill_draw_stamp(DocPdf $pdf, array $day, float $x, float $y): void 
 //
 // One row of the grid per cycle, 35 days wide; a longer cycle carries on in the next row. Each
 // day is a column of cells: stamp, baby, peak, date, bleeding, mucus, other (arrow, pain codes,
-// union), [temperature,] comment.
-
-const DOC_FC_DAYS_PER_ROW = 35;
-
-// stamp => [text, r, g, b]
-const DOC_FC_STAMPS = [
-	"" => ["", 255, 255, 255],
-	"?" => ["???", 210, 210, 210],
-	"R" => ['R', 190, 0, 4],
-	"G" => ['V', 45, 102, 23],
-	"Y" => ['J', 255, 255, 9],
-	"BB" => ['BBB', 255, 255, 255],
-	'RBB' => ['BBR', 190, 0, 0],
-	'GBB' => ['BBV', 130, 187, 106],
-	'YBB' => ['BBJ', 255, 255, 9],
-	'Gi' => ['G', 255, 236, 238], // pregnancy ("Grossesse") -- TODO: another letter, G reads like Green
-];
-
-// codifiedArrow => its glyph in the Symbol font
-const DOC_FC_ARROWS = ["Up" => "\xAD", "Down" => "\xAF", "Right" => "\xAE"];
+// union), [temperature,] comment. The layout (DOC_FC_*) is in constants.php.
 
 function doc_cycle_fc_to_pdf(array $days, int $nfp_method, string $name, bool $anonymous = false): DocPdf {
-	$first_col_width = 16;
-	$top_margin = 10;
-	$left_margin = 10;
-	$grid_gray = 60;
+	$first_col_width = DOC_FC_FIRST_COL_W;
+	$top_margin = DOC_PDF_MARGIN;
+	$left_margin = DOC_PDF_MARGIN;
+	$grid_gray = DOC_FC_GRID_GRAY;
 	$with_temperature = nfp_file_method_tracks_temperature($nfp_method);
-	$lines_per_page = $with_temperature ? 7 : 8;
+	$lines_per_page = $with_temperature ? DOC_FC_LINES_PER_PAGE_TEMPERATURE : DOC_FC_LINES_PER_PAGE;
 
 	if ($anonymous) $name = doc_get_initials($name);
 
@@ -1032,20 +850,23 @@ function doc_cycle_fc_to_pdf(array $days, int $nfp_method, string $name, bool $a
 
 	$grid = [
 		"cell_w" => ($pdf->GetPageWidth() - $first_col_width - 2 * $left_margin) / DOC_FC_DAYS_PER_ROW,
-		"line_h" => 3.5,
-		"stamp_h" => 7.3,
-		"color_coef" => 1.1,
+		"line_h" => DOC_FC_LINE_H,
+		"stamp_h" => DOC_FC_STAMP_H,
+		"color_coef" => DOC_FC_COLOR_COEF,
 		"temperature" => $with_temperature,
 		"anonymous" => $anonymous,
 	];
 	$line_h = $grid["line_h"];
 	$content_h = $line_h * ($with_temperature ? 8 : 7) + $grid["stamp_h"];
-	$separator_h = 0.25;
+	$separator_h = DOC_FC_SEPARATOR_H;
 	$full_w = $pdf->GetPageWidth() - 2 * $left_margin;
-	$legend = ["TAMPON" => $line_h, "" => $grid["stamp_h"], "PIC" => $line_h, "DATE" => $line_h,
-		"SAIGNEMENT" => $line_h, "GLAIRE" => $line_h, "AUTRE INFO" => $line_h];
-	if ($with_temperature) $legend["TEMPERATURE"] = $line_h;
-	$legend["COMMENTAIRE"] = $line_h;
+
+	// the legend column: row => [label, height]
+	$legend = [];
+	foreach (DOC_FC_ROW_LABELS as $row => $label) {
+		if ($row === "temperature" && !$with_temperature) continue;
+		$legend[$row] = [$label, $row === "baby" ? $grid["stamp_h"] : $line_h];
+	}
 
 	// built once, then paginated: the page count cannot disagree with what is drawn
 	$pages = array_chunk(doc_fc_grid_rows($days), $lines_per_page);
@@ -1084,9 +905,9 @@ function doc_cycle_fc_to_pdf(array $days, int $nfp_method, string $name, bool $a
 			$pdf->UseStyle('fc.cell');
 			$pdf->SetDrawColor(255 / $grid["color_coef"], 255 / $grid["color_coef"], 255 / $grid["color_coef"]);
 			$legend_y = $y;
-			foreach ($legend as $text => $h) {
+			foreach ($legend as $row => [$text, $h]) {
 				$pdf->SetXY($left_margin, $legend_y);
-				$pdf->Cell($first_col_width, $h, $text, $text === "COMMENTAIRE" ? "" : "B", 0, 'R');
+				$pdf->Cell($first_col_width, $h, $text, $row === "comment" ? "" : "B", 0, 'R');
 				$legend_y += $h;
 			}
 
@@ -1160,7 +981,7 @@ function doc_fc_draw_cell(DocPdf $pdf, ?array $cell, array $grid, float $x, floa
 	$stamp_h = $grid["stamp_h"];
 	$coef = $grid["color_coef"];
 	$pregnancy = !empty($day["booleanPregnancyDetected"]);
-	$text_color = $pregnancy ? [130, 21, 33] : [0, 0, 0];
+	$text_color = $pregnancy ? DOC_PREGNANCY_COLOR : [0, 0, 0];
 
 	// the stamp, the baby and the peak, in the stamp's colour
 	[$symbol, $r, $g, $b] = DOC_FC_STAMPS[doc_fc_stamp_key($day)];

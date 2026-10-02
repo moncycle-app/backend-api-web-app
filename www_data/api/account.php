@@ -58,10 +58,10 @@ if (isset($body["secondaryEmail"]) && (empty($body["secondaryEmail"]) || filter_
 }
 
 if (isset($body["method"]) || isset($body["temperatureTracking"])) {
-	$method = strtolower(trim((string) ($body["method"] ?? "billings")));
+	$method = strtolower(trim((string) ($body["method"] ?? NFP_METHOD_BILLINGS)));
 	$temperature_tracking = boolval($body["temperatureTracking"] ?? false);
-	if ($method === "fertilitycare") $nfp_method = $temperature_tracking ? 4 : 3;
-	else $nfp_method = $temperature_tracking ? 1 : 2;
+	if ($method === strtolower(NFP_METHOD_FERTILITY_CARE)) $nfp_method = $temperature_tracking ? NFP_METHOD_ID_FERTILITYCARE_TEMP : NFP_METHOD_ID_FERTILITYCARE;
+	else $nfp_method = $temperature_tracking ? NFP_METHOD_ID_BILLINGS_TEMP : NFP_METHOD_ID_BILLINGS;
 	$updated_account["nfp_method"] = $nfp_method;
 	$field_updates[] = "method";
 }

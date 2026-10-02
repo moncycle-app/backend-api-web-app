@@ -56,11 +56,10 @@ if (new DateTime($result["start_date"]) >= new DateTime($result["end_date"])) {
 }
 
 // EXPORT FORMAT
-$available_type = ["pdf", "csv", "nfp"];
-if (!isset($_GET['type']) || !in_array($_GET['type'], $available_type)) {
+if (!isset($_GET['type']) || !in_array($_GET['type'], EXPORT_TYPES)) {
 	http_response_code(400);
 	print("ERREUR: le format de l'export doit être: ");
-	print(implode(", ", $available_type));
+	print(implode(", ", EXPORT_TYPES));
 	exit;
 }
 
@@ -74,7 +73,7 @@ if (isset($_GET['anonymous']) && !in_array($_GET['anonymous'], ["1", "0"])) {
 $anonymous = boolval($_GET['anonymous'] ?? "0");
 
 // VERIFY JSON_IN_PAGE PARAM
-if ($_GET['type'] == "nfp" && isset($_GET['json_in_page']) && !in_array($_GET['json_in_page'], ["1", "0"])) {
+if ($_GET['type'] == EXPORT_TYPE_NFP && isset($_GET['json_in_page']) && !in_array($_GET['json_in_page'], ["1", "0"])) {
 	http_response_code(400);
 	print("ERREUR: 'json_in_page' doit être 1 ou 0");
 	exit;
@@ -85,7 +84,7 @@ $nfp_method = intval($user_account["nfp_method"]);
 
 // THE DAYS OF THE PERIOD -- csv and pdf read exactly the period asked for; the nfp export reads
 // its own, widened back to the cycle start, so here it only needs to know there is something
-if ($_GET['type'] == "nfp") {
+if ($_GET['type'] == EXPORT_TYPE_NFP) {
 	$days = [];
 	$has_data = !empty(db_select_day_timeline_dates_frame($db, $result["start_date"], $result["end_date"], $user_account["no_user_account"]));
 }
@@ -102,7 +101,7 @@ if (!$has_data) {
 
 $filename = 'moncycle_app_' . date_humain(new DateTime($result["start_date"]), '_');
 
-if ($_GET['type'] == "csv") {
+if ($_GET['type'] == EXPORT_TYPE_CSV) {
 	header("Content-Type: text/csv; charset=utf-8");
 	header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
 	$out = fopen('php://output', 'w');
@@ -110,13 +109,13 @@ if ($_GET['type'] == "csv") {
 	fclose($out);
 }
 
-elseif ($_GET['type'] == "pdf") {
+elseif ($_GET['type'] == EXPORT_TYPE_PDF) {
 	$pdf = doc_cycle_to_pdf($days, $nfp_method, $user_account["name_user_account"], $anonymous);
 	// 'D' sends the Content-Type and an attachment Content-Disposition itself
 	$pdf->Output('D', $filename . '.pdf', true);
 }
 
-elseif ($_GET['type'] == "nfp") {
+elseif ($_GET['type'] == EXPORT_TYPE_NFP) {
 
 	$json_version = json_decode(file_get_contents("version.json"), true);
 

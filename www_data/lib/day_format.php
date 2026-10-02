@@ -79,15 +79,9 @@ function day_format_arrow_encode(?string $codified): ?string {
 // groups from accidentally spelling a third code (a mucus sensation ending
 // "...WL" glued directly to a pain code starting "AP..." would otherwise
 // read back as the unrelated code "LAP").
+//
+// The codes of each group are DAY_FORMAT_FC_GROUPS (constants.php).
 // ---------------------------------------------------------------------------
-
-const DAY_FORMAT_FC_GROUPS = [
-	'codifiedBleedingObservation' => ['VH', 'H', 'M', 'VL', 'B'], // the 'L' (Lsaignement) *prefix* is handled separately below
-	'codifiedMucusSensation' => ['0', '2', '2W', '4', '6', '8', '10', '10DL', '10SL', '10WL'],
-	'codifiedMucusObservation' => ['C', 'G', 'K', 'P', 'Y', 'L'], // this 'L' is a standalone mucus-observation code, distinct from the Lsaignement *prefix*
-	'codifiedNumberObservations' => ['X1', 'X2', 'X3', 'AD'],
-	'codifiedPainObservations' => ['AP', 'RAP', 'LAP'],
-];
 
 function day_format_fc_score_decode(?string $fc_score): array {
 	$note = data_parse_fc_note($fc_score);
@@ -160,8 +154,8 @@ function day_to_json(array $day): array {
 	$free_sensation = [];
 	$free_observation = [];
 	foreach ($day['description'] ?? [] as $desc) {
-		if (intval($desc['type']) === 2) $free_sensation[] = $desc['name'];
-		elseif (intval($desc['type']) === 1) $free_observation[] = $desc['name'];
+		if (intval($desc['type']) === DESCRIPTION_TYPE_SENSATION) $free_sensation[] = $desc['name'];
+		elseif (intval($desc['type']) === DESCRIPTION_TYPE_OBSERVATION) $free_observation[] = $desc['name'];
 	}
 
 	$temperature = $day['temperature'] ?? null;

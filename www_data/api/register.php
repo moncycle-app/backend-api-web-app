@@ -20,11 +20,6 @@ require_once '../vendor/phpmailer/phpmailer/src/Exception.php';
 require_once '../vendor/phpmailer/phpmailer/src/PHPMailer.php';
 require_once '../vendor/phpmailer/phpmailer/src/SMTP.php';
 
-define('NFP_METHOD_BILLINGS_TEMP',      1);
-define('NFP_METHOD_BILLINGS',           2);
-define('NFP_METHOD_FERTILITYCARE',      3);
-define('NFP_METHOD_FERTILITYCARE_TEMP', 4);
-
 $body = http_json_body();
 
 $db = db_open();
@@ -79,11 +74,11 @@ if (intval($body["birthYear"]) < (intval(date("Y")) - 100) || intval($body["birt
 // CREATING USER ACCOUNT
 // "method" and "temperatureTracking" replace the previous single 1-4 "method" integer that
 // conflated the NFP method with whether temperature is also tracked.
-$method = strtolower(trim((string) ($body["method"] ?? "billings")));
+$method = strtolower(trim((string) ($body["method"] ?? NFP_METHOD_BILLINGS)));
 $temperature_tracking = boolval($body["temperatureTracking"] ?? false);
 
-if ($method === "fertilitycare") $nfp_method = $temperature_tracking ? NFP_METHOD_FERTILITYCARE_TEMP : NFP_METHOD_FERTILITYCARE;
-else $nfp_method = $temperature_tracking ? NFP_METHOD_BILLINGS_TEMP : NFP_METHOD_BILLINGS;
+if ($method === strtolower(NFP_METHOD_FERTILITY_CARE)) $nfp_method = $temperature_tracking ? NFP_METHOD_ID_FERTILITYCARE_TEMP : NFP_METHOD_ID_FERTILITYCARE;
+else $nfp_method = $temperature_tracking ? NFP_METHOD_ID_BILLINGS_TEMP : NFP_METHOD_ID_BILLINGS;
 
 $pass_text = sec_password_aleatoire();
 $pass_hash = sec_hash($pass_text);

@@ -26,108 +26,47 @@
 **    nfp_file_day_from_nfp() in lib/nfp_file.php.
 */
 
-const NFP_SCHEMA_VERSION = "1.0";
-const NFP_SUPPORTED_SCHEMA_VERSIONS = ["1.0"];
-
 // ---------------------------------------------------------------------------
-// Hard limits. Everything that reaches the DB is bounded here first: these are
-// the sizes day_timeline / description actually accept, plus caps that keep a
-// hostile or broken file from exhausting memory or the request timeout.
-// ---------------------------------------------------------------------------
-
-// Two kinds of limit live here, and the difference decides whether breaking one refuses a
-// file or only reports it.
+// The constants of the format -- the schema version, the hard limits, the temperature band,
+// the vocabularies, the FertilityCare code aliases and the field inventories -- are in the
+// NFP FILE FORMAT section of constants.php (NFP_*), and the method names and ids in
+// its NFP METHODS section.
+//
+// Everything that reaches the DB is bounded by the limits first: they are the sizes
+// day_timeline / description actually accept, plus caps that keep a hostile or broken file
+// from exhausting memory or the request timeout.
+//
+// Two kinds of limit exist, and the difference decides whether breaking one refuses a file or
+// only reports it.
 //
 // HARD -- the body size, and the widths of the columns a value has to land in. Breaking one
 // of these means the data cannot be stored at all, so it refuses the file.
 //
-// ADVISORY -- the counts below marked as such. They describe a file of a reasonable shape;
-// they do not describe what this app's own /export can emit, which is bounded only by the
-// date range the user asks for. An account dormant for years exports one cycle padded with
-// thousands of gap days, and twenty years of tracking exports hundreds of cycles. Refusing
-// those would mean this app writing files it will not read back, so they are reported as
-// warnings by lib/nfp_file.php and the data is imported anyway.
+// ADVISORY -- the counts marked as such. They describe a file of a reasonable shape; they do
+// not describe what this app's own /export can emit, which is bounded only by the date range
+// the user asks for. An account dormant for years exports one cycle padded with thousands of
+// gap days, and twenty years of tracking exports hundreds of cycles. Refusing those would
+// mean this app writing files it will not read back, so they are reported as warnings by
+// lib/nfp_file.php and the data is imported anyway.
 //
 // Nothing is lost by that: NFP_LIMIT_BODY_BYTES is the guard that actually bounds the work,
 // and it bites first -- stages 1 and 2 decode and validate the whole body before any count
-// below is consulted, so these counts never protected memory in the first place.
-const NFP_LIMIT_BODY_BYTES = 262144;        // 256K -- matches post_max_size in server_conf
-const NFP_LIMIT_JSON_DEPTH = 32;            // the format nests 4 deep; 32 is already generous
-const NFP_LIMIT_CYCLES = 120;               // advisory -- ~10 years of cycles in one file
-const NFP_LIMIT_DAYS_PER_CYCLE = 400;       // advisory -- a pregnancy-length cycle still fits
-const NFP_LIMIT_DAYS_TOTAL = 4000;          // advisory
-const NFP_LIMIT_COMMENT_CHARS = 256;        // day_timeline.comment    varchar(256)
-const NFP_LIMIT_DESCRIPTION_CHARS = 256;    // description.name        varchar(256)
-const NFP_LIMIT_DESCRIPTIONS_PER_DAY = 20;  // advisory -- nothing caps the links of a day
-const NFP_LIMIT_FC_SCORE_CHARS = 32;        // day_timeline.fc_score   varchar(32)
-const NFP_LIMIT_COUNTER_START = 255;        // day_timeline.counter_start tinyint unsigned
-const NFP_LIMIT_SOURCE_APP_CHARS = 255;
-// day_timeline.temperature is decimal(4,2) unsigned, so 0.00-99.99 is what the column holds
-// and anything outside it is refused. The band a human body actually reaches is narrower, but
-// nothing stops a reading outside it being stored, and /export then writes it back out, so
-// leaving that band is only worth a warning.
-const NFP_TEMPERATURE_STORABLE_MIN = 0.0;
-const NFP_TEMPERATURE_STORABLE_MAX = 99.99;
-const NFP_TEMPERATURE_MIN = 30.0;           // advisory
-const NFP_TEMPERATURE_MAX = 45.0;           // advisory
-const NFP_DATE_FLOOR = "1900-01-01";
-const NFP_FUTURE_GRACE_DAYS = 1;            // a client a timezone ahead of the server is fine
-
+// is consulted, so these counts never protected memory in the first place.
+//
+// Only the closed vocabularies (no _customValuesAllowed in the spec) are enforced as enums.
 // ---------------------------------------------------------------------------
-// Vocabularies. Only the closed ones (no _customValuesAllowed in the spec) are
-// enforced as enums.
-// ---------------------------------------------------------------------------
-
-const NFP_METHOD_BILLINGS = "billings";
-const NFP_METHOD_FERTILITY_CARE = "fertilityCare";
-const NFP_METHOD_SYMPTOTHERMIC_FR = "symptothermic_fr";
-
-// the methods this app records natively. A cycle declaring anything else still imports --
-// what cannot be stored is reported field by field rather than silently dropped.
-const NFP_METHODS_NATIVE = [NFP_METHOD_BILLINGS, NFP_METHOD_FERTILITY_CARE];
-const NFP_METHODS_KNOWN = [NFP_METHOD_BILLINGS, NFP_METHOD_FERTILITY_CARE, NFP_METHOD_SYMPTOTHERMIC_FR];
-
-const NFP_STAMP_COLORS = ["Green", "Red", "Yellow", "White"];
-const NFP_SEX_UNIONS = ["Union", "ReservedUnion", "LastReportedUnion"];
-const NFP_ARROWS = ["Up", "Down", "Right"];
-const NFP_TRIPLE_CHOICE = ["Yes", "No", "Undecided"];
-const NFP_END_OF_CYCLE_FOLLOW_UP = ["Pregnancy", "Menopause", "Disease", "Other"];
-const NFP_CYCLE_PARTICULAR_CASES = ["FirstEyedCycle", "PostPill", "Pregnancy", "PostPartum"];
-
-// mucusNotObserved means "the user recorded nothing for this day", so it cannot be combined
-// with an observation. Straight from the spec's _incompatibleWith list, with one correction:
-// it names "codifiedBloodObservation", which is not a field the format defines anywhere else
-// -- "codifiedBleedingObservation" is plainly what was meant.
-const NFP_MUCUS_NOT_OBSERVED_INCOMPATIBLE = [
-	"codifiedMucusObservation",
-	"codifiedMucusSensation",
-	"codifiedBleedingObservation",
-	"codifiedCervixHeight",
-	"codifiedCervixConsistency",
-	"freeMucusObservation",
-	"freeMucusSensation",
-	"booleanCervixMucus",
-	"booleanCervixAperture",
-];
 
 // ---------------------------------------------------------------------------
 // FertilityCare note codes.
 //
 // The app packs the five FertilityCare note groups into one day_timeline.fc_score
-// string; DAY_FORMAT_FC_GROUPS in lib/day_format.php is the list of codes that
-// round-trip through data_parse_fc_note(). The spec spells three of them
-// differently, so those are aliased on the way in. Anything outside this
-// vocabulary is reported as ignored rather than written: fc_score is re-parsed by
-// substring matching, so an unknown code there would corrupt the day it lands on.
+// string; DAY_FORMAT_FC_GROUPS is the list of codes that round-trip through
+// data_parse_fc_note(). The spec spells three of them differently, so those
+// are aliased on the way in (NFP_FC_CODE_ALIASES). Both are in constants.php.
+// Anything outside this vocabulary is reported as ignored rather than written:
+// fc_score is re-parsed by substring matching, so an unknown code there would
+// corrupt the day it lands on.
 // ---------------------------------------------------------------------------
-
-const NFP_FC_CODE_ALIASES = [
-	"BR" => "B",      // spec writes brown bleeding "Br", the app stores "B"
-	"X1" => "X1",     // spec writes "x1".."x3" lowercase; matching is case-insensitive
-	"X2" => "X2",
-	"X3" => "X3",
-	"C/K" => "CK",    // spec's "between C and K"; the app stores the two codes together
-];
 
 function nfp_format_fc_vocabulary(): array {
 	$vocabulary = DAY_FORMAT_FC_GROUPS;
@@ -267,54 +206,8 @@ JSON;
 // with it. The "not stored" lists are what makes the import report honest: a
 // field named here is reported back to the caller rather than silently dropped.
 // A day or cycle key in neither list is reported as unknown to schema 1.0.
+// The lists are NFP_DAY_FIELDS_* and NFP_CYCLE_FIELDS_* in constants.php.
 // ---------------------------------------------------------------------------
-
-const NFP_DAY_FIELDS_NOT_STORED = [
-	"nonUsualBleeding" => "this app has no spotting flag of its own",
-	"booleanCervixMucus" => "cervix observations are not recorded here",
-	"booleanCervixAperture" => "cervix observations are not recorded here",
-	"codifiedCervixConsistency" => "cervix observations are not recorded here",
-	"codifiedCervixHeight" => "cervix observations are not recorded here",
-	"codifiedTemperatureParasitic" => "no temperature-disturbance field is recorded here",
-	"temperatureCaptureOffset" => "only an absolute temperatureTime is recorded here",
-	"codifiedEvents" => "no pre-defined event list is recorded here",
-	"babyFeedCount" => "no feed count is recorded here",
-	"codifiedManualFertility" => "fertility is computed for display, not stored",
-];
-
-const NFP_DAY_FIELDS_STORED = [
-	"comments",
-	"codifiedBleedingObservation",
-	"codifiedMucusSensation",
-	"codifiedMucusObservation",
-	"codifiedNumberObservations",
-	"codifiedPainObservations",
-	"codifiedArrow",
-	"freeMucusSensation",
-	"freeMucusObservation",
-	"mucusNotObserved",
-	"temperature",
-	"temperatureTime",
-	"booleanPregnancyDetected",
-	"isPeak",
-	"stampColor",
-	"stampBaby",
-	"counterStart",
-	"sexUnion",
-];
-
-const NFP_CYCLE_FIELDS_NOT_STORED = [
-	"cycleParticularCases" => "no per-cycle case list is recorded here",
-	"comment" => "only per-day comments are recorded here",
-	"currentCyclePlannedPregnancy" => "pregnancy intention is not recorded here",
-	"nextMonthsPlannedPregnancy" => "pregnancy intention is not recorded here",
-	"endOfCycleFollowUp" => "no end-of-cycle reason is recorded here",
-	"temperatureUsualTime" => "no usual capture time is recorded here",
-	"temperatureCaptureType" => "no capture type is recorded here",
-	"temperatureThermometerType" => "no thermometer type is recorded here",
-];
-
-const NFP_CYCLE_FIELDS_STRUCTURAL = ["method", "cycleStartDate", "days"];
 
 function nfp_format_day_fields_known(): array {
 	return array_merge(NFP_DAY_FIELDS_STORED, array_keys(NFP_DAY_FIELDS_NOT_STORED));

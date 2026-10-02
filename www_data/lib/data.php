@@ -35,6 +35,27 @@ function data_construnct_day($db, $date, $no_user_account, $raw_day=null, $cycle
 	return $ob_data;
 }
 
+// resolves a free-text description name to its id, creating it (with the given type) the
+// first time it's used -- mirrors the dedupe-by-name already used by the account settings
+// picklist (db_select_description_from_name).
+function data_resolve_description_id($db, $no_user_account, $name, $type, $last_write_client_UTC) {
+	$name = trim($name);
+	$existing = db_select_description_from_name($db, $no_user_account, $name);
+	if (isset($existing[0]["no_description"])) return intval($existing[0]["no_description"]);
+	return intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
+}
+
+// a description row (db_select_description_with_count*) as the JSON API shows it, shared by
+// api/description.php and api/sync.php so the two never drift apart.
+function data_description_to_json(array $row): array {
+	return [
+		"id" => intval($row["no_description"]),
+		"name" => $row["name"],
+		"type" => DESCRIPTION_TYPE_NAMES[intval($row["type"])] ?? DESCRIPTION_TYPE_NAMES[DESCRIPTION_TYPE_UNDEFINED],
+		"useCount" => intval($row["use_count"] ?? 0),
+	];
+}
+
 function data_parse_fc_note ($str_fc_note) {
 	$fc_note = [
 		'10DL' => false,

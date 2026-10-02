@@ -64,7 +64,7 @@ if (isset($export_auth_tokens[0])) {
 
 // exports des observations
 if (isset($export_obs[0])) {
-	// descriptions (type 1 = observation, type 2 = sensation) are joined into the day lines;
+	// descriptions (DESCRIPTION_TYPE_OBSERVATION, DESCRIPTION_TYPE_SENSATION) are joined into the day lines;
 	// the legacy day_timeline.sensation column is unused, so it is overridden by the sensation descriptions
 	$descriptions_by_day = [];
 	foreach (db_select_descriptions_for_day_timeline_frame($db, "0000-00-00", "9999-12-31", $user_account["no_user_account"]) as $description) {
@@ -76,8 +76,8 @@ if (isset($export_obs[0])) {
 		$row = [];
 		foreach ($day as $key => $value) {
 			if ($key === "sensation") {
-				$row["sensation"] = implode(" | ", $descriptions_by_day[$day["no_day"]][2] ?? []);
-				$row["observation"] = implode(" | ", $descriptions_by_day[$day["no_day"]][1] ?? []);
+				$row["sensation"] = implode(DOC_CSV_LIST_JOINER, $descriptions_by_day[$day["no_day"]][DESCRIPTION_TYPE_SENSATION] ?? []);
+				$row["observation"] = implode(DOC_CSV_LIST_JOINER, $descriptions_by_day[$day["no_day"]][DESCRIPTION_TYPE_OBSERVATION] ?? []);
 			} else {
 				$row[$key] = $value;
 			}

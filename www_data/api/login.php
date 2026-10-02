@@ -51,7 +51,7 @@ try {
 		http_error(403, "login_disabled", "Login is disabled.", $meta);
 	}
 
-	if (db_count_login_attempt_ip($db, $client_ip) >= LOGIN_IP_MAX_ATTEMPTS) {
+	if (LOGIN_IP_MAX_ATTEMPTS > 0 && db_count_login_attempt_ip($db, $client_ip) >= LOGIN_IP_MAX_ATTEMPTS) {
 		// already throttled: don't insert again, or a blocked IP could grow this table forever
 		http_error(429, "rate_limited", "Too many attempts from this network, please try again later.", $meta);
 	}

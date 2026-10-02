@@ -37,14 +37,8 @@ for ($i = 0; $i < count($days); $i += 1) {
 	$days[$i] = day_to_json(data_construnct_day($db, $days[$i]["date_obs"], $user_account["no_user_account"], $days[$i]));
 }
 
-$name_by_type = [0 => "undefined", 1 => "observation", 2 => "sensation"];
 $descriptions = db_select_description_with_count_modified($db, $from_timestamp, $user_account["no_user_account"]);
-$descriptions = array_map(fn($row) => [
-	"id" => intval($row["no_description"]),
-	"name" => $row["name"],
-	"type" => $name_by_type[intval($row["type"])] ?? "undefined",
-	"useCount" => intval($row["use_count"] ?? 0),
-], $descriptions);
+$descriptions = array_map('data_description_to_json', $descriptions);
 
 http_data(200, [
 	"days" => $days,

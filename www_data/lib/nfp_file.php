@@ -39,18 +39,15 @@ require_once __DIR__ . "/nfp_format.php";
 //
 // nfp_method packs the method and whether temperature is tracked into one 1-4
 // integer: 1 = Billings + temperature, 2 = Billings, 3 = FertilityCare,
-// 4 = FertilityCare + temperature.
+// 4 = FertilityCare + temperature (NFP_METHOD_ID_*, constants.php).
 // ---------------------------------------------------------------------------
 
 function nfp_file_method_name(int $nfp_method): string {
-	return match ($nfp_method) {
-		3, 4 => NFP_METHOD_FERTILITY_CARE,
-		default => NFP_METHOD_BILLINGS,
-	};
+	return in_array($nfp_method, NFP_METHOD_IDS_FERTILITYCARE, true) ? NFP_METHOD_FERTILITY_CARE : NFP_METHOD_BILLINGS;
 }
 
 function nfp_file_method_tracks_temperature(int $nfp_method): bool {
-	return $nfp_method === 1 || $nfp_method === 4;
+	return in_array($nfp_method, NFP_METHOD_IDS_WITH_TEMPERATURE, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -899,7 +896,7 @@ function nfp_file_preview_plan($db, int $no_user_account, array $plan, bool $ove
 
 	foreach ($plan as $entry) {
 		if (isset($is_skipped[$entry["date"]])) continue;
-		foreach ([2 => $entry["sensations"], 1 => $entry["observations"]] as $type => $names) {
+		foreach ([DESCRIPTION_TYPE_SENSATION => $entry["sensations"], DESCRIPTION_TYPE_OBSERVATION => $entry["observations"]] as $type => $names) {
 			foreach ($names as $name) {
 				if (!isset($recorded[$name])) {
 					$recorded[$name] = $type;
@@ -931,10 +928,11 @@ function nfp_file_preview_plan($db, int $no_user_account, array $plan, bool $ove
 // report and not a change. nfp_file_preview_plan() has to predict exactly what
 // nfp_file_resolve_description() says, hence the shared wording.
 function nfp_file_narrowed_description_note(string $date, string $name, int $recorded_type): string {
-	$type_names = [1 => "observation", 2 => "sensation"];
+	// a label of undefined type is just called a label
+	$type_name = $recorded_type === DESCRIPTION_TYPE_UNDEFINED ? "label" : (DESCRIPTION_TYPE_NAMES[$recorded_type] ?? "label");
 	return sprintf(
 		"[%s] '%s' is recorded as a %s on this account and stays one: a label carries a single type here.",
-		$date, $name, $type_names[$recorded_type] ?? "label"
+		$date, $name, $type_name
 	);
 }
 
@@ -1011,10 +1009,10 @@ function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overi
 
 		$wanted = [];
 		foreach ($entry["sensations"] as $name) {
-			$wanted[] = nfp_file_resolve_description($db, $no_user_account, $name, 2, $last_write_client_UTC, $description_cache, $descriptions_created, $narrowed, $date);
+			$wanted[] = nfp_file_resolve_description($db, $no_user_account, $name, DESCRIPTION_TYPE_SENSATION, $last_write_client_UTC, $description_cache, $descriptions_created, $narrowed, $date);
 		}
 		foreach ($entry["observations"] as $name) {
-			$wanted[] = nfp_file_resolve_description($db, $no_user_account, $name, 1, $last_write_client_UTC, $description_cache, $descriptions_created, $narrowed, $date);
+			$wanted[] = nfp_file_resolve_description($db, $no_user_account, $name, DESCRIPTION_TYPE_OBSERVATION, $last_write_client_UTC, $description_cache, $descriptions_created, $narrowed, $date);
 		}
 		$wanted = array_values(array_unique($wanted));
 

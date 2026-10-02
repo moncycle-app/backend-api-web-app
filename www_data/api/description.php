@@ -10,6 +10,7 @@
 require_once "../config.php";
 require_once "../lib/db.php";
 require_once "../lib/date.php";
+require_once "../lib/data.php";
 require_once "../lib/sec.php";
 require_once "../lib/http.php";
 
@@ -19,18 +20,6 @@ $db = db_open();
 
 $user_account = sec_auth_token($db);
 sec_exit_si_non_connecte($user_account);
-
-$type_by_name = ["undefined" => 0, "observation" => 1, "sensation" => 2];
-$name_by_type = [0 => "undefined", 1 => "observation", 2 => "sensation"];
-
-function description_to_json(array $row, array $name_by_type): array {
-	return [
-		"id" => intval($row["no_description"]),
-		"name" => $row["name"],
-		"type" => $name_by_type[intval($row["type"])] ?? "undefined",
-		"useCount" => intval($row["use_count"] ?? 0),
-	];
-}
 
 // CREATION/MODIFICATION OF A DESCRIPTION
 if ($_SERVER['REQUEST_METHOD'] == "POST") {
@@ -52,8 +41,8 @@ if ($_SERVER['REQUEST_METHOD'] == "POST") {
 		http_error(400, "missing_fields", "'name' and 'type' are required.");
 	}
 
-	if (!isset($type_by_name[$body["type"]])) {
-		http_error(400, "invalid_type", "'type' must be one of: " . implode(", ", array_keys($type_by_name)) . ".");
+	if (!isset(DESCRIPTION_TYPE_BY_NAME[$body["type"]])) {
+		http_error(400, "invalid_type", "'type' must be one of: " . implode(", ", array_keys(DESCRIPTION_TYPE_BY_NAME)) . ".");
 	}
 
 	if (boolval(db_select_description_name_exist($db, $body["name"], $user_account["no_user_account"], $desc_no ?? 0))) {
@@ -61,7 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] == "POST") {
 	}
 
 	$desc_name = trim($body["name"]);
-	$desc_type = $type_by_name[$body["type"]];
+	$desc_type = DESCRIPTION_TYPE_BY_NAME[$body["type"]];
 
 	$last_write_client_UTC = http_from_iso8601($body["lastWriteClientUtc"] ?? null);
 	if (!$last_write_client_UTC || !date_validate_timestamp($last_write_client_UTC)) {
@@ -86,7 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] == "POST") {
 	http_data($is_new ? 201 : 200, [
 		"id" => intval($desc_no),
 		"name" => $desc_name,
-		"type" => $name_by_type[$desc_type],
+		"type" => DESCRIPTION_TYPE_NAMES[$desc_type],
 		"lastWriteClientUtc" => http_iso8601($last_write_client_UTC),
 	]);
 }
@@ -115,5 +104,5 @@ elseif ($_SERVER['REQUEST_METHOD'] == "DELETE") {
 else {
 
 	$rows = db_select_description_with_count($db, $user_account["no_user_account"]);
-	http_data(200, array_map(fn($row) => description_to_json($row, $name_by_type), $rows));
+	http_data(200, array_map('data_description_to_json', $rows));
 }

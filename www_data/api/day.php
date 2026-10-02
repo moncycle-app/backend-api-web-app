@@ -22,16 +22,6 @@ $db = db_open();
 $user_account = sec_auth_token($db);
 sec_exit_si_non_connecte($user_account);
 
-// resolves a free-text description name to its id, creating it (with the given type) the
-// first time it's used -- mirrors the dedupe-by-name already used by the account settings
-// picklist (db_select_description_from_name).
-function day_resolve_description_id($db, $no_user_account, $name, $type, $last_write_client_UTC) {
-	$name = trim($name);
-	$existing = db_select_description_from_name($db, $no_user_account, $name);
-	if (isset($existing[0]["no_description"])) return intval($existing[0]["no_description"]);
-	return intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
-}
-
 // READING OBSERVATION(S)
 if ($_SERVER['REQUEST_METHOD'] == "GET") {
 
@@ -127,10 +117,10 @@ elseif ($_SERVER['REQUEST_METHOD'] == "POST") {
 
 		$new_description_no = [];
 		foreach (($body['freeMucusObservation'] ?? []) as $name) {
-			$new_description_no[] = day_resolve_description_id($db, $user_account["no_user_account"], $name, 1, $last_write_client_UTC);
+			$new_description_no[] = data_resolve_description_id($db, $user_account["no_user_account"], $name, DESCRIPTION_TYPE_OBSERVATION, $last_write_client_UTC);
 		}
 		foreach (($body['freeMucusSensation'] ?? []) as $name) {
-			$new_description_no[] = day_resolve_description_id($db, $user_account["no_user_account"], $name, 2, $last_write_client_UTC);
+			$new_description_no[] = data_resolve_description_id($db, $user_account["no_user_account"], $name, DESCRIPTION_TYPE_SENSATION, $last_write_client_UTC);
 		}
 
 		$to_delete_description_no = array_diff($old_description_no, $new_description_no);
