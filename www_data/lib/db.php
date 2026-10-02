@@ -116,9 +116,9 @@ function db_select_user_account_exists($db, $email): bool {
 
 function db_insert_user_account($db, $name, $nfp_method, $age, $email, $password_hash, $register_comment, $research) {
 	return db_insert($db,
-		"INSERT INTO user_account (name, nfp_method, age, email1, password, register_comment, research)
-		VALUES (:name, :nfp_method, :age, :email1, :password, :register_comment, :research)",
-		["name" => $name, "nfp_method" => $nfp_method, "age" => $age, "email1" => $email, "password" => $password_hash, "register_comment" => $register_comment, "research" => $research]
+		"INSERT INTO user_account (name, nfp_method, age, email1, password, language, register_comment, research)
+		VALUES (:name, :nfp_method, :age, :email1, :password, :language, :register_comment, :research)",
+		["name" => $name, "nfp_method" => $nfp_method, "age" => $age, "email1" => $email, "password" => $password_hash, "language" => ACCOUNT_DEFAULT_LANGUAGE, "register_comment" => $register_comment, "research" => $research]
 	);
 }
 

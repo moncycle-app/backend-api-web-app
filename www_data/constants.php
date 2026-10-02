@@ -45,6 +45,7 @@ const COOKIE_AUTH_TOKEN = "MONCYCLEAPP_TOKEN";
 const COOKIE_AUTH_TOKEN_LEGACY = "MONCYCLEAPP_JETTON";
 
 const PASSWORD_MIN_LENGTH = 8;
+const ACCOUNT_DEFAULT_LANGUAGE = "FR";    // user_account.language of a new account, until the user can choose
 const ACCOUNT_DEMO_ID = 2;      // the public demo account: never warned, never erased (see lib/db.php)
 
 // RGPD retention, re-evaluated on every cron run (so no "warning sent" flag exists): an account
