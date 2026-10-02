@@ -28,7 +28,7 @@ http_data(200, [
 	"research" => boolval($user_account["research"]),
 	"timelineAscending" => boolval($user_account["timeline_asc"]),
 	"allCyclesFirstDay" => db_select_cycles($db, $user_account["no_user_account"]),
-	"allPregnancyDates" => db_select_pregnancys($db, $user_account["no_user_account"]),
+	"allPregnancyDates" => db_select_pregnancies($db, $user_account["no_user_account"]),
 	"totpState" => sec_totp_state_name($user_account["totp_state"]),
 	"lastWriteClientUtc" => http_iso8601($user_account["last_write_client_UTC"]),
 ]);

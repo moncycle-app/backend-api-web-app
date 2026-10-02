@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] == "POST") {
 		if (!filter_var($body["id"], FILTER_VALIDATE_INT)) {
 			http_error(400, "invalid_id", "'id' must match the description to edit.");
 		}
-		if (!boolval(db_select_description_no_exist($db, $body["id"], $no_user_account))) {
+		if (!boolval(db_select_description_exists($db, $body["id"], $no_user_account))) {
 			http_error(404, "not_found", "'id' does not match a known description.");
 		}
 		$id = intval($body["id"]);
@@ -38,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] == "POST") {
 		http_error(400, "invalid_type", "'type' must be one of: " . implode(", ", array_keys(DESCRIPTION_TYPE_BY_NAME)) . ".");
 	}
 
-	if (boolval(db_select_description_name_exist($db, $body["name"], $no_user_account, $id ?? 0))) {
+	if (boolval(db_select_description_name_exists($db, $body["name"], $no_user_account, $id ?? 0))) {
 		http_error(409, "duplicate_name", "This description name already exists: " . $body["name"]);
 	}
 
@@ -69,7 +69,7 @@ elseif ($_SERVER['REQUEST_METHOD'] == "DELETE") {
 		http_error(400, "invalid_id", "'id' must match the description to delete.");
 	}
 
-	if (!boolval(db_select_description_no_exist($db, $_GET["id"], $no_user_account))) {
+	if (!boolval(db_select_description_exists($db, $_GET["id"], $no_user_account))) {
 		http_error(404, "not_found", "'id' does not match a known description.");
 	}
 

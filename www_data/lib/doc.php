@@ -453,9 +453,9 @@ function doc_cycle_bill_to_pdf(array $days, int $nfp_method, string $name, bool 
 	if ($anonymous) $name = doc_get_initials($name) . " (anonyme)";
 
 	$subtitle = sprintf("Tableau de %d %s", count($days), count($days) > 1 ? "jours" : "jour");
-	if (!$anonymous) $subtitle .= sprintf(" du %s au %s", date_humain($first_date), date_humain($last_date));
+	if (!$anonymous) $subtitle .= sprintf(" du %s au %s", date_human($first_date), date_human($last_date));
 
-	$pdf = new DocPdf('P', 'A4', 'MONCYCLE.APP tableau du ' . date_humain($first_date), $name);
+	$pdf = new DocPdf('P', 'A4', 'MONCYCLE.APP tableau du ' . date_human($first_date), $name);
 	$pdf->SetMargins(DOC_PDF_MARGIN, DOC_PDF_MARGIN);
 
 	$rows = doc_bill_rows($days);
@@ -752,7 +752,7 @@ function doc_bill_draw_row(DocPdf $pdf, array $row, array $layout, float $y, boo
 	// the date and the day of the cycle, white on black on a cycle's first day
 	$date = new DateTime($day["date"]);
 	$week_day = intval($date->format('w'));
-	$date_label = $anonymous ? DOC_WEEK_DAYS[$week_day] : date_humain_week_day($date, DOC_WEEK_DAYS);
+	$date_label = $anonymous ? DOC_WEEK_DAYS[$week_day] : date_human_week_day($date, DOC_WEEK_DAYS);
 	$date_style = $week_day === 0 ? 'bill.date.sunday' : 'bill.date';
 	$text_color = null;
 	if ($day["cycleFirstDay"]) {
@@ -876,9 +876,9 @@ function doc_cycle_fc_to_pdf(array $days, int $nfp_method, string $name, bool $a
 
 	if ($anonymous) $name = doc_get_initials($name);
 
-	$h_start_date = date_humain(new DateTime($days[0]["date"]));
-	$h_end_date = date_humain(new DateTime(end($days)["date"]));
-	$h_current_date = date_humain(new DateTime());
+	$h_start_date = date_human(new DateTime($days[0]["date"]));
+	$h_end_date = date_human(new DateTime(end($days)["date"]));
+	$h_current_date = date_human(new DateTime());
 
 	$pdf = new DocPdf('L', 'A3', 'MONCYCLE.APP tableau du ' . $h_start_date, $anonymous ? "$name (anonyme)" : $name);
 	$pdf->SetMargins($left_margin, $top_margin);
@@ -1045,7 +1045,7 @@ function doc_fc_draw_cell(DocPdf $pdf, ?array $cell, array $grid, float $x, floa
 	if (!is_null($day)) {
 		$date = new DateTime($day["date"]);
 		$week_day = intval($date->format('w'));
-		$date_text = $grid["anonymous"] ? DOC_WEEK_DAYS[$week_day] : date_humain_week_day($date, DOC_WEEK_DAYS);
+		$date_text = $grid["anonymous"] ? DOC_WEEK_DAYS[$week_day] : date_human_week_day($date, DOC_WEEK_DAYS);
 		if ($week_day === 0) $date_style = 'fc.cell.sunday';
 	}
 	$pdf->UseStyle($date_style, $text_color);

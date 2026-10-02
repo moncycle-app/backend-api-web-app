@@ -14,7 +14,7 @@ require_once "../lib/sec.php";
 $db = db_open();
 
 $user_account = sec_auth_token($db);
-sec_redirect_non_connecte($user_account);
+sec_redirect_if_logged_out($user_account);
 $no_user_account = $user_account["no_user_account"];
 
 header("content-type:application/csv;charset=UTF-8");
@@ -25,8 +25,8 @@ fputs($out, chr(0xEF) . chr(0xBB) . chr(0xBF));
 fputs($out, "Export des données MONCYCLE.APP de " . $user_account["name_user_account"] . PHP_EOL . PHP_EOL);
 
 // the account, its sessions and its days, as they are stored (secrets masked)
-doc_csv_dump($out, [sec_offuscate_columns(db_select_user_account_par_nouser_account($db, $no_user_account), ["password", "totp_secret"])]);
-doc_csv_dump($out, array_map(fn($row) => sec_offuscate_columns($row, ["auth_token_str"]), db_select_tous_les_auth_token($db, $no_user_account)));
+doc_csv_dump($out, [sec_obfuscate_columns(db_select_user_account($db, $no_user_account), ["password", "totp_secret"])]);
+doc_csv_dump($out, array_map(fn($row) => sec_obfuscate_columns($row, ["auth_token_str"]), db_select_auth_tokens($db, $no_user_account)));
 doc_csv_dump($out, doc_raw_days($db, $no_user_account));
 
 fclose($out);

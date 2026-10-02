@@ -21,6 +21,6 @@ function api_start(bool $login_required = true): array {
 	header('Content-Type: application/json');
 	$db = db_open();
 	$user_account = sec_auth_token($db);
-	if ($login_required) sec_exit_si_non_connecte($user_account);
+	if ($login_required) sec_exit_if_logged_out($user_account);
 	return [$db, $user_account];
 }

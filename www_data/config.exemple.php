@@ -23,8 +23,8 @@ define("SMTP_PORT", 465);
 define("SMTP_MAIL", "");
 define("SMTP_PASSWORD", "");
 
-define("CREATION_COMPTE", false);
-define("CONNEXION_COMPTE", false);
+define("REGISTRATION_ENABLED", false);
+define("LOGIN_ENABLED", false);
 
 define("CSV_SEP", ";");
 
@@ -36,7 +36,7 @@ define("PHP_SECURE_COOKIES", true);
 
 // Login brute-force defense. A value of 0 turns the feature it sets off.
 // Failed attempts on an account older than this many minutes restart at 1 (0: they are not
-// counted at all, so there is no captcha and no lockout); db_update_co_echoue() binds it too.
+// counted at all, so there is no captcha and no lockout); db_update_login_failure() binds it too.
 define("LOGIN_ATTEMPTS_DECAY_MINUTES", 60);
 // Failed attempts on an account after which login asks for a captcha (0: never).
 define("LOGIN_CAPTCHA_THRESHOLD", 3);

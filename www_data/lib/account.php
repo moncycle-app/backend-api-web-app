@@ -40,7 +40,7 @@ function account_method_id_from_json(array $body): int {
 // POST /api/account
 // ---------------------------------------------------------------------------
 
-// What a body changes of the account row: [the values db_update_user_account_param() takes, the
+// What a body changes of the account row: [the values db_update_user_account_settings() takes, the
 // JSON names of the fields it changes]. An absent or unusable field leaves the account as it is.
 function account_apply_json(array $account, array $body): array {
 	$new = [

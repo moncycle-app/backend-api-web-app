@@ -102,28 +102,28 @@ function db_transaction($db, callable $work) {
 // Accounts
 // ---------------------------------------------------------------------------
 
-function db_select_user_account_par_nouser_account($db, $no_user_account): ?array {
+function db_select_user_account($db, $no_user_account): ?array {
 	return db_row($db, "SELECT * FROM user_account WHERE no_user_account = :no_user_account", ["no_user_account" => $no_user_account]);
 }
 
-function db_select_user_account_par_mail($db, $mail): ?array {
-	return db_row($db, "SELECT * FROM user_account WHERE email1 = :email1", ["email1" => $mail]);
+function db_select_user_account_by_email($db, $email): ?array {
+	return db_row($db, "SELECT * FROM user_account WHERE email1 = :email1", ["email1" => $email]);
 }
 
-function db_select_user_account_existe($db, $mail): bool {
-	return boolval(db_value($db, "SELECT COUNT(no_user_account) > 0 FROM user_account WHERE email1 = :email1", ["email1" => $mail]));
+function db_select_user_account_exists($db, $email): bool {
+	return boolval(db_value($db, "SELECT COUNT(no_user_account) > 0 FROM user_account WHERE email1 = :email1", ["email1" => $email]));
 }
 
-function db_insert_user_account($db, $name, $nfp_method, $age, $mail, $mdp, $register_comment, $research) {
+function db_insert_user_account($db, $name, $nfp_method, $age, $email, $password_hash, $register_comment, $research) {
 	return db_insert($db,
 		"INSERT INTO user_account (name, nfp_method, age, email1, password, register_comment, research)
 		VALUES (:name, :nfp_method, :age, :email1, :password, :register_comment, :research)",
-		["name" => $name, "nfp_method" => $nfp_method, "age" => $age, "email1" => $mail, "password" => $mdp, "register_comment" => $register_comment, "research" => $research]
+		["name" => $name, "nfp_method" => $nfp_method, "age" => $age, "email1" => $email, "password" => $password_hash, "register_comment" => $register_comment, "research" => $research]
 	);
 }
 
 // $fields: name, email2, nfp_method, age, sponsor, timeline_asc, research (see account_apply_json())
-function db_update_user_account_param($db, $no_user_account, array $fields, $last_write_client_UTC) {
+function db_update_user_account_settings($db, $no_user_account, array $fields, $last_write_client_UTC) {
 	return db_exec($db,
 		"UPDATE user_account SET `name` = :name, email2 = :email2, nfp_method = :nfp_method, age = :age, sponsor = :sponsor,
 		timeline_asc = :timeline_asc, research = :research, last_write_client_UTC = :last_write_client_UTC
@@ -132,12 +132,12 @@ function db_update_user_account_param($db, $no_user_account, array $fields, $las
 	);
 }
 
-function db_update_password_par_mail($db, $mdp, $mail) {
-	return db_exec($db, "UPDATE user_account SET password = :password, last_password_change = NULL WHERE email1 = :email1", ["password" => $mdp, "email1" => $mail]);
+function db_update_password_by_email($db, $password_hash, $email) {
+	return db_exec($db, "UPDATE user_account SET password = :password, last_password_change = NULL WHERE email1 = :email1", ["password" => $password_hash, "email1" => $email]);
 }
 
-function db_udpate_password_par_nouser_account($db, $mdp, $no_user_account) {
-	return db_exec($db, "UPDATE user_account SET password = :password, last_password_change = NOW() WHERE no_user_account = :no_user_account", ["password" => $mdp, "no_user_account" => $no_user_account]);
+function db_update_password($db, $password_hash, $no_user_account) {
+	return db_exec($db, "UPDATE user_account SET password = :password, last_password_change = NOW() WHERE no_user_account = :no_user_account", ["password" => $password_hash, "no_user_account" => $no_user_account]);
 }
 
 function db_delete_user_account($db, $no_user_account) {
@@ -173,7 +173,7 @@ function db_select_user_account_auth_token($db, $auth_token_str): ?array {
 	);
 }
 
-function db_select_tous_les_auth_token($db, $no_user_account) {
+function db_select_auth_tokens($db, $no_user_account) {
 	return db_rows($db, "SELECT * FROM auth_token WHERE no_user_account = :no_user_account", ["no_user_account" => $no_user_account]);
 }
 
@@ -194,7 +194,7 @@ function db_delete_auth_token($db, $no_auth_token, $no_user_account) {
 }
 
 // sessions not used for 40 days, or older than a year (those that expire: a captcha's does)
-function db_delete_vieux_auth_token($db) {
+function db_delete_old_auth_token($db) {
 	return db_exec($db, "DELETE FROM auth_token WHERE (date_creation < CURDATE() - INTERVAL 365 DAY OR date_use < CURDATE() - INTERVAL 40 DAY) AND expire > 0");
 }
 
@@ -206,18 +206,18 @@ function db_update_auth_token_captcha($db, $auth_token_str, $captcha) {
 	return db_exec($db, "UPDATE auth_token SET date_use = NOW(), captcha = :captcha WHERE auth_token_str = :auth_token_str", ["captcha" => $captcha, "auth_token_str" => $auth_token_str]);
 }
 
-function db_update_user_account_connecte($db, $no_user_account) {
+function db_update_user_account_logged_in($db, $no_user_account) {
 	return db_exec($db, "UPDATE user_account SET last_auth_date = NOW(), nb_connection_attempts = 0, is_inactive = 0 WHERE no_user_account = :no_user_account", ["no_user_account" => $no_user_account]);
 }
 
 // increments the failed-attempt counter, but restarts it at 1 instead of compounding when the
 // last failure is old (LOGIN_ATTEMPTS_DECAY_MINUTES, the same value lib/sec.php decays by)
-function db_update_co_echoue($db, $mail) {
+function db_update_login_failure($db, $email) {
 	return db_exec($db,
 		"UPDATE user_account SET
 		nb_connection_attempts = IF(last_failed_attempt IS NULL OR last_failed_attempt < NOW() - INTERVAL :decay_minutes MINUTE, 1, nb_connection_attempts + 1),
 		last_failed_attempt = NOW() WHERE email1 = :email1",
-		["decay_minutes" => LOGIN_ATTEMPTS_DECAY_MINUTES, "email1" => $mail]
+		["decay_minutes" => LOGIN_ATTEMPTS_DECAY_MINUTES, "email1" => $email]
 	);
 }
 
@@ -230,7 +230,7 @@ function db_count_login_attempt_ip($db, $ip_address): int {
 	return intval(db_value($db, "SELECT COUNT(*) FROM login_attempt_ip WHERE ip_address = :ip_address AND date_attempt > NOW() - INTERVAL 15 MINUTE", ["ip_address" => $ip_address]));
 }
 
-function db_delete_vieux_login_attempt_ip($db) {
+function db_delete_old_login_attempt_ip($db) {
 	return db_exec($db, "DELETE FROM login_attempt_ip WHERE date_attempt < NOW() - INTERVAL 1 DAY");
 }
 
@@ -238,13 +238,13 @@ function db_delete_vieux_login_attempt_ip($db) {
 // Descriptions: the free-text labels of a day, and their links to the days
 // ---------------------------------------------------------------------------
 
-function db_select_description_no_exist($db, $no_description, $no_user_account): bool {
+function db_select_description_exists($db, $no_description, $no_user_account): bool {
 	return boolval(db_value($db, "SELECT COUNT(no_description) > 0 FROM description WHERE no_description = :no_description AND no_user_account = :no_user_account",
 		["no_description" => $no_description, "no_user_account" => $no_user_account]));
 }
 
 // is the name taken by another description of the account?
-function db_select_description_name_exist($db, $name, $no_user_account, $no_description): bool {
+function db_select_description_name_exists($db, $name, $no_user_account, $no_description): bool {
 	return boolval(db_value($db, "SELECT COUNT(no_description) > 0 FROM description WHERE name = :name AND no_user_account = :no_user_account AND no_description != :no_description",
 		["name" => $name, "no_user_account" => $no_user_account, "no_description" => $no_description]));
 }
@@ -414,7 +414,7 @@ function db_select_cycles($db, $no_user_account) {
 	return db_column($db, "SELECT date_obs FROM day_timeline WHERE no_user_account = :no_user_account AND cycle_1st_day = 1 ORDER BY date_obs DESC", ["no_user_account" => $no_user_account]);
 }
 
-function db_select_pregnancys($db, $no_user_account) {
+function db_select_pregnancies($db, $no_user_account) {
 	return db_column($db, "SELECT date_obs FROM day_timeline WHERE no_user_account = :no_user_account AND pregnancy = 1 ORDER BY date_obs DESC", ["no_user_account" => $no_user_account]);
 }
 
@@ -429,7 +429,7 @@ function db_select_cycle($db, $date, $no_user_account): ?string {
 // ---------------------------------------------------------------------------
 
 // the accounts whose cycle began two days ago, so that the cycle before it is finished
-function db_select_cycles_recent($db) {
+function db_select_cycles_finished($db) {
 	return db_rows($db,
 		"SELECT SUBDATE(obs.date_obs, 1) AS cycle_complet, obs.no_user_account, c.name, c.nfp_method, c.email1, c.email2
 		FROM day_timeline AS obs JOIN user_account AS c ON obs.no_user_account = c.no_user_account
@@ -438,14 +438,14 @@ function db_select_cycles_recent($db) {
 }
 
 // the accounts with no day written for 35 days, registered for more than that, not yet reminded
-function db_select_user_account_inactif($db) {
+function db_select_user_account_inactive($db) {
 	return db_rows($db,
-		"SELECT c.no_user_account, c.name, MAX(o.last_write_db) AS derniere_obs_modif, c.email1, c.email2, c.inscription_date
+		"SELECT c.no_user_account, c.name, MAX(o.last_write_db) AS last_day_written, c.email1, c.email2, c.inscription_date
 		FROM user_account AS c LEFT JOIN day_timeline AS o ON c.no_user_account = o.no_user_account
 		WHERE c.no_user_account != " . ACCOUNT_DEMO_ID . " AND c.is_inactive = 0
 		GROUP BY c.no_user_account, c.name, c.email1, c.email2, c.inscription_date
-		HAVING (DATE(derniere_obs_modif) < DATE(NOW()) - INTERVAL 35 DAY OR derniere_obs_modif IS NULL) AND c.inscription_date < DATE(NOW()) - INTERVAL 35 DAY
-		ORDER BY derniere_obs_modif DESC LIMIT 20"
+		HAVING (DATE(last_day_written) < DATE(NOW()) - INTERVAL 35 DAY OR last_day_written IS NULL) AND c.inscription_date < DATE(NOW()) - INTERVAL 35 DAY
+		ORDER BY last_day_written DESC LIMIT 20"
 	);
 }
 
@@ -482,16 +482,16 @@ function db_select_user_account_to_delete($db, $years) {
 // Statistics (the demo account is left out of all of them), and the visit counters
 // ---------------------------------------------------------------------------
 
-function db_select_nb_user_account($db) {
+function db_count_user_accounts($db) {
 	return db_value($db, "SELECT COUNT(no_user_account) FROM user_account");
 }
 
 // accounts with a day in the last 35 days
-function db_select_nb_user_account_actif($db) {
+function db_count_user_accounts_active($db) {
 	return db_value($db, "SELECT COUNT(DISTINCT no_user_account) FROM day_timeline WHERE date_obs >= DATE(NOW()) - INTERVAL 35 DAY");
 }
 
-function db_select_nb_user_account_actif_par_nfp_method($db, $nfp_method) {
+function db_count_user_accounts_active_by_method($db, $nfp_method) {
 	return db_value($db,
 		"SELECT COUNT(DISTINCT obs.no_user_account) FROM day_timeline AS obs JOIN user_account AS com ON obs.no_user_account = com.no_user_account
 		WHERE obs.date_obs >= DATE(NOW()) - INTERVAL 35 DAY AND com.nfp_method = :nfp_method",
@@ -500,45 +500,45 @@ function db_select_nb_user_account_actif_par_nfp_method($db, $nfp_method) {
 }
 
 // accounts registered in the last 15 days that have logged in
-function db_select_nb_user_account_recent($db) {
+function db_count_user_accounts_recent($db) {
 	return db_value($db, "SELECT COUNT(no_user_account) FROM user_account WHERE inscription_date >= DATE(NOW()) - INTERVAL 15 DAY AND last_auth_date IS NOT NULL");
 }
 
-function db_select_user_account_avec_totp($db) {
+function db_count_user_accounts_with_totp($db) {
 	return db_value($db, "SELECT COUNT(no_user_account) FROM user_account WHERE totp_state = " . TOTP_STATE_ACTIVE . " AND no_user_account != " . ACCOUNT_DEMO_ID);
 }
 
-function db_select_auth_token_user_account($db) {
+function db_count_auth_tokens($db) {
 	return db_value($db, "SELECT COUNT(no_auth_token) FROM auth_token");
 }
 
-function db_select_nb_cycle($db) {
+function db_count_cycles($db) {
 	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE cycle_1st_day = 1 AND no_user_account != " . ACCOUNT_DEMO_ID);
 }
 
-function db_select_nb_cycle_recent($db) {
+function db_count_cycles_recent($db) {
 	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE cycle_1st_day = 1 AND date_obs >= DATE(NOW()) - INTERVAL 30 DAY AND no_user_account != " . ACCOUNT_DEMO_ID);
 }
 
 // the average age: the DB holds a birth year, and 2.5 is half the 5 years the form groups
-function db_select_age_moyen($db) {
+function db_select_average_age($db) {
 	return db_value($db, "SELECT YEAR(NOW()) - AVG(age) + 2.5 FROM user_account");
 }
 
-function db_select_age_moyen_recent($db) {
+function db_select_average_age_recent($db) {
 	return db_value($db, "SELECT YEAR(NOW()) - AVG(age) + 2.5 FROM user_account WHERE inscription_date >= DATE(NOW()) - INTERVAL 15 DAY AND last_auth_date IS NOT NULL AND no_user_account != " . ACCOUNT_DEMO_ID);
 }
 
-function db_select_total_day_timeline_count($db) {
+function db_count_days($db) {
 	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE no_user_account != " . ACCOUNT_DEMO_ID);
 }
 
-function db_select_day_timeline_aujourdhui($db) {
+function db_count_days_today($db) {
 	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE date_obs = CURDATE() AND no_user_account != " . ACCOUNT_DEMO_ID);
 }
 
-function db_select_day_timeline_count($db, $nbj) {
-	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE date_obs >= DATE(NOW()) - INTERVAL :nbj DAY AND no_user_account != " . ACCOUNT_DEMO_ID, ["nbj" => $nbj]);
+function db_count_days_since($db, $nb_days) {
+	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE date_obs >= DATE(NOW()) - INTERVAL :nb_days DAY AND no_user_account != " . ACCOUNT_DEMO_ID, ["nb_days" => $nb_days]);
 }
 
 function db_select_key_value($db, $key) {

@@ -100,7 +100,7 @@ function mail_send_new_password(string $email, string $password): bool {
 		'Nouveau mot de passe temporaire: ' . $password);
 }
 
-// The export of a finished cycle (a row of db_select_cycles_recent()), with $files attached:
+// The export of a finished cycle (a row of db_select_cycles_finished()), with $files attached:
 // [file name => content].
 function mail_send_cycle(array $account, string $first_day, string $last_day, int $nb_days, array $files): bool {
 	$name = htmlspecialchars($account["name"]);

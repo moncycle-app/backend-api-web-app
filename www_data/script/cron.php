@@ -20,7 +20,7 @@ $db = db_open();
 
 // THE EXPORT OF A CYCLE THAT ENDED, by mail (cycles of at least 5 days)
 
-foreach (db_select_cycles_recent($db) as $account) {
+foreach (db_select_cycles_finished($db) as $account) {
 
 	$cycle_start = db_select_cycle($db, $account["cycle_complet"], $account["no_user_account"]);
 	if (is_null($cycle_start)) continue;
@@ -33,9 +33,9 @@ foreach (db_select_cycles_recent($db) as $account) {
 	doc_cycle_to_csv($csv, $days, $nfp_method);
 	rewind($csv);
 
-	$file_name = 'moncycle_app_' . date_humain(new DateTime($cycle_start), '_');
+	$file_name = 'moncycle_app_' . date_human(new DateTime($cycle_start), '_');
 	$sent = mail_send_cycle(
-		$account, date_humain(new DateTime($days[0]["date"])), date_humain(new DateTime(end($days)["date"])), count($days),
+		$account, date_human(new DateTime($days[0]["date"])), date_human(new DateTime(end($days)["date"])), count($days),
 		["$file_name.pdf" => doc_cycle_to_pdf($days, $nfp_method, $account["name"])->Output('S'), "$file_name.csv" => stream_get_contents($csv)]
 	);
 	fclose($csv);
@@ -45,7 +45,7 @@ foreach (db_select_cycles_recent($db) as $account) {
 
 // A REMINDER TO THE ACCOUNTS THAT HAVE GONE QUIET
 
-foreach (db_select_user_account_inactif($db) as $account) {
+foreach (db_select_user_account_inactive($db) as $account) {
 	$sent = mail_send_reminder($account);
 	if ($sent) db_update_is_inactive($db, $account["no_user_account"], 1);
 	echo ($sent ? "reminder sent to " : "COULD NOT send a reminder to ") . "{$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
@@ -65,8 +65,8 @@ foreach (db_select_user_account_to_delete($db, ACCOUNT_INACTIVITY_DELETE_YEARS) 
 
 // EXPIRED TOKENS
 
-echo db_delete_vieux_auth_token($db) . " old tokens deleted" . PHP_EOL;
-echo db_delete_vieux_login_attempt_ip($db) . " old login attempts (IP) deleted" . PHP_EOL;
+echo db_delete_old_auth_token($db) . " old tokens deleted" . PHP_EOL;
+echo db_delete_old_login_attempt_ip($db) . " old login attempts (IP) deleted" . PHP_EOL;
 
 // THE VISIT COUNTERS: every day, every Sunday, the first of the month
 

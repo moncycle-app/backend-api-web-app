@@ -20,7 +20,7 @@ if (!is_null($user_account)) {
 	http_error(409, "already_authenticated", "Account already logged in.", ["userId" => $user_account["no_user_account"]]);
 }
 
-if (!CREATION_COMPTE) {
+if (!REGISTRATION_ENABLED) {
 	http_error(403, "registration_disabled", "Account creation has been disabled.");
 }
 
@@ -39,7 +39,7 @@ if (!sec_captcha_matches($captcha, $body["captcha"] ?? "")) {
 	http_error(403, "captcha_invalid", "Error in captcha input.");
 }
 
-if (db_select_user_account_existe($db, $body["email"])) {
+if (db_select_user_account_exists($db, $body["email"])) {
 	http_error(409, "account_exists", "Account already exist.");
 }
 
@@ -48,7 +48,7 @@ if (intval($body["birthYear"]) < (intval(date("Y")) - 100) || intval($body["birt
 }
 
 // the password is generated, and only sent by mail
-$password = sec_password_aleatoire();
+$password = sec_random_password();
 $new_account_no = db_insert_user_account(
 	$db, $body["firstName"], account_method_id_from_json($body), intval($body["birthYear"]), $body["email"], sec_hash($password),
 	$body["discoveredComment"] ?? null, boolval($body["okForResearch"] ?? false)

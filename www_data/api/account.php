@@ -22,7 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
 		http_error(400, "missing_password", "'password' is required to confirm account deletion.");
 	}
 
-	$full_account = db_select_user_account_par_mail($db, $user_account["email1"]) ?? [];
+	$full_account = db_select_user_account_by_email($db, $user_account["email1"]) ?? [];
 
 	if (!isset($full_account["password"]) || !password_verify($body["password"], $full_account["password"])) {
 		http_error(401, "invalid_password", "Incorrect password.");
@@ -39,7 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
 $last_write_client_UTC = http_client_timestamp($body["lastWriteClientUtc"] ?? null);
 
 if (!empty($changed)) {
-	db_update_user_account_param($db, $user_account["no_user_account"], $new, $last_write_client_UTC);
+	db_update_user_account_settings($db, $user_account["no_user_account"], $new, $last_write_client_UTC);
 }
 
 http_data(200, [

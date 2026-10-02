@@ -14,7 +14,7 @@ require_once "../lib/sec.php";
 
 $db = db_open();
 $user_account = sec_auth_token($db);
-sec_redirect_non_connecte($user_account);
+sec_redirect_if_logged_out($user_account);
 
 // THE PERIOD AND THE FORMAT
 $start_date = date_parse_ymd($_GET['start_date'] ?? null) ?? http_text_error("date de démarrage non indiquée ou au mauvais format.");
@@ -56,7 +56,7 @@ if (!$has_data) {
 	http_text_error("il n'y a pas d'observation pour la période demandée.");
 }
 
-$filename = 'moncycle_app_' . date_humain(new DateTime($start_date), '_');
+$filename = 'moncycle_app_' . date_human(new DateTime($start_date), '_');
 
 if ($type === EXPORT_TYPE_CSV) {
 	header("Content-Type: text/csv; charset=utf-8");

@@ -20,11 +20,11 @@ require_once __DIR__ . "/db.php";
 // Passwords and tokens
 // ---------------------------------------------------------------------------
 
-function sec_password_aleatoire($taille=12){
+function sec_random_password($length=12){
 	$alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
 	$pass = [];
 	$alphaLength = strlen($alphabet)-1;
-	for ($i = 0; $i < $taille; $i++) {
+	for ($i = 0; $i < $length; $i++) {
 		$n = random_int(0, $alphaLength);
 		$pass[] = $alphabet[$n];
 	}
@@ -37,7 +37,7 @@ function sec_hash($text) {
 
 // fast, non-salted hash used to store/look up auth tokens: unlike sec_hash(), it must be
 // deterministic so a token can be matched with a plain `WHERE = :hash` query. Safe here
-// because the token itself already carries 256 chars of entropy (see sec_password_aleatoire).
+// because the token itself already carries 256 chars of entropy (see sec_random_password).
 function sec_hash_token($token) {
 	return hash("sha256", $token);
 }
@@ -77,7 +77,7 @@ function sec_auth_token($db) {
 	return null;
 }
 
-function sec_exit_si_non_connecte($user_account) {
+function sec_exit_if_logged_out($user_account) {
 	if (is_null($user_account)) {
 		http_response_code(401);
 		echo json_encode(["error" => ["code" => "unauthorized", "message" => "Authentication required."]]);
@@ -85,7 +85,7 @@ function sec_exit_si_non_connecte($user_account) {
 	}
 }
 
-function sec_redirect_non_connecte($user_account) {
+function sec_redirect_if_logged_out($user_account) {
 	if (is_null($user_account)) {
 		header('Location: auth');
 		http_response_code(401);
@@ -94,24 +94,24 @@ function sec_redirect_non_connecte($user_account) {
 }
 
 // Opens a session: stores a new token for the account, sets its cookie, and returns it.
-function sec_auth_succes($db, $user_account, $appareil=null) {
-	$auth_token = sec_password_aleatoire(256);
+function sec_auth_success($db, $user_account, $device=null) {
+	$auth_token = sec_random_password(256);
 
-	db_insert_auth_token($db, $user_account["no_user_account"], $appareil ?? ("AUTH | " . $_SERVER['HTTP_USER_AGENT']), "FR", sec_hash_token($auth_token));
-	db_update_user_account_connecte($db, $user_account["no_user_account"]);
+	db_insert_auth_token($db, $user_account["no_user_account"], $device ?? ("AUTH | " . $_SERVER['HTTP_USER_AGENT']), "FR", sec_hash_token($auth_token));
+	db_update_user_account_logged_in($db, $user_account["no_user_account"]);
 	sec_set_token_cookie($auth_token, '+5 years');
 
 	return $auth_token;
 }
 
-function sec_offuscate_str($str) {
+function sec_obfuscate($str) {
 	return substr($str, 0, 3) . " [masqué] " . substr($str, -3);
 }
 
 // the row with the given secret columns masked, for the data export
-function sec_offuscate_columns(array $row, array $columns): array {
+function sec_obfuscate_columns(array $row, array $columns): array {
 	foreach ($columns as $column) {
-		if (isset($row[$column])) $row[$column] = sec_offuscate_str($row[$column]);
+		if (isset($row[$column])) $row[$column] = sec_obfuscate($row[$column]);
 	}
 	return $row;
 }
@@ -163,7 +163,7 @@ function sec_captcha_issue($db, string $phrase): void {
 	$known = $cookie_token !== "" && !is_null(db_select_auth_token_captcha($db, $cookie_token));
 
 	if (!$known) {
-		$cookie_token = sec_password_aleatoire(64);
+		$cookie_token = sec_random_password(64);
 		$user_agent = $_SERVER['HTTP_USER_AGENT'];
 		if (strlen($user_agent) > 200) $user_agent = substr($user_agent, 0, 200) . " ...";
 		db_insert_auth_token($db, NULL, "CAPTCHA | " . $user_agent, "FR", $cookie_token, 3);
@@ -244,7 +244,7 @@ function sec_login($db, array $body): array {
 	}
 
 	$client_ip = sec_client_ip();
-	$user_account = db_select_user_account_par_mail($db, $body["email"]) ?? [];
+	$user_account = db_select_user_account_by_email($db, $body["email"]) ?? [];
 	$account_locked = sec_login_account_locked($user_account);
 
 	// surfaced on every outcome below (successes included): it is a hint for the client's *next*
@@ -254,12 +254,12 @@ function sec_login($db, array $body): array {
 
 	// a refusal counted against the IP, and against the account when it is a wrong credential
 	$counted = function (int $status, string $code, string $message, bool $wrong_credential = false) use ($db, $client_ip, $body, $meta, $refuse) {
-		if ($wrong_credential) db_update_co_echoue($db, $body["email"]);
+		if ($wrong_credential) db_update_login_failure($db, $body["email"]);
 		db_insert_login_attempt_ip($db, $client_ip);
 		return $refuse($status, $code, $message, $meta);
 	};
 
-	if (!CONNEXION_COMPTE) return $counted(403, "login_disabled", "Login is disabled.");
+	if (!LOGIN_ENABLED) return $counted(403, "login_disabled", "Login is disabled.");
 
 	// already throttled: not counted again, or a blocked IP could grow this table forever
 	if (LOGIN_IP_MAX_ATTEMPTS > 0 && db_count_login_attempt_ip($db, $client_ip) >= LOGIN_IP_MAX_ATTEMPTS) {
@@ -293,7 +293,7 @@ function sec_login($db, array $body): array {
 
 	unset($user_account["password"], $user_account["totp_secret"]);
 	return ["status" => 200, "data" => array_merge([
-		"token" => sec_auth_succes($db, $user_account),
+		"token" => sec_auth_success($db, $user_account),
 		"userId" => $user_account["no_user_account"],
 		"totpUsed" => $totp_active,
 	], $meta)];

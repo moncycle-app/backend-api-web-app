@@ -62,8 +62,8 @@ Tested with:
 | SMTP_PORT | SMTP server port |
 | SMTP_MAIL | SMTP email address (also used for authentication) |
 | SMTP_PASSWORD | SMTP password |
-| CREATION_COMPTE | Enable account creation for MONCYCLE.APP (boolean, default: true) |
-| CONNEXION_COMPTE | Enable authentication for MONCYCLE.APP (boolean, default: true) |
+| REGISTRATION_ENABLED | Enable account creation for MONCYCLE.APP (boolean, default: true). Formerly `CREATION_COMPTE`, still read. |
+| LOGIN_ENABLED | Enable authentication for MONCYCLE.APP (boolean, default: true). Formerly `CONNEXION_COMPTE`, still read. |
 | CSV_SEP | Separator for CSV exports |
 | PDF_BILLINGS_BORDERS | Draw the lines of the Billings PDF chart (boolean, default: true; false for a chart with no line at all) |
 | LOGIN_ATTEMPTS_DECAY_MINUTES | Failed logins on an account older than this restart the count (integer, default: 60; 0 counts nothing, so no captcha and no lockout) |

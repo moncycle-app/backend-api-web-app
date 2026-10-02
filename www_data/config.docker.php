@@ -34,8 +34,9 @@ if (getenv("SMTP_PASSWORD_FILE") && strlen(getenv("SMTP_PASSWORD_FILE"))>0 && is
 }
 else define("SMTP_PASSWORD", env_string("SMTP_PASSWORD"));
 
-define("CREATION_COMPTE",  env_bool("CREATION_COMPTE", true));
-define("CONNEXION_COMPTE", env_bool("CONNEXION_COMPTE", true));
+// (CREATION_COMPTE and CONNEXION_COMPTE, the French names of these two, are still read)
+define("REGISTRATION_ENABLED", env_bool("REGISTRATION_ENABLED", env_bool("CREATION_COMPTE", true)));
+define("LOGIN_ENABLED", env_bool("LOGIN_ENABLED", env_bool("CONNEXION_COMPTE", true)));
 
 define("CSV_SEP", env_string("CSV_SEP", ";"));
 
@@ -48,7 +49,7 @@ define("PHP_SECURE_COOKIES", env_bool("PHP_SECURE_COOKIES", true));
 
 // Login brute-force defense. A value of 0 turns the feature it sets off.
 // Failed attempts on an account older than this many minutes restart at 1 (0: they are not
-// counted at all, so there is no captcha and no lockout); db_update_co_echoue() binds it too.
+// counted at all, so there is no captcha and no lockout); db_update_login_failure() binds it too.
 define("LOGIN_ATTEMPTS_DECAY_MINUTES", env_int("LOGIN_ATTEMPTS_DECAY_MINUTES", 60));
 // Failed attempts on an account after which login asks for a captcha (0: never).
 define("LOGIN_CAPTCHA_THRESHOLD", env_int("LOGIN_CAPTCHA_THRESHOLD", 3));
