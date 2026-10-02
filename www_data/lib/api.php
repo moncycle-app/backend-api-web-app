@@ -8,7 +8,7 @@
 */
 
 // What every JSON endpoint starts with, and so the lib files every endpoint can count on.
-// An endpoint that needs more (doc.php, nfp_file.php, mail.php...) requires them itself.
+// An endpoint that needs more (doc_export.php, nfp_import.php, mail.php...) requires them itself.
 
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/http.php";

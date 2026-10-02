@@ -10,7 +10,7 @@
 /*
 ** Imports an NFP file into the logged-in account.
 **
-** The four stages of lib/nfp_file.php run in order and nothing is written until all the
+** The four stages of lib/nfp_import.php run in order and nothing is written until all the
 ** checking ones have passed, so the account is either updated with the whole file or not
 ** touched at all:
 **

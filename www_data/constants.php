@@ -155,7 +155,6 @@ const NFP_LIMIT_CYCLES = 120;               // advisory -- ~10 years of cycles i
 const NFP_LIMIT_DAYS_PER_CYCLE = 400;       // advisory -- a pregnancy-length cycle still fits
 const NFP_LIMIT_DAYS_TOTAL = 4000;          // advisory
 const NFP_LIMIT_DESCRIPTIONS_PER_DAY = 20;  // advisory -- nothing caps the links of a day
-const NFP_LIMIT_SOURCE_APP_CHARS = 255;     // fileInformation.sourceApp
 
 // Outside DAY_TEMPERATURE_STORABLE_* a file is refused; outside the narrower band a human body
 // reaches (these two, advisory) it only draws a warning.
@@ -168,9 +167,6 @@ const NFP_FUTURE_GRACE_DAYS = 1;            // days past today still accepted: a
 const NFP_STAMP_COLORS = ["Green", "Red", "Yellow", "White"];
 const NFP_SEX_UNIONS = ["Union", "ReservedUnion", "LastReportedUnion"];
 const NFP_ARROWS = ["Up", "Down", "Right"];
-const NFP_TRIPLE_CHOICE = ["Yes", "No", "Undecided"];
-const NFP_END_OF_CYCLE_FOLLOW_UP = ["Pregnancy", "Menopause", "Disease", "Other"];
-const NFP_CYCLE_PARTICULAR_CASES = ["FirstEyedCycle", "PostPill", "Pregnancy", "PostPartum"];
 
 // The spec's _incompatibleWith list for mucusNotObserved (a day with nothing recorded cannot hold
 // an observation). "codifiedBloodObservation" in the spec is corrected to "codifiedBleedingObservation".

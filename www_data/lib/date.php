@@ -7,10 +7,6 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
-function date_sql($date) {
-	return date_format($date, 'Y-m-d');
-}
-
 function date_human($date, $sep='/') {
 	return date_format($date, 'd' . $sep . 'm' . $sep . 'y');
 }

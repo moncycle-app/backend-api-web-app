@@ -12,7 +12,7 @@
 //   - the DB row of day_timeline, with the packed columns (stamp, fc_score, fc_arrow);
 //   - the structured JSON "day" the API speaks, on the vocabulary of the NFP file format
 //     (stampColor, isPeak, codifiedArrow, ...): api/day.php, api/sync.php;
-//   - the NFP day (lib/nfp_file.php), which is this JSON day with a few fields renamed, and which is
+//   - the NFP day (lib/nfp_export.php, lib/nfp_import.php), which is this JSON day with a few fields renamed, and which is
 //     read into it before it is stored.
 //
 // This file is the only place that knows the packed encoding, and the rules a day has to follow

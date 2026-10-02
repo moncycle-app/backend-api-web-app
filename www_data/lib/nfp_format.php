@@ -11,7 +11,7 @@
 ** The NFP interchange format: its vocabulary, its hard limits, its JSON Schemas, and the
 ** translation of older variants of the format into the one shape the rest of the code reads.
 **
-** This file knows the *format*. lib/nfp_file.php knows how the format maps onto this app's
+** This file knows the *format*. lib/nfp_export.php and lib/nfp_import.php know how the format maps onto this app's
 ** storage. Nothing here touches the DB or the request.
 **
 ** The reference for schema version 1.0 is the format's own structure document: a per-field
@@ -23,7 +23,7 @@
 **    (stampColor, sexUnion, the Yes/No/Undecided triples, ...).
 **  - "_methodValidation": null for a method means "this field is not part of that method",
 **    which is advisory. It is reported, never used to reject a file -- see
-**    nfp_import_day() in lib/nfp_file.php.
+**    nfp_import_day() in lib/nfp_import.php.
 */
 
 // The constants of the format (the schema version, the limits, the temperature band, the
@@ -36,7 +36,7 @@
 // ---------------------------------------------------------------------------
 // JSON Schemas, validated against the *canonical* shape -- so run
 // nfp_format_normalize() first. They cover structure and types only; range,
-// calendar, length and cross-field consistency checks live in lib/nfp_file.php,
+// calendar, length and cross-field consistency checks live in lib/nfp_import.php,
 // which can report the cycle and day a problem belongs to.
 //
 // Deliberately absent: maxItems on "cycles", on a cycle's "days", and on the two

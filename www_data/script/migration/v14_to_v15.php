@@ -175,7 +175,7 @@ try {
     // (no_user_account IS NOT NULL); captcha challenges reuse the same column but have
     // no_user_account NULL and are left alone, since their lookup (db_select_auth_token_captcha)
     // still matches on the plain value. Re-running this script is safe: a row already
-    // hashed has strlen 64 (sha256 hex), not 256 (sec_password_aleatoire(256) output), so
+    // hashed has strlen 64 (sha256 hex), not 256 (sec_random_password(256) output), so
     // it gets skipped on a second pass.
     $statement_select_tokens = $db->prepare("SELECT no_auth_token, auth_token_str FROM `auth_token` WHERE no_user_account IS NOT NULL");
     $statement_hash_token = $db->prepare("UPDATE `auth_token` SET `auth_token_str` = :hashed_token WHERE `no_auth_token` = :no_auth_token");
