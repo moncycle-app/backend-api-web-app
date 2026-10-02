@@ -14,12 +14,12 @@
 ** checking ones have passed, so the account is either updated with the whole file or not
 ** touched at all:
 **
-**   1. nfp_file_parse()        size, encoding, JSON, schema version
-**   2. nfp_file_schema_errors() structure and types
-**   3. nfp_file_build_plan()   calendar, ranges, lengths, cycle overlap -> the write plan
-**   4. nfp_file_write_plan()   inside one transaction
+**   1. nfp_import_parse()        size, encoding, JSON, schema version
+**   2. nfp_import_schema_errors() structure and types
+**   3. nfp_import_build_plan()   calendar, ranges, lengths, cycle overlap -> the write plan
+**   4. nfp_import_write_plan()   inside one transaction
 **
-** ?dryRun=1 answers for stage 4 without running it: nfp_file_preview_plan() reads the account
+** ?dryRun=1 answers for stage 4 without running it: nfp_import_preview_plan() reads the account
 ** and reports what the write would have done -- which days of the file the account already
 ** holds, and which free-text labels are new -- so the user can see what is at stake, and in
 ** particular decide on 'overide', before anything is written. A dry run that is refused also
@@ -32,7 +32,7 @@
 
 require_once "../config.php";
 require_once "../lib/api.php";
-require_once "../lib/nfp_file.php";
+require_once "../lib/nfp_import.php";
 
 [$db, $user_account] = api_start();
 
@@ -62,7 +62,7 @@ $last_write_client_UTC = http_client_timestamp($_GET['lastWriteClientUtc'] ?? nu
 // ---------------------------------------------------------------------------
 
 $content_length = isset($_SERVER['CONTENT_LENGTH']) ? intval($_SERVER['CONTENT_LENGTH']) : null;
-$parsed = nfp_file_parse(file_get_contents('php://input'), $content_length);
+$parsed = nfp_import_parse(file_get_contents('php://input'), $content_length);
 
 if (!$parsed["ok"]) {
 	$status = $parsed["code"] === "file_too_large" ? 413 : 400;
@@ -75,7 +75,7 @@ $nfp_file = $parsed["file"];
 // Stage 2 -- structure and types
 // ---------------------------------------------------------------------------
 
-$schema_errors = nfp_file_schema_errors($nfp_file);
+$schema_errors = nfp_import_schema_errors($nfp_file);
 if (!empty($schema_errors)) {
 	http_error(400, "invalid_nfp_structure", "The file does not match the NFP schema.", ["issues" => $schema_errors]);
 }
@@ -84,7 +84,7 @@ if (!empty($schema_errors)) {
 // Stage 3 -- semantics and consistency
 // ---------------------------------------------------------------------------
 
-$checked = nfp_file_build_plan($nfp_file, $user_account);
+$checked = nfp_import_build_plan($nfp_file, $user_account);
 
 if (!empty($checked["issues"])) {
 	$details = [
@@ -123,7 +123,7 @@ $report = [
 ];
 
 if ($dry_run) {
-	$previewed = nfp_file_preview_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide);
+	$previewed = nfp_import_preview_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide);
 
 	// same merge as the real run below, because the preview answers in the writer's shape
 	$report["mappedFields"] = array_merge($report["mappedFields"], $previewed["narrowed"]);
@@ -140,7 +140,7 @@ if ($dry_run) {
 // an import counts as activity, same as a POST to /api/day
 data_reactivate_account($db, $user_account);
 
-$written = nfp_file_write_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide, $last_write_client_UTC);
+$written = nfp_import_write_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide, $last_write_client_UTC);
 
 // the writer finds one kind of narrowing of its own (a label already recorded under the other
 // type), so its list joins the ones found while checking

@@ -23,7 +23,7 @@
 **    (stampColor, sexUnion, the Yes/No/Undecided triples, ...).
 **  - "_methodValidation": null for a method means "this field is not part of that method",
 **    which is advisory. It is reported, never used to reject a file -- see
-**    nfp_file_day_from_nfp() in lib/nfp_file.php.
+**    nfp_import_day() in lib/nfp_file.php.
 */
 
 // The constants of the format (the schema version, the limits, the temperature band, the

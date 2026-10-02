@@ -8,8 +8,9 @@
 */
 
 require_once "../config.php";
-require_once "../lib/doc.php";
-require_once "../lib/nfp_file.php";
+require_once "../lib/doc_csv.php";
+require_once "../lib/doc_export.php";
+require_once "../lib/nfp_export.php";
 require_once "../lib/sec.php";
 
 $db = db_open();
@@ -62,19 +63,19 @@ if ($type === EXPORT_TYPE_CSV) {
 	header("Content-Type: text/csv; charset=utf-8");
 	header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
 	$out = fopen('php://output', 'w');
-	doc_cycle_to_csv($out, $days, $nfp_method);
+	doc_csv_cycle($out, $days, $nfp_method);
 	fclose($out);
 }
 
 elseif ($type === EXPORT_TYPE_PDF) {
-	$pdf = doc_cycle_to_pdf($days, $nfp_method, $user_account["name_user_account"], $anonymous);
+	$pdf = doc_export_pdf($days, $nfp_method, $user_account["name_user_account"], $anonymous);
 	// 'D' sends the Content-Type and an attachment Content-Disposition itself
 	$pdf->Output('D', $filename . '.pdf', true);
 }
 
 else {
 	$app_version = json_decode(file_get_contents("version.json"), true)["version"] ?? "";
-	$nfp_data = nfp_file_export($db, $start_date, $end_date, $user_account, $anonymous, $app_version);
+	$nfp_data = nfp_export_file($db, $start_date, $end_date, $user_account, $anonymous, $app_version);
 
 	header('Content-Type: application/json');
 	if (!$json_in_page) header('Content-Disposition: attachment; filename="' . $filename . '.nfp"');

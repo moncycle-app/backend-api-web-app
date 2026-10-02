@@ -8,163 +8,27 @@
 */
 
 /*
-** The NFP file pipeline: day_timeline <-> the NFP interchange format.
+** The NFP import: an NFP file read into day_timeline, in four stages the endpoint calls in order:
 **
-** lib/nfp_format.php owns the format (vocabulary, limits, schema, legacy variants). This file
-** owns the mapping onto this app's storage, in four stages the endpoints call in order:
+**   nfp_import_parse()          raw request body -> canonical object, or a transport-level refusal
+**   nfp_import_schema_errors()  structure and types, via the JSON Schema
+**   nfp_import_build_plan()     semantics, consistency, and the per-day write plan
+**   nfp_import_write_plan()     the only stage that writes, and only inside a transaction
 **
-**   nfp_file_parse()       raw request body -> canonical object, or a transport-level refusal
-**   nfp_file_schema_errors()  structure and types, via the JSON Schema
-**   nfp_file_build_plan()  semantics, consistency, and the per-day write plan
-**   nfp_file_write_plan()  the only stage that writes, and only inside a transaction
+** Nothing is written before all three checking stages have passed, so a file is either imported
+** whole or not at all. lib/nfp_format.php owns the format (vocabulary, limits, schema, legacy
+** variants); this file owns the mapping onto this app's storage.
 **
-** Nothing is written before all three checking stages have passed, so a file is either
-** imported whole or not at all.
-**
-** The per-day encoding is NOT duplicated here. day_format_to_json() / day_format_from_json() in
-** lib/day_format.php already translate between the packed DB columns (stamp, fc_score,
-** fc_arrow) and a structured day shape built on the NFP vocabulary, and they are what
-** api/day.php writes through. This file reuses them so an imported day and a day posted to
-** /api/day go through exactly the same encoder, and the packed-code knowledge stays in one
-** place.
+** The per-day encoding is not duplicated here: a day of the file is read into the JSON day of
+** lib/day_format.php, and from there it is stored by the same code as a day posted to /api/day
+** (data_write_day()), so the packed-code knowledge stays in one place.
 */
 
 require_once __DIR__ . "/account.php";
 require_once __DIR__ . "/data.php";
-require_once __DIR__ . "/db.php";
-require_once __DIR__ . "/date.php";
 require_once __DIR__ . "/day_format.php";
+require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/nfp_format.php";
-
-// ===========================================================================
-// EXPORT
-// ===========================================================================
-
-// One stored day -> one NFP day. Takes the JSON day day_format_to_json() produces, and keeps only
-// what the format defines, dropping anything empty so a quiet day stays small. An empty array is a
-// day with nothing recorded, which the format writes as "{}".
-function nfp_file_day_to_nfp(array $day): array {
-	$nfp = [];
-
-	$comment = day_format_clean_text((string) ($day['comment'] ?? ''));
-	if ($comment !== '') $nfp['comments'] = [$comment];
-
-	if (!empty($day['dayNotObserved'])) $nfp['mucusNotObserved'] = true;
-	if (day_format_filled($day, 'stampColor')) $nfp['stampColor'] = $day['stampColor'];
-	if (!empty($day['stampBaby'])) $nfp['stampBaby'] = true;
-
-	// The method is not consulted here on purpose. A stored value is exported whatever the
-	// account's current method says, because dropping recorded data from a portability file is
-	// worse than a receiving app meeting a field it does not expect -- and the format marks these
-	// fields _customValuesAllowed anyway. In practice each method only ever fills its own.
-	// ("0", dryness, is a real code: day_format_filled() keeps it where empty() would not.)
-	foreach ([...array_keys(DAY_FORMAT_FC_GROUPS), 'codifiedArrow'] as $field) {
-		if (day_format_filled($day, $field)) $nfp[$field] = (string) $day[$field];
-	}
-
-	foreach (['freeMucusSensation', 'freeMucusObservation'] as $field) {
-		if (!empty($day[$field]) && is_array($day[$field])) $nfp[$field] = array_values($day[$field]);
-	}
-
-	// a temperature of 0 is "none recorded", not a reading
-	if (!empty($day['temperature'])) {
-		$nfp['temperature'] = round(floatval($day['temperature']), 2);
-		if (day_format_filled($day, 'temperatureTime')) $nfp['temperatureTime'] = $day['temperatureTime'];
-	}
-
-	if (!empty($day['isPeak'])) $nfp['isPeak'] = true;
-	if (!empty($day['booleanPregnancyDetected'])) $nfp['booleanPregnancyDetected'] = true;
-	// day_timeline records only whether there was a union, not which kind
-	if (!empty($day['sexUnion'])) $nfp['sexUnion'] = 'Union';
-	if (!empty($day['counterStart'])) $nfp['counterStart'] = intval($day['counterStart']);
-
-	return $nfp;
-}
-
-// The cycles of a period, split at each cycle first day.
-//
-// The period is widened backwards to the first day of the cycle containing $start_date, so a
-// cycle is never exported cut in half, and it never runs past today. Three queries total: the
-// cycle lookup, the days, and the descriptions of those days in one go.
-function nfp_file_export_cycles($db, string $start_date, string $end_date, array $user_account): array {
-	$no_user_account = intval($user_account["no_user_account"]);
-	$method = account_method_name(intval($user_account["nfp_method"]));
-
-	$cycle_start_date = db_select_cycle($db, $start_date, $no_user_account) ?? $start_date;
-
-	$raw_days = db_select_day_timelines_frame($db, $cycle_start_date, $end_date, $no_user_account);
-	$raw_days = array_column($raw_days, null, 'date_obs');
-
-	$description_rows = db_select_descriptions_for_day_timeline_frame($db, $cycle_start_date, $end_date, $no_user_account);
-	$descriptions_by_day = [];
-	foreach ($description_rows as $row) {
-		$descriptions_by_day[intval($row["no_day"])][] = $row;
-	}
-
-	$cycles = [];
-	$current = ["method" => $method, "cycleStartDate" => $cycle_start_date, "days" => []];
-
-	$cursor = new DateTime($cycle_start_date);
-	$last_date = new DateTime($end_date);
-	$today = new DateTime('today');
-	if ($last_date > $today) $last_date = $today;
-
-	while ($cursor <= $last_date) {
-		$date = $cursor->format('Y-m-d');
-
-		if (!isset($raw_days[$date])) {
-			$current["days"][] = new stdClass();      // a gap: "{}" in the file
-			$cursor->modify('+1 day');
-			continue;
-		}
-
-		$row = $raw_days[$date];
-		$row["cycle"] = $current["cycleStartDate"];
-		$row["description"] = $descriptions_by_day[intval($row["no_day"])] ?? [];
-		$row["pos"] = null;                            // positional, and the format has no field for it
-		$nfp_day = nfp_file_day_to_nfp(day_format_to_json($row));
-
-		if (!empty($row["cycle_1st_day"]) && $date !== $current["cycleStartDate"]) {
-			$cycles[] = $current;
-			$current = ["method" => $method, "cycleStartDate" => $date, "days" => []];
-		}
-
-		$current["days"][] = empty($nfp_day) ? new stdClass() : $nfp_day;
-		$cursor->modify('+1 day');
-	}
-
-	$cycles[] = $current;
-	return $cycles;
-}
-
-// The whole file. $anonymous leaves out everything identifying, for sharing with a
-// practitioner; the data itself is unchanged.
-function nfp_file_export($db, string $start_date, string $end_date, array $user_account, bool $anonymous, string $app_version): array {
-	$file = [
-		"schemaVersion" => NFP_SCHEMA_VERSION,
-		"fileInformation" => [
-			"sourceApp" => "moncycle.app",
-			"sourceAppVersion" => $app_version,
-			"fileCreationTimestamp" => date('c'),
-		],
-	];
-
-	if (!$anonymous) {
-		$user = ["identifier" => strval($user_account["no_user_account"])];
-		if (!empty($user_account["name_user_account"])) $user["firstName"] = $user_account["name_user_account"];
-		if (!empty($user_account["email1"])) $user["email"] = $user_account["email1"];
-		// birthDate is deliberately absent: user_account.age holds a birth *year*, and the
-		// format's birthDate is a full YYYY-MM-DD, which would mean inventing a day and month.
-		$file["userInformation"] = $user;
-	}
-
-	$file["userMethodPreferences"] = [
-		"preferredMethod" => account_method_name(intval($user_account["nfp_method"])),
-	];
-	$file["cycles"] = nfp_file_export_cycles($db, $start_date, $end_date, $user_account);
-
-	return $file;
-}
 
 // ===========================================================================
 // IMPORT -- stage 1: the request body
@@ -173,7 +37,7 @@ function nfp_file_export($db, string $start_date, string $end_date, array $user_
 // Returns ["ok" => true, "file" => object] or ["ok" => false, "code" =>, "message" =>,
 // "details" => []]. Everything here is a transport-level refusal: too big, not UTF-8, not
 // JSON, or a schema version this build does not implement.
-function nfp_file_parse(string $raw, ?int $content_length = null): array {
+function nfp_import_parse(string $raw, ?int $content_length = null): array {
 	$refuse = fn(string $code, string $message, array $details = []) =>
 		["ok" => false, "code" => $code, "message" => $message, "details" => $details];
 
@@ -235,8 +99,8 @@ function nfp_file_parse(string $raw, ?int $content_length = null): array {
 // ===========================================================================
 
 // Each error reads "[where] what is wrong", with "where" the path inside the file
-// (cycles[0].days[7].temperature). Expects the canonical shape, so run nfp_file_parse() first.
-function nfp_file_schema_errors(object $file): array {
+// (cycles[0].days[7].temperature). Expects the canonical shape, so run nfp_import_parse() first.
+function nfp_import_schema_errors(object $file): array {
 	$schema = json_decode(NFP_FILE_SCHEMA);
 
 	$storage = new \JsonSchema\SchemaStorage();
@@ -277,7 +141,7 @@ function nfp_file_schema_errors(object $file): array {
 **
 ** Nothing here touches the DB.
 */
-function nfp_file_build_plan(object $file, array $user_account): array {
+function nfp_import_build_plan(object $file, array $user_account): array {
 	$issues = [];
 	$warnings = [];
 	$ignored = [];
@@ -308,7 +172,7 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 	}
 
 	$cycles = nfp_format_get($file, "cycles");
-	if (!is_array($cycles)) return nfp_file_plan_result(["[file] 'cycles' must be an array."], [], [], [], [], [], 0, 0);
+	if (!is_array($cycles)) return nfp_import_plan_result(["[file] 'cycles' must be an array."], [], [], [], [], [], 0, 0);
 
 	// The three count limits below are advisory (see the NFP_LIMIT_ block in nfp_format.php):
 	// /export is bounded by the date range asked for, not by them, so a long enough export
@@ -430,7 +294,7 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 			$dates_seen[$date] = $where;
 
 			$is_cycle_first_day = ($day_index === 0);
-			$mapping = nfp_file_day_from_nfp($nfp_day, $method, $date);
+			$mapping = nfp_import_day($nfp_day, $method, $date);
 
 			$issues = array_merge($issues, $mapping["issues"]);
 			$warnings = array_merge($warnings, $mapping["warnings"]);
@@ -475,10 +339,10 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 		}
 	}
 
-	return nfp_file_plan_result($issues, $warnings, $ignored, $mapped, $duplicates, $plan, count($cycles), $days_read);
+	return nfp_import_plan_result($issues, $warnings, $ignored, $mapped, $duplicates, $plan, count($cycles), $days_read);
 }
 
-function nfp_file_plan_result(array $issues, array $warnings, array $ignored, array $mapped, array $duplicates, array $plan, int $cycles_read, int $days_read): array {
+function nfp_import_plan_result(array $issues, array $warnings, array $ignored, array $mapped, array $duplicates, array $plan, int $cycles_read, int $days_read): array {
 	return [
 		"issues" => $issues,
 		"warnings" => $warnings,
@@ -508,7 +372,7 @@ function nfp_file_plan_result(array $issues, array $warnings, array $ignored, ar
 ** but "Dry|Humid|Wet|Lubricated" under symptothermic_fr. Only the FertilityCare reading can
 ** be stored, so under any other method those keys are reported rather than written.
 */
-function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): array {
+function nfp_import_day(object $nfp_day, string $method, string $date): array {
 	$day = [];
 	$issues = [];
 	$warnings = [];
@@ -764,7 +628,7 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 // ===========================================================================
 
 /*
-** The dry run's answer, in the same shape nfp_file_write_plan() returns, so one report
+** The dry run's answer, in the same shape nfp_import_write_plan() returns, so one report
 ** describes a checked file and an imported one alike.
 **
 ** Re-running the checks is not enough on its own: the question a user has before importing is
@@ -781,7 +645,7 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 **
 ** Read-only: two SELECTs, no transaction, nothing here can write.
 */
-function nfp_file_preview_plan($db, int $no_user_account, array $plan, bool $overide): array {
+function nfp_import_preview_plan($db, int $no_user_account, array $plan, bool $overide): array {
 	$already = [];
 	$created = [];
 	$overwritten = [];
@@ -804,7 +668,7 @@ function nfp_file_preview_plan($db, int $no_user_account, array $plan, bool $ove
 		}
 	}
 
-	// Same walk as nfp_file_write_plan(): over the days it would write (a skipped day writes no
+	// Same walk as nfp_import_write_plan(): over the days it would write (a skipped day writes no
 	// labels either), sensations before observations, each name resolved once with its first
 	// use deciding the type. $recorded plays the part its $cache does, holding only the type.
 	$recorded = [];
@@ -825,7 +689,7 @@ function nfp_file_preview_plan($db, int $no_user_account, array $plan, bool $ove
 					$descriptions_created += 1;
 				}
 				elseif ($recorded[$name] !== $type) {
-					$narrowed[] = nfp_file_narrowed_description_note($entry["date"], $name, $recorded[$name]);
+					$narrowed[] = nfp_import_narrowed_note($entry["date"], $name, $recorded[$name]);
 				}
 			}
 		}
@@ -847,9 +711,9 @@ function nfp_file_preview_plan($db, int $no_user_account, array $plan, bool $ove
 
 // The one narrowing a label can go through: the file uses a name under one type and the
 // account already records it under the other. The label keeps the type it has, so this is a
-// report and not a change. nfp_file_preview_plan() has to predict exactly what
+// report and not a change. nfp_import_preview_plan() has to predict exactly what
 // data_resolve_description() says, hence the shared wording.
-function nfp_file_narrowed_description_note(string $date, string $name, int $recorded_type): string {
+function nfp_import_narrowed_note(string $date, string $name, int $recorded_type): string {
 	// a label of undefined type is just called a label
 	$type_name = $recorded_type === DESCRIPTION_TYPE_UNDEFINED ? "label" : (DESCRIPTION_TYPE_NAMES[$recorded_type] ?? "label");
 	return sprintf(
@@ -866,7 +730,7 @@ function nfp_file_narrowed_description_note(string $date, string $name, int $rec
 ** same semantics as a POST to /api/day, which also carries the full state of a day, and which
 ** writes through the same data_write_day().
 */
-function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overide, string $last_write_client_UTC): array {
+function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $overide, string $last_write_client_UTC): array {
 	return db_transaction($db, function () use ($db, $no_user_account, $plan, $overide, $last_write_client_UTC) {
 		$created = [];
 		$overwritten = [];
@@ -893,7 +757,7 @@ function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overi
 					$description = data_resolve_description($db, $no_user_account, $name, $type, $last_write_client_UTC, $known);
 					if ($description["created"]) $descriptions_created += 1;
 					// asking for the other type is a narrowing: the label keeps the one it has
-					if ($description["type"] !== $type) $narrowed[] = nfp_file_narrowed_description_note($date, $name, $description["type"]);
+					if ($description["type"] !== $type) $narrowed[] = nfp_import_narrowed_note($date, $name, $description["type"]);
 					$no_descriptions[] = $description["id"];
 				}
 			}
@@ -906,7 +770,7 @@ function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overi
 
 		// daysAlreadyInAccount is the union of the two lists above, and it is reported on its own
 		// because it is the one that does not depend on $overide: it says which days of the file
-		// the account already had, whichever way they were treated. nfp_file_preview_plan() answers
+		// the account already had, whichever way they were treated. nfp_import_preview_plan() answers
 		// with the same keys, so a dry run and a real one report the same shape.
 		return [
 			"daysCreated" => $created,
