@@ -15,7 +15,7 @@ header('Content-Type: application/json');
 
 try {
 	$db = db_open();
-	if (boolval(db_count_user_accounts($db))) http_data(200, ["status" => "ok"]);
+	if (boolval(db_count_user_accounts($db))) http_data(200, ["status" => "oookkk"]);
 	http_error(503, "database_unreachable", "Database query did not return the expected result.");
 } catch (\Throwable $e) {
 	http_error(503, "database_unreachable", "Database is not reachable.");

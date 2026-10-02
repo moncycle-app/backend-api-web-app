@@ -127,3 +127,6 @@ CREATE TABLE `login_attempt_ip` (
   KEY `ip_address_date_attempt` (`ip_address`,`date_attempt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
+ALTER TABLE `user_account`
+ADD `language` varchar(2) COLLATE 'utf8mb4_bin' NOT NULL AFTER `password`;
+UPDATE `user_account` SET `language` = 'FR';

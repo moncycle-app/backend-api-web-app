@@ -8,6 +8,7 @@ CREATE TABLE `user_account` (
   `email1` varchar(255) COLLATE utf8mb4_bin NOT NULL,
   `email2` varchar(255) COLLATE utf8mb4_bin DEFAULT NULL,
   `password` varchar(255) COLLATE utf8mb4_bin NOT NULL,
+  `language` varchar(2) COLLATE utf8mb4_bin NOT NULL,
   `totp_state` tinyint(1) unsigned DEFAULT NULL,
   `totp_secret` varchar(255) DEFAULT NULL,
   `nb_connection_attempts` smallint(5) unsigned NOT NULL DEFAULT 0,
