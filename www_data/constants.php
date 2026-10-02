@@ -108,15 +108,36 @@ const EXPORT_TYPES = [EXPORT_TYPE_PDF, EXPORT_TYPE_CSV, EXPORT_TYPE_NFP];
 // DAY FORMAT -- the codes day_timeline stores (lib/day_format.php)
 // ===========================================================================
 
-// The FertilityCare note codes that round-trip through data_parse_fc_note(): day field => its
-// codes, in the order they are written back into day_timeline.fc_score.
+// The stamp is stored as one letter for the colour, then "BB" when the baby is on it. White has no
+// letter: a white stamp is a stamp with the baby and no colour. Colour => letter, in the order the
+// colour is looked for.
+const DAY_STAMP_COLOR_CODES = ['Red' => 'R', 'Green' => 'G', 'Yellow' => 'Y'];
+
+// The FertilityCare arrow: the glyph day_timeline.fc_arrow holds => the name the JSON API and the NFP format use.
+const DAY_ARROW_GLYPHS = ['Up' => "\u{2191}", 'Down' => "\u{2193}", 'Right' => "\u{2192}"];
+
+// The FertilityCare note codes: day field => its codes, in the order they are written back into
+// day_timeline.fc_score (the five groups, space-separated, in this order).
 const DAY_FORMAT_FC_GROUPS = [
-	'codifiedBleedingObservation' => ['VH', 'H', 'M', 'VL', 'B'], // the 'L' (Lsaignement) *prefix* is handled separately below
+	'codifiedBleedingObservation' => ['VH', 'H', 'M', 'VL', 'B'], // the 'L' (Lsaignement) *prefix* is handled separately
 	'codifiedMucusSensation' => ['0', '2', '2W', '4', '6', '8', '10', '10DL', '10SL', '10WL'],
 	'codifiedMucusObservation' => ['C', 'G', 'K', 'P', 'Y', 'L'], // this 'L' is a standalone mucus-observation code, distinct from the Lsaignement *prefix*
 	'codifiedNumberObservations' => ['X1', 'X2', 'X3', 'AD'],
 	'codifiedPainObservations' => ['AP', 'RAP', 'LAP'],
 ];
+
+// The order the codes are looked for in an fc_score, each taken out of the text once found: a
+// longer code goes first, so "10DL" is not read as "10" and a lone "L", and where two overlap
+// ("X1" and "10" in "X10") the order decides. 'R' belongs to no group: it is taken out and ignored.
+const DAY_FORMAT_FC_PARSE_ORDER = ['10DL', '10SL', '10WL', 'RAP', 'LAP', 'X1', 'X2', 'X3', 'AD', 'AP', 'VL', 'VH', '2W', '10', 'H', 'M', 'L', 'B', '0', '2', '4', '6', '8', 'C', 'G', 'K', 'P', 'Y', 'R'];
+
+// What day_timeline and description can hold: the widths of their columns.
+const DAY_LIMIT_COMMENT_CHARS = 256;        // day_timeline.comment    varchar(256)
+const DAY_LIMIT_DESCRIPTION_CHARS = 256;    // description.name        varchar(256)
+const DAY_LIMIT_FC_SCORE_CHARS = 32;        // day_timeline.fc_score   varchar(32), the five groups packed
+const DAY_LIMIT_COUNTER_START = 255;        // day_timeline.counter_start tinyint unsigned
+const DAY_TEMPERATURE_STORABLE_MIN = 0.0;   // day_timeline.temperature decimal(4,2) unsigned
+const DAY_TEMPERATURE_STORABLE_MAX = 99.99;
 
 // ===========================================================================
 // NFP FILE FORMAT -- schema, limits and vocabularies (lib/nfp_format.php)
@@ -125,25 +146,19 @@ const DAY_FORMAT_FC_GROUPS = [
 const NFP_SCHEMA_VERSION = "1.0";                  // the schema version the export writes
 const NFP_SUPPORTED_SCHEMA_VERSIONS = ["1.0"];     // the ones the import accepts
 
-// Hard limits refuse a file: the body size, and the widths of the columns a value must land in.
-// The ones marked "advisory" only raise a warning and the data is imported anyway, because this
+// Hard limits refuse a file: the body size, and the DAY_LIMIT_* widths of the columns a value must
+// land in (above). The ones marked "advisory" only raise a warning and the data is imported anyway, because this
 // app's own /export can write more than they allow (years of gap days, hundreds of cycles).
 const NFP_LIMIT_BODY_BYTES = 262144;        // 256K -- matches post_max_size in server_conf, and bounds the work
 const NFP_LIMIT_JSON_DEPTH = 32;            // the format nests 4 deep; 32 is already generous
 const NFP_LIMIT_CYCLES = 120;               // advisory -- ~10 years of cycles in one file
 const NFP_LIMIT_DAYS_PER_CYCLE = 400;       // advisory -- a pregnancy-length cycle still fits
 const NFP_LIMIT_DAYS_TOTAL = 4000;          // advisory
-const NFP_LIMIT_COMMENT_CHARS = 256;        // day_timeline.comment    varchar(256)
-const NFP_LIMIT_DESCRIPTION_CHARS = 256;    // description.name        varchar(256)
 const NFP_LIMIT_DESCRIPTIONS_PER_DAY = 20;  // advisory -- nothing caps the links of a day
-const NFP_LIMIT_FC_SCORE_CHARS = 32;        // day_timeline.fc_score   varchar(32)
-const NFP_LIMIT_COUNTER_START = 255;        // day_timeline.counter_start tinyint unsigned
 const NFP_LIMIT_SOURCE_APP_CHARS = 255;     // fileInformation.sourceApp
 
-// day_timeline.temperature is decimal(4,2) unsigned: outside STORABLE the file is refused, outside
-// the narrower band a human body reaches (MIN/MAX, advisory) it only draws a warning.
-const NFP_TEMPERATURE_STORABLE_MIN = 0.0;
-const NFP_TEMPERATURE_STORABLE_MAX = 99.99;
+// Outside DAY_TEMPERATURE_STORABLE_* a file is refused; outside the narrower band a human body
+// reaches (these two, advisory) it only draws a warning.
 const NFP_TEMPERATURE_MIN = 30.0;
 const NFP_TEMPERATURE_MAX = 45.0;
 const NFP_DATE_FLOOR = "1900-01-01";        // no day of a file may be older than this

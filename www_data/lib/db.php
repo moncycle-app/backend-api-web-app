@@ -85,6 +85,19 @@ function db_insert($db, string $sql, array $params = []): string {
 	return $db->lastInsertId();
 }
 
+// Runs $work in one transaction: committed, and its result returned, or rolled back when it throws.
+function db_transaction($db, callable $work) {
+	$db->exec("START TRANSACTION");
+	try {
+		$result = $work();
+		$db->exec("COMMIT");
+		return $result;
+	} catch (\Throwable $error) {
+		$db->exec("ROLLBACK");
+		throw $error;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------
@@ -376,7 +389,7 @@ function db_insert_day_timeline($db, $date, $no_user_account) {
 	return db_insert($db, "INSERT INTO day_timeline (no_user_account, date_obs, stamp) VALUES (:no_user_account, :date, '')", ["no_user_account" => $no_user_account, "date" => $date]);
 }
 
-// Writes what a day holds. $fields (see day_from_json()): stamp, fc_score, fc_arrow, temp, htemp, is_peak,
+// Writes what a day holds. $fields (see day_format_from_json()): stamp, fc_score, fc_arrow, temp, htemp, is_peak,
 // union_sex, cycle_1st_day, day_not_observed, pregnancy, comment, counter_start; one left out is written empty.
 function db_update_day_timeline($db, $date, $no_user_account, $last_write_client_UTC, array $fields = []) {
 	$fields += [

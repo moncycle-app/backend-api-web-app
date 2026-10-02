@@ -21,7 +21,7 @@
 ** Nothing is written before all three checking stages have passed, so a file is either
 ** imported whole or not at all.
 **
-** The per-day encoding is NOT duplicated here. day_to_json() / day_from_json() in
+** The per-day encoding is NOT duplicated here. day_format_to_json() / day_format_from_json() in
 ** lib/day_format.php already translate between the packed DB columns (stamp, fc_score,
 ** fc_arrow) and a structured day shape built on the NFP vocabulary, and they are what
 ** api/day.php writes through. This file reuses them so an imported day and a day posted to
@@ -36,104 +36,40 @@ require_once __DIR__ . "/date.php";
 require_once __DIR__ . "/day_format.php";
 require_once __DIR__ . "/nfp_format.php";
 
-// ---------------------------------------------------------------------------
-// Shared text hygiene.
-//
-// Free text out of a file reaches day_timeline.comment and description.name, and
-// from there the CSV and PDF exports. Control characters serve no purpose in
-// either and make the CSV unreadable, so they are stripped here; line breaks and
-// tabs survive because a comment legitimately carries them.
-// ---------------------------------------------------------------------------
-
-function nfp_file_clean_text(string $text): string {
-	$text = str_replace(["\r\n", "\r"], "\n", $text);
-	// C0 and C1 controls, and the Unicode line/paragraph separators, except \n and \t
-	$text = preg_replace('/[^\P{C}\n\t]+/u', '', $text);
-	if (is_null($text)) return '';            // invalid UTF-8 would make preg_replace fail
-	return trim($text);
-}
-
-// True when a day field carries an actual value. Distinct from empty(), which also rejects
-// "0" -- a FertilityCare code -- and so cannot be used on these fields.
-function nfp_file_filled(array $day, string $field): bool {
-	return isset($day[$field]) && (string) $day[$field] !== '';
-}
-
-function nfp_file_valid_time(string $time): bool {
-	if (!preg_match('/^(\d{2}):(\d{2}):(\d{2})$/', $time, $m)) return false;
-	return intval($m[1]) <= 23 && intval($m[2]) <= 59 && intval($m[3]) <= 59;
-}
-
-// A FertilityCare note value, canonicalised onto the codes data_parse_fc_note() can read back.
-// Returns null when the value is outside that vocabulary -- fc_score is re-parsed by substring
-// matching, so an unrecognised code stored there would corrupt the day it lands on.
-function nfp_file_fc_code_canonical(string $field, string $value): ?string {
-	$vocabulary = nfp_format_fc_vocabulary()[$field] ?? [];
-	if (empty($vocabulary)) return null;
-
-	$normalized = strtoupper(trim($value));
-	if ($normalized === '') return null;
-	if (isset(NFP_FC_CODE_ALIASES[$normalized])) $normalized = NFP_FC_CODE_ALIASES[$normalized];
-
-	// Longest code first, so "10DL" is not read as "10" followed by junk. Values are matched
-	// as a sequence because day_format_fc_score_decode() concatenates the codes of a group
-	// (two mucus observations come back as "CK"), and such a value has to import again.
-	$codes = $vocabulary;
-	usort($codes, fn($a, $b) => strlen($b) <=> strlen($a));
-
-	$rest = $normalized;
-	$matched = '';
-	while ($rest !== '') {
-		$found = null;
-		foreach ($codes as $code) {
-			if (str_starts_with($rest, $code)) { $found = $code; break; }
-		}
-		if (is_null($found)) return null;
-		$matched .= $found;
-		$rest = substr($rest, strlen($found));
-	}
-	return $matched;
-}
-
 // ===========================================================================
 // EXPORT
 // ===========================================================================
 
-// One stored day -> one NFP day. Takes the structured day shape day_to_json() produces, and
-// keeps only what the format defines, dropping anything empty so a quiet day stays small.
-// An empty array is a day with nothing recorded, which the format writes as "{}".
+// One stored day -> one NFP day. Takes the JSON day day_format_to_json() produces, and keeps only
+// what the format defines, dropping anything empty so a quiet day stays small. An empty array is a
+// day with nothing recorded, which the format writes as "{}".
 function nfp_file_day_to_nfp(array $day): array {
 	$nfp = [];
 
-	$comment = nfp_file_clean_text((string) ($day['comment'] ?? ''));
+	$comment = day_format_clean_text((string) ($day['comment'] ?? ''));
 	if ($comment !== '') $nfp['comments'] = [$comment];
 
 	if (!empty($day['dayNotObserved'])) $nfp['mucusNotObserved'] = true;
-
-	// Note the explicit "!== ''" tests rather than empty() on every string field below: "0" is
-	// a real FertilityCare mucus-sensation code (dryness) and is falsy in PHP, so empty() would
-	// drop it from the file and lose the observation.
-	if (nfp_file_filled($day, 'stampColor')) $nfp['stampColor'] = $day['stampColor'];
+	if (day_format_filled($day, 'stampColor')) $nfp['stampColor'] = $day['stampColor'];
 	if (!empty($day['stampBaby'])) $nfp['stampBaby'] = true;
 
 	// The method is not consulted here on purpose. A stored value is exported whatever the
-	// account's current method says, because dropping recorded data from a portability file
-	// is worse than a receiving app meeting a field it does not expect -- and the format
-	// marks these fields _customValuesAllowed anyway. In practice each method only ever fills
-	// its own: the FertilityCare notes below stay null for a Billings account, and vice versa.
-	foreach (array_keys(DAY_FORMAT_FC_GROUPS) as $field) {
-		if (nfp_file_filled($day, $field)) $nfp[$field] = (string) $day[$field];
+	// account's current method says, because dropping recorded data from a portability file is
+	// worse than a receiving app meeting a field it does not expect -- and the format marks these
+	// fields _customValuesAllowed anyway. In practice each method only ever fills its own.
+	// ("0", dryness, is a real code: day_format_filled() keeps it where empty() would not.)
+	foreach ([...array_keys(DAY_FORMAT_FC_GROUPS), 'codifiedArrow'] as $field) {
+		if (day_format_filled($day, $field)) $nfp[$field] = (string) $day[$field];
 	}
-	if (nfp_file_filled($day, 'codifiedArrow')) $nfp['codifiedArrow'] = $day['codifiedArrow'];
 
 	foreach (['freeMucusSensation', 'freeMucusObservation'] as $field) {
 		if (!empty($day[$field]) && is_array($day[$field])) $nfp[$field] = array_values($day[$field]);
 	}
 
-	// a temperature of 0 is "none recorded", not a reading, so empty() is right here
+	// a temperature of 0 is "none recorded", not a reading
 	if (!empty($day['temperature'])) {
 		$nfp['temperature'] = round(floatval($day['temperature']), 2);
-		if (nfp_file_filled($day, 'temperatureTime')) $nfp['temperatureTime'] = $day['temperatureTime'];
+		if (day_format_filled($day, 'temperatureTime')) $nfp['temperatureTime'] = $day['temperatureTime'];
 	}
 
 	if (!empty($day['isPeak'])) $nfp['isPeak'] = true;
@@ -186,7 +122,7 @@ function nfp_file_export_cycles($db, string $start_date, string $end_date, array
 		$row["cycle"] = $current["cycleStartDate"];
 		$row["description"] = $descriptions_by_day[intval($row["no_day"])] ?? [];
 		$row["pos"] = null;                            // positional, and the format has no field for it
-		$nfp_day = nfp_file_day_to_nfp(day_to_json($row));
+		$nfp_day = nfp_file_day_to_nfp(day_format_to_json($row));
 
 		if (!empty($row["cycle_1st_day"]) && $date !== $current["cycleStartDate"]) {
 			$cycles[] = $current;
@@ -517,14 +453,14 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 			$day_json = $mapping["day"];
 			$day_json["cycleFirstDay"] = $is_cycle_first_day;
 
-			$fields = day_from_json($day_json);
+			$fields = day_format_from_json($day_json);
 
 			// fc_score is varchar(32); day_format_fc_score_encode() joins the five note
 			// groups, so this is the only place the packed length is knowable.
-			if (!is_null($fields["fc_score"]) && mb_strlen($fields["fc_score"]) > NFP_LIMIT_FC_SCORE_CHARS) {
+			if (!is_null($fields["fc_score"]) && mb_strlen($fields["fc_score"]) > DAY_LIMIT_FC_SCORE_CHARS) {
 				$issues[] = sprintf(
 					"[%s] the FertilityCare notes pack into %d characters; the limit is %d.",
-					$date, mb_strlen($fields["fc_score"]), NFP_LIMIT_FC_SCORE_CHARS
+					$date, mb_strlen($fields["fc_score"]), DAY_LIMIT_FC_SCORE_CHARS
 				);
 				continue;
 			}
@@ -556,7 +492,7 @@ function nfp_file_plan_result(array $issues, array $warnings, array $ignored, ar
 }
 
 /*
-** One NFP day -> the structured day shape day_from_json() consumes.
+** One NFP day -> the structured day shape day_format_from_json() consumes.
 **
 ** Returns ["day" =>, "sensations" =>, "observations" =>, "content" =>, "issues" =>,
 ** "warnings" =>, "ignored" =>, "mapped" =>]. "content" is false for a day the file leaves
@@ -588,15 +524,15 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 		$parts = [];
 		foreach ($comments as $comment) {
 			if (!is_string($comment)) continue;
-			$comment = nfp_file_clean_text($comment);
+			$comment = day_format_clean_text($comment);
 			if ($comment !== '') $parts[] = $comment;
 		}
 		if (!empty($parts)) {
 			$joined = implode("\n", $parts);
-			if (mb_strlen($joined) > NFP_LIMIT_COMMENT_CHARS) {
+			if (mb_strlen($joined) > DAY_LIMIT_COMMENT_CHARS) {
 				$issues[] = sprintf(
 					"[%s] the comments come to %d characters together; the limit is %d.",
-					$date, mb_strlen($joined), NFP_LIMIT_COMMENT_CHARS
+					$date, mb_strlen($joined), DAY_LIMIT_COMMENT_CHARS
 				);
 			}
 			else {
@@ -649,7 +585,7 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 		foreach (array_keys(DAY_FORMAT_FC_GROUPS) as $field) {
 			$value = nfp_format_get($nfp_day, $field);
 			if (!is_string($value) || trim($value) === '') continue;
-			$canonical = nfp_file_fc_code_canonical($field, $value);
+			$canonical = day_format_fc_canonical($field, $value);
 			if (is_null($canonical)) {
 				$ignored[] = sprintf("[%s] %s '%s': outside the FertilityCare notation this app stores.", $date, $field, trim($value));
 				continue;
@@ -704,12 +640,12 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 		$names = [];
 		foreach ($values as $name) {
 			if (!is_string($name)) continue;
-			$name = nfp_file_clean_text($name);
+			$name = day_format_clean_text($name);
 			if ($name === '') continue;
-			if (mb_strlen($name) > NFP_LIMIT_DESCRIPTION_CHARS) {
+			if (mb_strlen($name) > DAY_LIMIT_DESCRIPTION_CHARS) {
 				$issues[] = sprintf(
 					"[%s] the %s entry '%s...' is %d characters; the limit is %d.",
-					$date, $field, mb_substr($name, 0, 30), mb_strlen($name), NFP_LIMIT_DESCRIPTION_CHARS
+					$date, $field, mb_substr($name, 0, 30), mb_strlen($name), DAY_LIMIT_DESCRIPTION_CHARS
 				);
 				continue;
 			}
@@ -769,10 +705,10 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 		// Outside what decimal(4,2) unsigned holds there is nothing to write, so the file is
 		// refused. Inside the column but outside the band a body reaches, the reading is kept:
 		// nothing stopped it being recorded in the first place, and /export writes it back.
-		if ($value < NFP_TEMPERATURE_STORABLE_MIN || $value > NFP_TEMPERATURE_STORABLE_MAX) {
+		if ($value < DAY_TEMPERATURE_STORABLE_MIN || $value > DAY_TEMPERATURE_STORABLE_MAX) {
 			$issues[] = sprintf(
 				"[%s] temperature %s cannot be stored: the column holds %.1f-%.2f C.",
-				$date, $printed, NFP_TEMPERATURE_STORABLE_MIN, NFP_TEMPERATURE_STORABLE_MAX
+				$date, $printed, DAY_TEMPERATURE_STORABLE_MIN, DAY_TEMPERATURE_STORABLE_MAX
 			);
 		}
 		else {
@@ -789,7 +725,7 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 			if (is_string($time) && trim($time) !== '') {
 				// a TIME column can hold values outside a clock day (MariaDB goes to 838:59:59),
 				// so this is reachable from stored data: keep the reading, drop the hour
-				if (nfp_file_valid_time(trim($time))) $day["temperatureTime"] = trim($time);
+				if (!is_null($clock = day_format_time($time))) $day["temperatureTime"] = $clock;
 				else $warnings[] = sprintf(
 					"[%s] temperatureTime '%s' is not an hh:mm:ss time of day; the temperature was imported without it.",
 					$date, trim($time)
@@ -841,7 +777,7 @@ function nfp_file_day_from_nfp(object $nfp_day, string $method, string $date): a
 **     set the user needs in order to choose.
 **   - the free-text labels the file uses: the ones the account does not have yet would be
 **     created, and the ones it records under the other type keep the type they have, which is
-**     the single narrowing nfp_file_resolve_description() reports.
+**     the single narrowing data_resolve_description() reports.
 **
 ** Read-only: two SELECTs, no transaction, nothing here can write.
 */
@@ -912,7 +848,7 @@ function nfp_file_preview_plan($db, int $no_user_account, array $plan, bool $ove
 // The one narrowing a label can go through: the file uses a name under one type and the
 // account already records it under the other. The label keeps the type it has, so this is a
 // report and not a change. nfp_file_preview_plan() has to predict exactly what
-// nfp_file_resolve_description() says, hence the shared wording.
+// data_resolve_description() says, hence the shared wording.
 function nfp_file_narrowed_description_note(string $date, string $name, int $recorded_type): string {
 	// a label of undefined type is just called a label
 	$type_name = $recorded_type === DESCRIPTION_TYPE_UNDEFINED ? "label" : (DESCRIPTION_TYPE_NAMES[$recorded_type] ?? "label");
@@ -922,101 +858,63 @@ function nfp_file_narrowed_description_note(string $date, string $name, int $rec
 	);
 }
 
-// Resolves a description name to its id, creating it on first use. Same dedupe-by-name as
-// api/day.php's day_resolve_description_id(), with two differences that matter when the names
-// come out of a file: the lookup is an exact match (see db_select_description_exact_name), and
-// results are cached, because one file commonly repeats the same handful of names on every day.
-function nfp_file_resolve_description($db, int $no_user_account, string $name, int $type, string $last_write_client_UTC, array &$cache, int &$created, array &$narrowed, string $date): int {
-	// The cache carries the resolved type as well as the id, so a name the file uses under
-	// both types is reported on the second use even when this very import created it.
-	if (!isset($cache[$name])) {
-		$existing = db_select_description_exact_name($db, $no_user_account, $name);
-		if (isset($existing["no_description"])) {
-			// Reused whatever its recorded type: description has a unique key on
-			// (no_user_account, name), so one name is one row. api/day.php does the same.
-			$cache[$name] = ["id" => intval($existing["no_description"]), "type" => intval($existing["type"])];
-		}
-		else {
-			$no_description = intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
-			$created += 1;
-			$cache[$name] = ["id" => $no_description, "type" => $type];
-		}
-	}
-
-	// asking for the other type is a narrowing: the label keeps the one it has
-	if ($cache[$name]["type"] !== $type) {
-		$narrowed[] = nfp_file_narrowed_description_note($date, $name, $cache[$name]["type"]);
-	}
-
-	return $cache[$name]["id"];
-}
-
 /*
-** Writes the plan. The caller owns the transaction, so a failure anywhere leaves the account
-** untouched.
+** Writes the plan, in one transaction: a failure anywhere leaves the account untouched.
 **
 ** $overide decides what happens on a date that already has data: false skips it and reports
 ** it, true replaces it. A replaced day is replaced whole, including its linked descriptions --
-** same semantics as a POST to /api/day, which also carries the full state of a day.
+** same semantics as a POST to /api/day, which also carries the full state of a day, and which
+** writes through the same data_write_day().
 */
 function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overide, string $last_write_client_UTC): array {
-	$created = [];
-	$overwritten = [];
-	$skipped = [];
-	$already = [];
-	$descriptions_created = 0;
-	$description_cache = [];
-	$narrowed = [];
+	return db_transaction($db, function () use ($db, $no_user_account, $plan, $overide, $last_write_client_UTC) {
+		$created = [];
+		$overwritten = [];
+		$skipped = [];
+		$already = [];
+		$descriptions_created = 0;
+		$known = [];
+		$narrowed = [];
 
-	foreach ($plan as $entry) {
-		$date = $entry["date"];
+		foreach ($plan as $entry) {
+			$date = $entry["date"];
 
-		$existing = db_select_day_timeline($db, $date, $no_user_account);
-		$exists = isset($existing["no_day"]);
+			$existing = db_select_day_timeline($db, $date, $no_user_account);
+			if (!is_null($existing)) $already[] = $date;
 
-		if ($exists) $already[] = $date;
+			if (!is_null($existing) && !$overide) {
+				$skipped[] = $date;
+				continue;
+			}
 
-		if ($exists && !$overide) {
-			$skipped[] = $date;
-			continue;
+			$no_descriptions = [];
+			foreach ([DESCRIPTION_TYPE_SENSATION => $entry["sensations"], DESCRIPTION_TYPE_OBSERVATION => $entry["observations"]] as $type => $names) {
+				foreach ($names as $name) {
+					$description = data_resolve_description($db, $no_user_account, $name, $type, $last_write_client_UTC, $known);
+					if ($description["created"]) $descriptions_created += 1;
+					// asking for the other type is a narrowing: the label keeps the one it has
+					if ($description["type"] !== $type) $narrowed[] = nfp_file_narrowed_description_note($date, $name, $description["type"]);
+					$no_descriptions[] = $description["id"];
+				}
+			}
+
+			data_write_day($db, $no_user_account, $date, $existing, $entry["fields"], $no_descriptions, $last_write_client_UTC);
+
+			if (is_null($existing)) $created[] = $date;
+			else $overwritten[] = $date;
 		}
 
-		$no_day = $exists
-			? intval($existing["no_day"])
-			: intval(db_insert_day_timeline($db, $date, $no_user_account));
-
-		db_update_day_timeline($db, $date, $no_user_account, $last_write_client_UTC, $entry["fields"]);
-
-		$wanted = [];
-		foreach ($entry["sensations"] as $name) {
-			$wanted[] = nfp_file_resolve_description($db, $no_user_account, $name, DESCRIPTION_TYPE_SENSATION, $last_write_client_UTC, $description_cache, $descriptions_created, $narrowed, $date);
-		}
-		foreach ($entry["observations"] as $name) {
-			$wanted[] = nfp_file_resolve_description($db, $no_user_account, $name, DESCRIPTION_TYPE_OBSERVATION, $last_write_client_UTC, $description_cache, $descriptions_created, $narrowed, $date);
-		}
-		$wanted = array_values(array_unique($wanted));
-
-		$linked = array_map('intval', array_column(
-			db_select_all_description_for_day_timeline($db, $no_user_account, $no_day), "no_description"
-		));
-
-		foreach (array_diff($linked, $wanted) as $no_description) db_delete_linked_descriptions($db, $no_day, $no_description);
-		foreach (array_diff($wanted, $linked) as $no_description) db_insert_link_description_day_timeline($db, $no_day, $no_description);
-
-		if ($exists) $overwritten[] = $date;
-		else $created[] = $date;
-	}
-
-	// daysAlreadyInAccount is the union of the two lists above, and it is reported on its own
-	// because it is the one that does not depend on $overide: it says which days of the file
-	// the account already had, whichever way they were treated. nfp_file_preview_plan() answers
-	// with the same keys, so a dry run and a real one report the same shape.
-	return [
-		"daysCreated" => $created,
-		"daysOverwritten" => $overwritten,
-		"daysSkipped" => $skipped,
-		"daysAlreadyInAccount" => $already,
-		"descriptionsCreated" => $descriptions_created,
-		"narrowed" => $narrowed,
-	];
+		// daysAlreadyInAccount is the union of the two lists above, and it is reported on its own
+		// because it is the one that does not depend on $overide: it says which days of the file
+		// the account already had, whichever way they were treated. nfp_file_preview_plan() answers
+		// with the same keys, so a dry run and a real one report the same shape.
+		return [
+			"daysCreated" => $created,
+			"daysOverwritten" => $overwritten,
+			"daysSkipped" => $skipped,
+			"daysAlreadyInAccount" => $already,
+			"descriptionsCreated" => $descriptions_created,
+			"narrowed" => $narrowed,
+		];
+	});
 }

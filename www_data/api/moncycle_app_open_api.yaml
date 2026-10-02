@@ -1335,7 +1335,7 @@ paths:
                       $ref: '#/components/schemas/Day'
         "400":
           description: |-
-            `invalid_date` — a date does not match `YYYY-MM-DD`.
+            `invalid_date` — a date is not a real `YYYY-MM-DD` date.
             `invalid_date_range` — you sent only one of `start_date` / `end_date`.
           content:
             application/json:
@@ -1469,6 +1469,13 @@ paths:
             `invalid_json` — the body is not a JSON object.
             `invalid_date` — `date` is absent, malformed, or not a real calendar date (for example
             `2026-02-30`).
+            `invalid_day` — the day cannot be stored; `details.issues` lists every problem found: a
+            `comment` or a free-text label over 256 characters, a `stampColor`, `codifiedArrow` or
+            FertilityCare note outside its vocabulary, a `temperature` outside 0–99.99, a
+            `temperatureTime` that is not a time of day (`hh:mm` or `hh:mm:ss`), a `counterStart`
+            outside 0–255, or FertilityCare notes that do not fit once packed (32 characters). Nothing is
+            stored when there is one. The FertilityCare codes are accepted in any case and stored
+            upper-case; control characters are removed from the texts.
           content:
             application/json:
               schema:
@@ -1527,7 +1534,7 @@ paths:
         "204":
           description: Cleared. No body. Also returned for a date that held nothing.
         "400":
-          description: "`invalid_date` — `date` is absent or does not match `YYYY-MM-DD`."
+          description: "`invalid_date` — `date` is absent, or not a real `YYYY-MM-DD` date."
           content:
             application/json:
               schema:

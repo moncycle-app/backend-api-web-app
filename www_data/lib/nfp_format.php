@@ -26,55 +26,12 @@
 **    nfp_file_day_from_nfp() in lib/nfp_file.php.
 */
 
-// ---------------------------------------------------------------------------
-// The constants of the format -- the schema version, the hard limits, the temperature band,
-// the vocabularies, the FertilityCare code aliases and the field inventories -- are in the
-// NFP FILE FORMAT section of constants.php (NFP_*), and the method names and ids in
-// its NFP METHODS section.
-//
-// Everything that reaches the DB is bounded by the limits first: they are the sizes
-// day_timeline / description actually accept, plus caps that keep a hostile or broken file
-// from exhausting memory or the request timeout.
-//
-// Two kinds of limit exist, and the difference decides whether breaking one refuses a file or
-// only reports it.
-//
-// HARD -- the body size, and the widths of the columns a value has to land in. Breaking one
-// of these means the data cannot be stored at all, so it refuses the file.
-//
-// ADVISORY -- the counts marked as such. They describe a file of a reasonable shape; they do
-// not describe what this app's own /export can emit, which is bounded only by the date range
-// the user asks for. An account dormant for years exports one cycle padded with thousands of
-// gap days, and twenty years of tracking exports hundreds of cycles. Refusing those would
-// mean this app writing files it will not read back, so they are reported as warnings by
-// lib/nfp_file.php and the data is imported anyway.
-//
-// Nothing is lost by that: NFP_LIMIT_BODY_BYTES is the guard that actually bounds the work,
-// and it bites first -- stages 1 and 2 decode and validate the whole body before any count
-// is consulted, so these counts never protected memory in the first place.
-//
-// Only the closed vocabularies (no _customValuesAllowed in the spec) are enforced as enums.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// FertilityCare note codes.
-//
-// The app packs the five FertilityCare note groups into one day_timeline.fc_score
-// string; DAY_FORMAT_FC_GROUPS is the list of codes that round-trip through
-// data_parse_fc_note(). The spec spells three of them differently, so those
-// are aliased on the way in (NFP_FC_CODE_ALIASES). Both are in constants.php.
-// Anything outside this vocabulary is reported as ignored rather than written:
-// fc_score is re-parsed by substring matching, so an unknown code there would
-// corrupt the day it lands on.
-// ---------------------------------------------------------------------------
-
-function nfp_format_fc_vocabulary(): array {
-	$vocabulary = DAY_FORMAT_FC_GROUPS;
-	// the Lsaignement prefix is a bleeding value of its own ("L" = light/bleeding) that
-	// day_format_fc_score_encode() recognises as a trailing "L"; see its comment.
-	$vocabulary['codifiedBleedingObservation'][] = 'L';
-	return $vocabulary;
-}
+// The constants of the format (the schema version, the limits, the temperature band, the
+// vocabularies, the field inventories) are in the NFP FILE FORMAT section of constants.php. The
+// limits are of two kinds: HARD ones refuse a file (the body size, the widths of the columns a
+// value must land in), ADVISORY ones only draw a warning, because this app's own /export can
+// write more than they allow -- an account dormant for years exports one cycle padded with
+// thousands of gap days -- and refusing those would mean writing files it will not read back.
 
 // ---------------------------------------------------------------------------
 // JSON Schemas, validated against the *canonical* shape -- so run
@@ -322,19 +279,23 @@ function nfp_format_normalize(object $raw): object {
 	return $file;
 }
 
+// A word of a closed vocabulary with the casing the format spells it ("red" -> "Red"); anything
+// else, trimmed, is left for the schema to refuse.
+function nfp_format_spelled(string $value, array $vocabulary): string {
+	$trimmed = trim($value);
+	foreach ($vocabulary as $known) {
+		if (strcasecmp($trimmed, $known) === 0) return $known;
+	}
+	return $trimmed;
+}
+
 function nfp_format_normalize_cycle(mixed $raw_cycle): mixed {
 	if (!is_object($raw_cycle)) return $raw_cycle;
 	$cycle = clone $raw_cycle;
 
 	// the method name is matched case-insensitively everywhere else, so settle its casing once
 	$method = nfp_format_get($cycle, "method");
-	if (is_string($method)) {
-		$trimmed = trim($method);
-		foreach (NFP_METHODS_KNOWN as $known) {
-			if (strcasecmp($trimmed, $known) === 0) $trimmed = $known;
-		}
-		$cycle->method = $trimmed;
-	}
+	if (is_string($method)) $cycle->method = nfp_format_spelled($method, NFP_METHODS_KNOWN);
 
 	$start_date = nfp_format_get($cycle, "cycleStartDate");
 	if (is_string($start_date)) $cycle->cycleStartDate = trim($start_date);
@@ -378,13 +339,7 @@ function nfp_format_normalize_day(mixed $raw_day): mixed {
 		if ($union) $day->sexUnion = "Union";
 		else unset($day->sexUnion);
 	}
-	elseif (is_string($union)) {
-		$trimmed = trim($union);
-		foreach (NFP_SEX_UNIONS as $known) {
-			if (strcasecmp($trimmed, $known) === 0) $trimmed = $known;
-		}
-		$day->sexUnion = $trimmed;
-	}
+	elseif (is_string($union)) $day->sexUnion = nfp_format_spelled($union, NFP_SEX_UNIONS);
 
 	// the early day schema typed these as the strings "true"/"false"
 	foreach (["mucusNotObserved", "stampBaby", "isPeak", "booleanPregnancyDetected",
@@ -406,21 +361,9 @@ function nfp_format_normalize_day(mixed $raw_day): mixed {
 
 	// stampColor / codifiedArrow / enum-ish strings: settle casing, trim
 	$colour = nfp_format_get($day, "stampColor");
-	if (is_string($colour)) {
-		$trimmed = trim($colour);
-		foreach (NFP_STAMP_COLORS as $known) {
-			if (strcasecmp($trimmed, $known) === 0) $trimmed = $known;
-		}
-		$day->stampColor = $trimmed;
-	}
+	if (is_string($colour)) $day->stampColor = nfp_format_spelled($colour, NFP_STAMP_COLORS);
 	$arrow = nfp_format_get($day, "codifiedArrow");
-	if (is_string($arrow)) {
-		$trimmed = trim($arrow);
-		foreach (NFP_ARROWS as $known) {
-			if (strcasecmp($trimmed, $known) === 0) $trimmed = $known;
-		}
-		$day->codifiedArrow = $trimmed;
-	}
+	if (is_string($arrow)) $day->codifiedArrow = nfp_format_spelled($arrow, NFP_ARROWS);
 
 	$time = nfp_format_get($day, "temperatureTime");
 	if (is_string($time)) $day->temperatureTime = trim($time);

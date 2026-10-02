@@ -30,24 +30,11 @@
 ** default) leaves it alone and reports it, 1 replaces it.
 */
 
-require_once "../vendor/autoload.php";
-
 require_once "../config.php";
-require_once "../lib/db.php";
-require_once "../lib/sec.php";
-require_once "../lib/date.php";
-require_once "../lib/data.php";
-require_once "../lib/http.php";
-require_once "../lib/day_format.php";
-require_once "../lib/nfp_format.php";
+require_once "../lib/api.php";
 require_once "../lib/nfp_file.php";
 
-header('Content-Type: application/json');
-
-$db = db_open();
-
-$user_account = sec_auth_token($db);
-sec_exit_si_non_connecte($user_account);
+[$db, $user_account] = api_start();
 
 if ($_SERVER['REQUEST_METHOD'] !== "POST") {
 	http_error(405, "method_not_allowed", "Supported method: POST.");
@@ -68,10 +55,7 @@ if (isset($_GET['dryRun']) && !in_array($_GET['dryRun'], ["0", "1"], true)) {
 }
 $dry_run = isset($_GET['dryRun']) && $_GET['dryRun'] === "1";
 
-$last_write_client_UTC = http_from_iso8601($_GET['lastWriteClientUtc'] ?? null);
-if (!$last_write_client_UTC || !date_validate_timestamp($last_write_client_UTC)) {
-	$last_write_client_UTC = date('Y-m-d H:i:s');
-}
+$last_write_client_UTC = http_client_timestamp($_GET['lastWriteClientUtc'] ?? null);
 
 // ---------------------------------------------------------------------------
 // Stage 1 -- the body
@@ -154,20 +138,9 @@ if ($dry_run) {
 // ---------------------------------------------------------------------------
 
 // an import counts as activity, same as a POST to /api/day
-if (isset($user_account["is_inactive"]) && boolval($user_account["is_inactive"])) {
-	db_update_is_inactive($db, $user_account["no_user_account"], 0);
-}
+data_reactivate_account($db, $user_account);
 
-try {
-	$db->exec("START TRANSACTION");
-	$written = nfp_file_write_plan(
-		$db, intval($user_account["no_user_account"]), $checked["plan"], $overide, $last_write_client_UTC
-	);
-	$db->exec("COMMIT");
-} catch (\Throwable $th) {
-	$db->exec("ROLLBACK");
-	throw $th;
-}
+$written = nfp_file_write_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide, $last_write_client_UTC);
 
 // the writer finds one kind of narrowing of its own (a label already recorded under the other
 // type), so its list joins the ones found while checking

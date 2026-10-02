@@ -26,7 +26,7 @@ if (!date_validate_timestamp($from_timestamp)) {
 }
 
 $days = array_map(
-	fn($row) => day_to_json(data_construnct_day($db, $row["date_obs"], $no_user_account, $row)),
+	fn($row) => day_format_to_json(data_construct_day($db, $row["date_obs"], $no_user_account, $row)),
 	db_select_day_timelines_modified($db, $from_timestamp, $no_user_account)
 );
 

@@ -42,11 +42,11 @@ require_once __DIR__ . "/nfp_file.php";
 
 // The days of [$start_date, $end_date], oldest first.
 //
-// A recorded day is day_to_json()'s output, with the NFP names for the two fields the API
+// A recorded day is day_format_to_json()'s output, with the NFP names for the two fields the API
 // names differently (dayNotObserved -> mucusNotObserved, comment -> comments, which stays one
 // string: day_timeline holds a single comment), and two additions:
 //   - freeOther: the names of the day's type-0 descriptions, the free text the v15 migration
-//     could not class as freeMucusSensation or freeMucusObservation. day_to_json() leaves
+//     could not class as freeMucusSensation or freeMucusObservation. day_format_to_json() leaves
 //     them out.
 //   - isGap: false.
 // A date with no record at all between two recorded days is a gap entry: the same keys, all
@@ -100,7 +100,7 @@ function doc_export_days($db, string $start_date, string $end_date, array $user_
 
 // One day_timeline row, with its "description" rows and its "cycle" / "pos" set -> an export day.
 function doc_export_day(array $row): array {
-	$day = day_to_json($row);
+	$day = day_format_to_json($row);
 
 	$day["mucusNotObserved"] = $day["dayNotObserved"];
 	$day["comments"] = $day["comment"];
@@ -292,8 +292,8 @@ function doc_csv_value(array $day, string $column): string {
 
 	return match ($column) {
 		"freeMucusSensation", "freeMucusObservation", "freeOther" =>
-			doc_csv_free_text(implode(DOC_CSV_LIST_JOINER, array_map('nfp_file_clean_text', $value))),
-		"comments" => doc_csv_free_text(nfp_file_clean_text($value)),
+			doc_csv_free_text(implode(DOC_CSV_LIST_JOINER, array_map('day_format_clean_text', $value))),
+		"comments" => doc_csv_free_text(day_format_clean_text($value)),
 		"temperature" => number_format($value, 2, CSV_SEP === ';' ? ',' : '.', ''),
 		"temperatureTime" => doc_time_hhmm($value),
 		default => is_bool($value) ? ($value ? '1' : '') : (string) $value,

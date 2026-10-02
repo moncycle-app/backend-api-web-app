@@ -7,43 +7,27 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
+// What the app does with its data, on top of the queries of lib/db.php: building a day, saving one,
+// the descriptions (the free-text labels of a day). The shape of a day itself is lib/day_format.php.
+
+require_once __DIR__ . "/day_format.php";
 require_once __DIR__ . "/db.php";
 
-function data_construnct_day($db, $date, $no_user_account, $raw_day=null, $cycle=null, $pos=null) {
-	$ob_data = array();
+// A day as the array lib/day_format.php translates: the DB row (or just its date when the day is
+// empty), with the first day of its cycle, its position in it, and its descriptions. What the
+// caller already has -- the row, the cycle, the position -- is not read again.
+function data_construct_day($db, $date, $no_user_account, $raw_day = null, $cycle = null, $pos = null) {
+	$day = ["cycle" => $cycle ?? db_select_cycle($db, $date, $no_user_account)];
 
-	if (is_null($cycle)) {
-		$cycle = db_select_cycle($db, $date, $no_user_account);
-		$ob_data["cycle"] = $cycle;
+	if ($day["cycle"] && is_null($pos)) {
+		$pos = intval(date_diff(date_create($day["cycle"]), date_create($date))->format('%a')) + 1;
 	}
-	elseif (!is_null($cycle)) $ob_data["cycle"] = $cycle;
+	if (!is_null($pos)) $day["pos"] = $pos;
 
-	if($cycle && is_null($pos)) {
-		$interval = date_diff(date_create($cycle), date_create($date));
-		$ob_data["pos"] = intval($interval->format('%a'))+1;
-	}
-	elseif (!is_null($pos)) $ob_data["pos"] = $pos;
+	$raw_day ??= db_select_day_timeline($db, $date, $no_user_account);
+	if (empty($raw_day)) return $day + ["date_obs" => $date];
 
-	if(is_null($raw_day)) $raw_day = db_select_day_timeline($db, $date, $no_user_account) ?? array();
-	if(!empty($raw_day)) {
-		$ob_data = array_merge($ob_data, $raw_day);
-		$ob_data["description"] = db_select_all_description_for_day_timeline($db, $no_user_account, $ob_data["no_day"]);
-	}
-	else {
-		$ob_data["date_obs"] = $date;
-	}
-
-	return $ob_data;
-}
-
-// resolves a free-text description name to its id, creating it (with the given type) the
-// first time it's used -- mirrors the dedupe-by-name already used by the account settings
-// picklist (db_select_description_exact_name).
-function data_resolve_description_id($db, $no_user_account, $name, $type, $last_write_client_UTC) {
-	$name = trim($name);
-	$existing = db_select_description_exact_name($db, $no_user_account, $name);
-	if (isset($existing["no_description"])) return intval($existing["no_description"]);
-	return intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
+	return array_merge($day, $raw_day, ["description" => db_select_all_description_for_day_timeline($db, $no_user_account, $raw_day["no_day"])]);
 }
 
 // a description row (db_select_description_with_count*) as the JSON API shows it, shared by
@@ -57,56 +41,65 @@ function data_description_to_json(array $row): array {
 	];
 }
 
-function data_parse_fc_note ($str_fc_note) {
-	$fc_note = [
-		'10DL' => false,
-		'10SL' => false,
-		'10WL' => false,
-		'RAP' => false,
-		'LAP' => false, 
-		'X1' => false,
-		'X2' => false,
-		'X3' => false,
-		'AD' => false,
-		'AP' => false,
-		'VL' => false,
-		'VH' => false,
-		'2W' => false,
-		'10' => false,
-		'H' => false,
-		'M' => false,
-		'L' => false,
-		'Lsaignement' => false,
-		'B' => false,
-		'0' => false,
-		'2' => false,
-		'4' => false,
-		'6' => false,
-		'8' => false,
-		'C' => false,
-		'G' => false,
-		'K' => false,
-		'P' => false,
-		'Y' => false,
-		'R' => false
+// ---------------------------------------------------------------------------
+// Saving a day: the API (one day) and the NFP import (many) both write through these.
+// ---------------------------------------------------------------------------
+
+// The description of a name: found among the account's, or created with $type the first time.
+// $known keeps the answers from one call to the next (name => id and type), for a file that repeats
+// the same few names on every day. A name is one row whatever type it is asked as: "type" in the
+// answer is the one the description has, "created" whether this very call made it.
+function data_resolve_description($db, int $no_user_account, string $name, int $type, string $last_write_client_UTC, array &$known = []): array {
+	$name = trim($name);
+	if (isset($known[$name])) return $known[$name] + ["created" => false];
+
+	$existing = db_select_description_exact_name($db, $no_user_account, $name);
+	$created = is_null($existing);
+	$known[$name] = [
+		"id" => $created ? intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC)) : intval($existing["no_description"]),
+		"type" => $created ? $type : intval($existing["type"]),
 	];
-	// "=== ''" and not empty(): "0" is a real FertilityCare code (dryness) and is falsy in PHP,
-	// so empty() read a day noted just "0" as having no note at all.
-	if (is_null($str_fc_note) || $str_fc_note === '') return $fc_note;
-	$str_fc_note = trim($str_fc_note);
-	if (strlen($str_fc_note)>0) {
-		$str_fc_note = strtoupper($str_fc_note);
-		if (str_starts_with($str_fc_note, 'L') && !str_starts_with($str_fc_note, 'LAP')) {
-			$fc_note['Lsaignement'] = true;
-			$str_fc_note = substr($str_fc_note, 1);
+	return $known[$name] + ["created" => $created];
+}
+
+// Writes a day: its row (made when $existing, the row the caller looked up, is null), its fields,
+// and the set of descriptions it carries ($no_descriptions, their ids). Not a transaction of its
+// own: the caller wraps what has to be all or nothing. Returns the no_day.
+function data_write_day($db, int $no_user_account, string $date, ?array $existing, array $fields, array $no_descriptions, string $last_write_client_UTC): int {
+	$no_day = is_null($existing) ? intval(db_insert_day_timeline($db, $date, $no_user_account)) : intval($existing["no_day"]);
+	db_update_day_timeline($db, $date, $no_user_account, $last_write_client_UTC, $fields);
+
+	$linked = array_map('intval', array_column(db_select_all_description_for_day_timeline($db, $no_user_account, $no_day), "no_description"));
+	$wanted = array_values(array_unique($no_descriptions));
+	foreach (array_diff($linked, $wanted) as $no_description) db_delete_linked_descriptions($db, $no_day, $no_description);
+	foreach (array_diff($wanted, $linked) as $no_description) db_insert_link_description_day_timeline($db, $no_day, $no_description);
+
+	return $no_day;
+}
+
+// Saves a day the API received, checked and cleaned by day_format_validate(): in one transaction, its
+// fields and its free-text descriptions (created when a name is new). True when the day is new.
+function data_save_day($db, int $no_user_account, string $date, array $day, string $last_write_client_UTC): bool {
+	return db_transaction($db, function () use ($db, $no_user_account, $date, $day, $last_write_client_UTC) {
+		$existing = db_select_day_timeline($db, $date, $no_user_account);
+
+		$known = [];
+		$no_descriptions = [];
+		foreach ([DESCRIPTION_TYPE_OBSERVATION => 'freeMucusObservation', DESCRIPTION_TYPE_SENSATION => 'freeMucusSensation'] as $type => $field) {
+			foreach ($day[$field] ?? [] as $name) {
+				$no_descriptions[] = data_resolve_description($db, $no_user_account, $name, $type, $last_write_client_UTC, $known)["id"];
+			}
 		}
-		foreach ($fc_note as $note => $is_present) {
-			if (str_contains($str_fc_note, $note)) $fc_note[$note] = true;
-			$str_fc_note = str_ireplace($note, '', $str_fc_note);
-		}
-		$str_fc_note = trim($str_fc_note);
-	}
-	$fc_note['extra'] = strlen($str_fc_note)>0;
-	$fc_note['extra_str'] = $str_fc_note;
-	return $fc_note;
+
+		data_write_day($db, $no_user_account, $date, $existing, day_format_from_json($day), $no_descriptions, $last_write_client_UTC);
+		return is_null($existing);
+	});
+}
+
+// A write by the owner counts as activity: an account flagged inactive (the "are you still there"
+// mail) is not any more.
+function data_reactivate_account($db, array &$user_account): void {
+	if (empty($user_account["is_inactive"])) return;
+	db_update_is_inactive($db, $user_account["no_user_account"], 0);
+	$user_account["is_inactive"] = 0;
 }
