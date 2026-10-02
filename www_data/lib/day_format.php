@@ -17,6 +17,7 @@
 // import/export pipeline): that pipeline is out of scope for this pass and is left untouched.
 
 require_once __DIR__ . "/data.php";
+require_once __DIR__ . "/http.php";
 
 // ---------------------------------------------------------------------------
 // stamp: DB stores "" | "R" | "G" | "Y" | "BB" | "RBB" | "GBB" | "YBB".

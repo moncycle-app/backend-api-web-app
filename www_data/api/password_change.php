@@ -8,27 +8,20 @@
 */
 
 require_once "../config.php";
-require_once "../lib/db.php";
-require_once "../lib/sec.php";
-require_once "../lib/http.php";
+require_once "../lib/api.php";
 
-header('Content-Type: application/json');
-
-$db = db_open();
-
-$user_account = sec_auth_token($db);
-sec_exit_si_non_connecte($user_account);
+[$db, $user_account] = api_start();
 
 $body = http_json_body();
 
-if (!isset($body["oldPassword"]) || empty($body["oldPassword"]) || !isset($body["newPassword"]) || empty($body["newPassword"])) {
+if (empty($body["oldPassword"]) || empty($body["newPassword"])) {
 	http_error(400, "missing_fields", "'oldPassword' and 'newPassword' are required.");
 }
 
 $user_account = db_select_user_account_par_mail($db, $user_account["email1"])[0] ?? [];
 
-if (strlen($body["newPassword"]) < 8) {
-	http_error(422, "password_too_short", "New password is too short (minimum 8 characters).");
+if (strlen($body["newPassword"]) < PASSWORD_MIN_LENGTH) {
+	http_error(422, "password_too_short", "New password is too short (minimum " . PASSWORD_MIN_LENGTH . " characters).");
 }
 
 if (isset($user_account["password"]) && password_verify($body["newPassword"], $user_account["password"])) {

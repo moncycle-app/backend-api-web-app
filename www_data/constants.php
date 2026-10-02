@@ -39,6 +39,14 @@ const TOTP_STATE_NAMES = [
 	TOTP_STATE_ACTIVE => "active",
 ];
 
+// The cookie that carries the session token (an Authorization: Bearer header carries the same one),
+// and the name it had before, which is still read for a while.
+const COOKIE_AUTH_TOKEN = "MONCYCLEAPP_TOKEN";
+const COOKIE_AUTH_TOKEN_LEGACY = "MONCYCLEAPP_JETTON";
+
+const PASSWORD_MIN_LENGTH = 8;
+const ACCOUNT_DEMO_ID = 2;      // the public demo account: never warned, never erased (see lib/db.php)
+
 // RGPD retention, re-evaluated on every cron run (so no "warning sent" flag exists): an account
 // with no activity (login, or any write tied to it) for this many years is erased...
 const ACCOUNT_INACTIVITY_DELETE_YEARS = 4;
@@ -59,25 +67,14 @@ const NFP_METHOD_SYMPTOTHERMIC_FR = "symptothermic_fr";
 const NFP_METHODS_NATIVE = [NFP_METHOD_BILLINGS, NFP_METHOD_FERTILITY_CARE];
 const NFP_METHODS_KNOWN = [NFP_METHOD_BILLINGS, NFP_METHOD_FERTILITY_CARE, NFP_METHOD_SYMPTOTHERMIC_FR];
 
-// user_account.nfp_method: one 1-4 int packing the method and whether temperature is tracked.
-const NFP_METHOD_ID_BILLINGS_TEMP = 1;
-const NFP_METHOD_ID_BILLINGS = 2;
-const NFP_METHOD_ID_FERTILITYCARE = 3;
-const NFP_METHOD_ID_FERTILITYCARE_TEMP = 4;
-
-// The ids that follow FertilityCare (the grid chart, FertilityCare columns) and the ones that
-// record a temperature (the CSV columns, the curve), see lib/nfp_file.php.
-const NFP_METHOD_IDS_FERTILITYCARE = [NFP_METHOD_ID_FERTILITYCARE, NFP_METHOD_ID_FERTILITYCARE_TEMP];
-const NFP_METHOD_IDS_WITH_TEMPERATURE = [NFP_METHOD_ID_BILLINGS_TEMP, NFP_METHOD_ID_FERTILITYCARE_TEMP];
-
-// nfp_method id => the method / temperatureTracking pair GET /api/key_infos answers with.
-// NOTE: ids 3 and 4 are as key_infos.php had them, the other way round from
-// NFP_METHOD_IDS_WITH_TEMPERATURE above; js/account.js carries the same table.
-const NFP_METHOD_API_BY_ID = [
-	NFP_METHOD_ID_BILLINGS_TEMP => ["method" => NFP_METHOD_BILLINGS, "temperatureTracking" => true],
-	NFP_METHOD_ID_BILLINGS => ["method" => NFP_METHOD_BILLINGS, "temperatureTracking" => false],
-	NFP_METHOD_ID_FERTILITYCARE => ["method" => NFP_METHOD_FERTILITY_CARE, "temperatureTracking" => true],
-	NFP_METHOD_ID_FERTILITYCARE_TEMP => ["method" => NFP_METHOD_FERTILITY_CARE, "temperatureTracking" => false],
+// user_account.nfp_method packs the method and whether temperature is tracked in one 1-4 int:
+// id => [the method as the NFP format and the JSON API name it, temperature tracked].
+// lib/account.php is the one place that reads this table; js/account.js carries a copy.
+const NFP_METHOD_BY_ID = [
+	1 => [NFP_METHOD_BILLINGS, true],
+	2 => [NFP_METHOD_BILLINGS, false],
+	3 => [NFP_METHOD_FERTILITY_CARE, false],
+	4 => [NFP_METHOD_FERTILITY_CARE, true],
 ];
 
 // ===========================================================================
@@ -362,7 +359,7 @@ const DOC_FC_LINES_PER_PAGE = 8;                // rows of the grid on a page...
 const DOC_FC_LINES_PER_PAGE_TEMPERATURE = 7;    // ... and when the temperature row takes room
 
 // The legend column, top to bottom: row => its label. The baby row has none, and the temperature
-// row only exists for the methods that track it (NFP_METHOD_IDS_WITH_TEMPERATURE).
+// row only exists for the methods that track it (account_tracks_temperature(), lib/account.php).
 const DOC_FC_ROW_LABELS = [
 	"stamp" => "TAMPON",
 	"baby" => "",

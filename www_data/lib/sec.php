@@ -7,12 +7,18 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
-// the string vocabulary (TOTP_STATE_NAMES, constants.php) the JSON API exposes instead of
-// the raw 0-3 DB int -- shared by api/totp.php and api/key_infos.php so the two never drift apart.
-function sec_totp_state_name($state) {
-	if (!is_int($state)) return "unknown";
-	return TOTP_STATE_NAMES[$state] ?? "unknown";
-}
+use OTPHP\TOTP;
+use BaconQrCode\Renderer\ImageRenderer;
+use BaconQrCode\Renderer\Image\SvgImageBackEnd;
+use BaconQrCode\Renderer\RendererStyle\RendererStyle;
+use BaconQrCode\Writer;
+
+require_once __DIR__ . "/../vendor/autoload.php";
+require_once __DIR__ . "/db.php";
+
+// ---------------------------------------------------------------------------
+// Passwords and tokens
+// ---------------------------------------------------------------------------
 
 function sec_password_aleatoire($taille=12){
 	$alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
@@ -36,20 +42,39 @@ function sec_hash_token($token) {
 	return hash("sha256", $token);
 }
 
+// the session token cookie of the request, "" when there is none
+function sec_cookie_token(): string {
+	return $_COOKIE[COOKIE_AUTH_TOKEN] ?? "";
+}
+
+function sec_set_token_cookie(string $token, string $lifetime): void {
+	setcookie(COOKIE_AUTH_TOKEN, $token, [
+		'expires' => strtotime($lifetime),
+		'path' => '/',
+		'secure' => PHP_SECURE_COOKIES,
+		'httponly' => true,
+	]);
+}
+
+function sec_clear_token_cookie(): void {
+	setcookie(COOKIE_AUTH_TOKEN, '', -1, '/');
+	setcookie(COOKIE_AUTH_TOKEN_LEGACY, '', -1, '/');
+}
+
+// The account of the token the request carries (cookie, or "Authorization: Bearer"), or null.
 function sec_auth_token($db) {
-	$auth_token = "";
-	if (isset($_COOKIE["MONCYCLEAPP_JETTON"]) && strlen($_COOKIE["MONCYCLEAPP_JETTON"])>0) $auth_token = $_COOKIE["MONCYCLEAPP_JETTON"]; // legacy, to be removed in a few release
-	if (isset($_COOKIE["MONCYCLEAPP_TOKEN"]) && strlen($_COOKIE["MONCYCLEAPP_TOKEN"])>0) $auth_token = $_COOKIE["MONCYCLEAPP_TOKEN"];
+	$auth_token = $_COOKIE[COOKIE_AUTH_TOKEN_LEGACY] ?? ""; // legacy, to be removed in a few release
+	if (sec_cookie_token() !== "") $auth_token = sec_cookie_token();
 	$head = getallheaders();
 	if (isset($head["Authorization"]) && str_contains($head["Authorization"], "Bearer ")) $auth_token = explode(' ', trim($head["Authorization"]), 2)[1];
-	if (strlen($auth_token)>0) {
+	if (strlen($auth_token) > 0) {
 		$user_account = db_select_user_account_auth_token($db, sec_hash_token($auth_token));
 		if (isset($user_account[0]) && isset($user_account[0]["user_enabled"]) && boolval($user_account[0]["user_enabled"])) {
 			db_update_auth_token_use($db, $user_account[0]["no_auth_token"]);
 			return $user_account[0];
 		}
 	}
-	return null;	
+	return null;
 }
 
 function sec_exit_si_non_connecte($user_account) {
@@ -68,20 +93,13 @@ function sec_redirect_non_connecte($user_account) {
 	}
 }
 
+// Opens a session: stores a new token for the account, sets its cookie, and returns it.
 function sec_auth_succes($db, $user_account, $appareil=null) {
 	$auth_token = sec_password_aleatoire(256);
 
 	db_insert_auth_token($db, $user_account["no_user_account"], $appareil ?? ("AUTH | " . $_SERVER['HTTP_USER_AGENT']), "FR", sec_hash_token($auth_token));
 	db_update_user_account_connecte($db, $user_account["no_user_account"]);
-
-	$arr_cookie_options = array (
-		'expires' => strtotime('+5 years'), 
-		'path' => '/',
-		'secure' => PHP_SECURE_COOKIES,
-		'httponly' => true,
-	);
-
-	setcookie("MONCYCLEAPP_TOKEN", $auth_token, $arr_cookie_options);
+	sec_set_token_cookie($auth_token, '+5 years');
 
 	return $auth_token;
 }
@@ -89,6 +107,98 @@ function sec_auth_succes($db, $user_account, $appareil=null) {
 function sec_offuscate_str($str) {
 	return substr($str, 0, 3) . " [masqué] " . substr($str, -3);
 }
+
+// the row with the given secret columns masked, for the data export
+function sec_offuscate_columns(array $row, array $columns): array {
+	foreach ($columns as $column) {
+		if (isset($row[$column])) $row[$column] = sec_offuscate_str($row[$column]);
+	}
+	return $row;
+}
+
+// ---------------------------------------------------------------------------
+// Two-factor authentication
+// ---------------------------------------------------------------------------
+
+// the string vocabulary (TOTP_STATE_NAMES, constants.php) the JSON API exposes instead of
+// the raw 0-3 DB int -- shared by api/totp.php and api/key_infos.php so the two never drift apart.
+function sec_totp_state_name($state) {
+	if (!is_int($state)) return "unknown";
+	return TOTP_STATE_NAMES[$state] ?? "unknown";
+}
+
+// Starts the set-up: a new secret is stored (state "init") and returned with what the user needs
+// to add it to an authenticator app.
+function sec_totp_begin($db, array $user_account): array {
+	$totp = TOTP::generate();
+	$totp->setLabel($user_account["email1"]);
+	$totp->setIssuer('MONCYCLE.APP');
+	$totp->setParameter('image', APP_URL . "img/moncycleapp512.jpg");
+	db_update_user_account_totp_secret($db, $totp->getSecret(), $user_account["no_user_account"]);
+	db_update_user_account_totp_state($db, TOTP_STATE_INIT, $user_account["no_user_account"]);
+
+	$qr_writer = new Writer(new ImageRenderer(new RendererStyle(150), new SvgImageBackEnd()));
+	return [
+		"totpState" => sec_totp_state_name(TOTP_STATE_INIT),
+		"initSecret" => $totp->getSecret(),
+		"otpauth" => $totp->getProvisioningUri(),
+		"qrcode" => $qr_writer->writeString($totp->getProvisioningUri()),
+	];
+}
+
+// does the one-time code (spaces allowed) match the account's secret?
+function sec_totp_code_valid(array $user_account, $code): bool {
+	$code = intval(preg_replace('/\s+/', '', (string) $code));
+	return $code > 0 && TOTP::createFromSecret($user_account["totp_secret"])->verify($code);
+}
+
+// ---------------------------------------------------------------------------
+// Captcha: the answer is stored on the visitor's token, burnt as soon as it is read
+// ---------------------------------------------------------------------------
+
+// Stores the answer of the captcha shown to the visitor, giving them a token to hang it on when
+// they have none (or one that has been purged).
+function sec_captcha_issue($db, string $phrase): void {
+	$cookie_token = sec_cookie_token();
+	$known = $cookie_token !== "" && isset(db_select_auth_token_captcha($db, $cookie_token)[0]["no_auth_token"]);
+
+	if (!$known) {
+		$cookie_token = sec_password_aleatoire(64);
+		$user_agent = $_SERVER['HTTP_USER_AGENT'];
+		if (strlen($user_agent) > 200) $user_agent = substr($user_agent, 0, 200) . " ...";
+		db_insert_auth_token($db, NULL, "CAPTCHA | " . $user_agent, "FR", $cookie_token, 3);
+		sec_set_token_cookie($cookie_token, '+2 days');
+	}
+
+	// SECURITY: keyed by auth_token_str (the cookie value), not no_auth_token, otherwise this
+	// silently updates 0 rows and the image shown never matches what is stored
+	db_update_auth_token_captcha($db, $cookie_token, $phrase);
+}
+
+// The answer stored for this visitor, or null; it can be read once.
+function sec_captcha_take($db): ?string {
+	if (sec_cookie_token() === "") return null;
+
+	$stored = db_select_auth_token_captcha($db, sec_cookie_token())[0] ?? null;
+	if (is_null($stored)) return null;
+
+	db_update_auth_token_use($db, $stored["no_auth_token"]);
+	// SECURITY: this prevents captcha re-use
+	db_update_auth_token_captcha($db, sec_cookie_token(), null);
+	return $stored["captcha"];
+}
+
+function sec_captcha_matches(?string $expected, $answer): bool {
+	return !is_null($expected) && strlen(trim((string) $answer)) > 0 && trim((string) $answer) === $expected;
+}
+
+function sec_captcha_verify($db, $answer): bool {
+	return sec_captcha_matches(sec_captcha_take($db), $answer);
+}
+
+// ---------------------------------------------------------------------------
+// Login and its brute-force defence
+// ---------------------------------------------------------------------------
 
 // NOTE: trusts REMOTE_ADDR only. If the app is deployed behind a reverse proxy / CDN,
 // this must be adapted to read the real client IP from a header set by that trusted edge
@@ -120,19 +230,71 @@ function sec_login_account_locked($user_account) {
 	return LOGIN_LOCKOUT_THRESHOLD > 0 && sec_login_effective_attempts($user_account) >= LOGIN_LOCKOUT_THRESHOLD;
 }
 
-// validates the captcha answer against the phrase tied to the visitor's MONCYCLEAPP_TOKEN
-// cookie (same mechanism used by register.php / api/captcha.php). Always burns the stored
-// captcha so it can't be replayed, whether or not the answer was correct.
-function sec_login_captcha_verify($db, $captcha_input) {
-	if (!isset($_COOKIE["MONCYCLEAPP_TOKEN"]) || strlen($_COOKIE["MONCYCLEAPP_TOKEN"])<=0) return false;
+// The outcome of a login attempt, for the endpoint to answer with:
+//   success: ["status" => 200, "data" => [...]]
+//   refusal: ["status" => 4xx, "code" => ..., "message" => ..., "meta" => [...]]
+// Every refusal but a malformed body and a rate-limited IP is also counted against the IP, and a
+// wrong password or TOTP code against the account (the captcha and lockout thresholds).
+function sec_login($db, array $body): array {
+	$refuse = fn(int $status, string $code, string $message, array $meta = []) =>
+		["status" => $status, "code" => $code, "message" => $message, "meta" => $meta];
 
-	$db_ret = db_select_auth_token_captcha($db, $_COOKIE["MONCYCLEAPP_TOKEN"]);
-	if (!isset($db_ret[0]["no_auth_token"]) || is_null($db_ret[0]["captcha"])) return false;
+	if (!isset($body["email"]) || !isset($body["password"]) || !filter_var($body["email"], FILTER_VALIDATE_EMAIL)) {
+		return $refuse(400, "missing_credentials", "'email' and 'password' are required.");
+	}
 
-	$captcha = $db_ret[0]["captcha"];
+	$client_ip = sec_client_ip();
+	$user_account = db_select_user_account_par_mail($db, $body["email"])[0] ?? [];
+	$account_locked = sec_login_account_locked($user_account);
 
-	// SECURITY: this prevents captcha re-use
-	db_update_auth_token_captcha($db, $_COOKIE["MONCYCLEAPP_TOKEN"], null);
+	// surfaced on every outcome below (successes included): it is a hint for the client's *next*
+	// attempt, not tied to whether this one succeeded.
+	$captcha_required = sec_login_captcha_required($user_account);
+	$meta = $captcha_required ? ["captchaRequired" => true] : [];
 
-	return strlen(trim($captcha_input))>0 && trim($captcha_input) === $captcha;
+	// a refusal counted against the IP, and against the account when it is a wrong credential
+	$counted = function (int $status, string $code, string $message, bool $wrong_credential = false) use ($db, $client_ip, $body, $meta, $refuse) {
+		if ($wrong_credential) db_update_co_echoue($db, $body["email"]);
+		db_insert_login_attempt_ip($db, $client_ip);
+		return $refuse($status, $code, $message, $meta);
+	};
+
+	if (!CONNEXION_COMPTE) return $counted(403, "login_disabled", "Login is disabled.");
+
+	// already throttled: not counted again, or a blocked IP could grow this table forever
+	if (LOGIN_IP_MAX_ATTEMPTS > 0 && db_count_login_attempt_ip($db, $client_ip) >= LOGIN_IP_MAX_ATTEMPTS) {
+		return $refuse(429, "rate_limited", "Too many attempts from this network, please try again later.", $meta);
+	}
+
+	if (empty($body["email"]) || empty($body["password"])) return $counted(400, "missing_credentials", "'email' and 'password' are required.");
+
+	if ($captcha_required && !sec_captcha_verify($db, $body["captcha"] ?? "")) return $counted(403, "captcha_required", "Missing or incorrect captcha.");
+
+	if (isset($user_account["user_enabled"]) && !boolval($user_account["user_enabled"])) return $counted(403, "account_disabled", "Account deactivated.");
+
+	$password_ok = isset($user_account["password"]) && password_verify($body["password"], $user_account["password"]);
+
+	// hard lockout only kicks in on a WRONG password: the account owner can still log in with the
+	// correct credentials, so this can't be abused to lock a victim out
+	if (!$password_ok) {
+		return $account_locked
+			? $counted(403, "account_locked", "Account temporarily locked after too many failed attempts.", true)
+			: $counted(401, "invalid_credentials", "Incorrect password or non-existent account.", true);
+	}
+
+	$totp_active = $user_account["totp_state"] == TOTP_STATE_ACTIVE;
+	$code = $body["code"] ?? "";
+	if ($totp_active && !sec_totp_code_valid($user_account, $code)) {
+		// wrong or missing code: one outcome either way
+		$given = strlen((string) $code) > 0 && intval(preg_replace('/\s+/', '', (string) $code)) > 0;
+		return $counted(401, $given ? "totp_invalid" : "totp_required",
+			$given ? "Correct password, but the TOTP code is incorrect." : "Correct password, but a TOTP code is required.", true);
+	}
+
+	unset($user_account["password"], $user_account["totp_secret"]);
+	return ["status" => 200, "data" => array_merge([
+		"token" => sec_auth_succes($db, $user_account),
+		"userId" => $user_account["no_user_account"],
+		"totpUsed" => $totp_active,
+	], $meta)];
 }

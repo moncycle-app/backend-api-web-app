@@ -135,7 +135,7 @@ function moncycle_app_escape_html(text) {
 // the "nfp_method" 1-4 integer (still used by account.html's radio buttons) conflates the
 // NFP method with whether temperature is also tracked; the API exposes those as two
 // separate fields (method: "billings"|"fertilityCare", temperatureTracking: bool) instead.
-const moncycle_app_nfp_method_table = {1: ["billings", true], 2: ["billings", false], 3: ["fertilityCare", true], 4: ["fertilityCare", false]};
+const moncycle_app_nfp_method_table = {1: ["billings", true], 2: ["billings", false], 3: ["fertilityCare", false], 4: ["fertilityCare", true]};
 function moncycle_app_nfp_method_to_api(nfp_method) {
 	let m = moncycle_app_nfp_method_table[nfp_method] || ["billings", false];
 	return {method: m[0], temperatureTracking: m[1]};

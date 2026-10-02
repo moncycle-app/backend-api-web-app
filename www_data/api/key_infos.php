@@ -8,39 +8,27 @@
 */
 
 require_once "../config.php";
-require_once "../lib/db.php";
-require_once "../lib/date.php";
-require_once "../lib/sec.php";
-require_once "../lib/http.php";
+require_once "../lib/api.php";
+require_once "../lib/account.php";
 
-header('Content-Type: application/json');
+[$db, $user_account] = api_start();
 
-$db = db_open();
-
-$user_account = sec_auth_token($db);
-sec_exit_si_non_connecte($user_account);
-
-$cycles = db_select_cycles($db, $user_account["no_user_account"]);
-$pregnancys = db_select_pregnancys($db, $user_account["no_user_account"]);
-
-// split the single 1-4 "nfp_method" int (stored value, unchanged) into an explicit
-// method + temperatureTracking pair, same vocabulary as /api/register
-$method_info = NFP_METHOD_API_BY_ID[intval($user_account["nfp_method"])] ?? NFP_METHOD_API_BY_ID[NFP_METHOD_ID_BILLINGS];
+$nfp_method = intval($user_account["nfp_method"]);
 
 http_data(200, [
 	"userId" => $user_account["no_user_account"],
 	"email" => $user_account["email1"],
 	"secondaryEmail" => $user_account["email2"],
-	"method" => $method_info["method"],
-	"temperatureTracking" => $method_info["temperatureTracking"],
+	"method" => account_method_name($nfp_method),
+	"temperatureTracking" => account_tracks_temperature($nfp_method),
 	"birthYear" => $user_account["age"],
 	"name" => $user_account["name_user_account"],
 	"inscriptionDate" => http_iso8601($user_account["inscription_date"]),
 	"sponsor" => boolval($user_account["sponsor"]),
 	"research" => boolval($user_account["research"]),
 	"timelineAscending" => boolval($user_account["timeline_asc"]),
-	"allCyclesFirstDay" => $cycles,
-	"allPregnancyDates" => $pregnancys,
+	"allCyclesFirstDay" => db_select_cycles($db, $user_account["no_user_account"]),
+	"allPregnancyDates" => db_select_pregnancys($db, $user_account["no_user_account"]),
 	"totpState" => sec_totp_state_name($user_account["totp_state"]),
 	"lastWriteClientUtc" => http_iso8601($user_account["last_write_client_UTC"]),
 ]);

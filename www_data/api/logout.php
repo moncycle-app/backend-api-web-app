@@ -19,8 +19,7 @@ if (!is_null($user_account)) {
 	db_delete_auth_token($db, $user_account["no_auth_token"], $user_account["no_user_account"]);
 }
 
-setcookie("MONCYCLEAPP_TOKEN", '', -1, '/');
-setcookie("MONCYCLEAPP_JETTON", '', -1, '/'); // legacy, to be removed in a few release
+sec_clear_token_cookie();
 
 // this is only ever reached via a plain <a href> top-level navigation (account.html), never
 // an XHR/fetch call, so a real redirect is what actually works here -- a 204 (or any JSON

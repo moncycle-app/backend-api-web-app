@@ -28,6 +28,7 @@ use Fpdf\Fpdf;
 
 // DocPdf below extends Fpdf as soon as this file loads, so the autoloader has to be there first
 require_once __DIR__ . "/../vendor/autoload.php";
+require_once __DIR__ . "/account.php";
 require_once __DIR__ . "/date.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/http.php";
@@ -204,9 +205,9 @@ function doc_get_initials(string $name): string {
 // Named after the NFP fields, or after the API's day where NFP has none (date, cycleDay,
 // cycleFirstDay).
 function doc_csv_columns(array $days, int $nfp_method): array {
-	$temperature = nfp_file_method_tracks_temperature($nfp_method) ? ["temperature", "temperatureTime"] : [];
+	$temperature = account_tracks_temperature($nfp_method) ? ["temperature", "temperatureTime"] : [];
 
-	if (nfp_file_method_name($nfp_method) === NFP_METHOD_FERTILITY_CARE) {
+	if (account_method_name($nfp_method) === NFP_METHOD_FERTILITY_CARE) {
 		return ["date", "cycleDay", "cycleFirstDay", "mucusNotObserved", "stampColor", "stampBaby",
 			"codifiedBleedingObservation", "codifiedMucusSensation", "codifiedMucusObservation",
 			"codifiedNumberObservations", "codifiedPainObservations", "codifiedArrow",
@@ -245,6 +246,40 @@ function doc_csv_row($out, array $fields): void {
 	fputcsv($out, $fields, CSV_SEP, '"', '', "\r\n");
 }
 
+// A stored table for the raw data export (api/all_of_my_data_plz.php): the column names, each
+// followed by the separator, then the rows, then a blank line. Nothing at all for no rows.
+function doc_csv_dump($out, array $rows): void {
+	if (empty($rows)) return;
+	foreach (array_keys($rows[0]) as $column) fputs($out, $column . CSV_SEP);
+	fputs($out, PHP_EOL);
+	foreach ($rows as $row) fputcsv($out, $row, CSV_SEP, '"', '\\');
+	fputs($out, PHP_EOL);
+}
+
+// Every day of the account as stored, for the raw data export. The legacy "sensation" column is
+// unused: its place is taken by the sensation and observation descriptions of the day.
+function doc_raw_days($db, int $no_user_account): array {
+	$names_by_day = [];
+	foreach (db_select_descriptions_for_day_timeline_frame($db, "0000-00-00", "9999-12-31", $no_user_account) as $description) {
+		$names_by_day[$description["no_day"]][intval($description["type"])][] = $description["name"];
+	}
+
+	$rows = [];
+	foreach (db_select_all_day_timeline($db, $no_user_account) as $day) {
+		$row = [];
+		foreach ($day as $column => $value) {
+			if ($column !== "sensation") {
+				$row[$column] = $value;
+				continue;
+			}
+			$row["sensation"] = implode(DOC_CSV_LIST_JOINER, $names_by_day[$day["no_day"]][DESCRIPTION_TYPE_SENSATION] ?? []);
+			$row["observation"] = implode(DOC_CSV_LIST_JOINER, $names_by_day[$day["no_day"]][DESCRIPTION_TYPE_OBSERVATION] ?? []);
+		}
+		$rows[] = $row;
+	}
+	return $rows;
+}
+
 // Booleans are "1" or empty, lists are joined with DOC_CSV_LIST_JOINER, dates are ISO, times
 // HH:MM, and the temperature takes a decimal comma when the separator is ";" -- the French
 // spreadsheet convention, where "," cannot be the separator. A gap only has its date.
@@ -278,7 +313,7 @@ function doc_csv_free_text(string $text): string {
 // ===========================================================================
 
 function doc_cycle_to_pdf(array $days, int $nfp_method, string $name, bool $anonymous = false): DocPdf {
-	if (nfp_file_method_name($nfp_method) === NFP_METHOD_FERTILITY_CARE) {
+	if (account_method_name($nfp_method) === NFP_METHOD_FERTILITY_CARE) {
 		return doc_cycle_fc_to_pdf($days, $nfp_method, $name, $anonymous);
 	}
 	return doc_cycle_bill_to_pdf($days, $nfp_method, $name, $anonymous);
@@ -424,7 +459,7 @@ function doc_cycle_bill_to_pdf(array $days, int $nfp_method, string $name, bool 
 	$pdf->SetMargins(DOC_PDF_MARGIN, DOC_PDF_MARGIN);
 
 	$rows = doc_bill_rows($days);
-	$layout = doc_bill_layout($pdf, $rows, nfp_file_method_tracks_temperature($nfp_method));
+	$layout = doc_bill_layout($pdf, $rows, account_tracks_temperature($nfp_method));
 	doc_bill_fit_rows($pdf, $rows, $layout);
 	$pages = doc_bill_paginate($pdf, $rows);
 
@@ -836,7 +871,7 @@ function doc_cycle_fc_to_pdf(array $days, int $nfp_method, string $name, bool $a
 	$top_margin = DOC_PDF_MARGIN;
 	$left_margin = DOC_PDF_MARGIN;
 	$grid_gray = DOC_FC_GRID_GRAY;
-	$with_temperature = nfp_file_method_tracks_temperature($nfp_method);
+	$with_temperature = account_tracks_temperature($nfp_method);
 	$lines_per_page = $with_temperature ? DOC_FC_LINES_PER_PAGE_TEMPERATURE : DOC_FC_LINES_PER_PAGE;
 
 	if ($anonymous) $name = doc_get_initials($name);

@@ -8,162 +8,79 @@
 */
 
 require_once "../config.php";
-require_once "../lib/db.php";
 require_once "../lib/doc.php";
-require_once "../lib/date.php";
 require_once "../lib/mail.php";
-
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\Exception;
-
-require_once '../vendor/phpmailer/phpmailer/src/Exception.php';
-require_once '../vendor/phpmailer/phpmailer/src/PHPMailer.php';
-require_once '../vendor/phpmailer/phpmailer/src/SMTP.php';
-require_once "../vendor/fpdf/fpdf/src/Fpdf/Fpdf.php";
-
-
 
 header("Content-Type: text/plain");
 
-echo ".............................................................................";
-echo PHP_EOL;
-
-echo "moncycle.app cron worker";
-echo PHP_EOL;
-
+echo "............................................................................." . PHP_EOL;
+echo "moncycle.app cron worker" . PHP_EOL;
 
 $db = db_open();
 
-// ENVOIE DES MAILS CYCLES TERMINE
+// THE EXPORT OF A CYCLE THAT ENDED, by mail (cycles of at least 5 days)
 
-$cycles = db_select_cycles_recent($db);
+foreach (db_select_cycles_recent($db) as $account) {
 
-foreach($cycles as $cyc) {
-	
-	$cycle_start = db_select_cycle($db, $cyc["cycle_complet"], $cyc["no_user_account"]);
-	
-	if(!empty($cycle_start)) {
+	$cycle_start = db_select_cycle($db, $account["cycle_complet"], $account["no_user_account"])[0]["cycle"] ?? null;
+	if (is_null($cycle_start)) continue;
 
-		$cycle_start = $cycle_start[0]["cycle"];
-		$days = doc_export_days($db, $cycle_start, $cyc["cycle_complet"], $cyc);
+	$days = doc_export_days($db, $cycle_start, $account["cycle_complet"], $account);
+	if (count($days) < 5) continue;
 
-		$nb_j = count($days);
-		
-		if ($nb_j>=5) {
+	$nfp_method = intval($account["nfp_method"]);
+	$csv = fopen('php://memory', 'rw');
+	doc_cycle_to_csv($csv, $days, $nfp_method);
+	rewind($csv);
 
-			$pdf = doc_cycle_to_pdf($days, intval($cyc["nfp_method"]), $cyc["name"]);
+	$file_name = 'moncycle_app_' . date_humain(new DateTime($cycle_start), '_');
+	$sent = mail_send_cycle(
+		$account, date_humain(new DateTime($days[0]["date"])), date_humain(new DateTime(end($days)["date"])), count($days),
+		["$file_name.pdf" => doc_cycle_to_pdf($days, $nfp_method, $account["name"])->Output('S'), "$file_name.csv" => stream_get_contents($csv)]
+	);
+	fclose($csv);
 
-			$csv = fopen('php://memory','rw');
-			doc_cycle_to_csv($csv, $days, intval($cyc["nfp_method"]));
-			rewind($csv);
-
-			$mail = mail_init();
-
-			$mail->addAddress($cyc["email1"], $cyc["email1"]);
-			if (!empty($cyc["email2"])) $mail->addAddress($cyc["email2"], $cyc["email2"]);
-
-			$dh = date_humain(new Datetime($days[0]["date"]));
-			$fh = date_humain(new Datetime(end($days)["date"]));
-
-			$mail->isHTML(true);
-			$mail->Subject = "Cycle de $nb_j jours du $dh";
-			$mail->Body = mail_body_cycle($cyc['name'], $dh, $fh, $nb_j);
-			$mail->AltBody = "Export de votre cycle du $dh au $fh de $nb_j jours.\n\nmoncycle.app";
-
-			$filename_start_date = date_humain(new DateTime($cycle_start), '_');
-
-			$mail->addStringAttachment($pdf->Output('S'), 'moncycle_app_'. $filename_start_date . '.pdf');
-			$mail->addStringAttachment(stream_get_contents($csv), 'moncycle_app_'. $filename_start_date . '.csv');
-
-			$mail->send();
-
-			fclose($csv);
-
-			echo "cycle of $nb_j days sent to {$cyc["email1"]} (and {$cyc["email2"]}).";
-			echo PHP_EOL;
-		}
-	}
+	echo ($sent ? "cycle of " . count($days) . " days sent to " : "COULD NOT send the cycle of " . count($days) . " days to ") . "{$account["email1"]} (and {$account["email2"]})." . PHP_EOL;
 }
 
-// RELANCE COMPTES INACTIF
+// A REMINDER TO THE ACCOUNTS THAT HAVE GONE QUIET
 
-$user_account = db_select_user_account_inactif($db);
-
-foreach($user_account as $com) {
-
-	$mail = mail_init();
-
-	$mail->addAddress($com["email1"], $com["email1"]);
-	if (!empty($com["email2"])) $mail->addAddress($com["email2"], $com["email2"]);
-
-	$mail->isHTML(true);
-	$mail->Subject = "Comment allez-vous?";
-	$mail->Body = mail_body_relance($com["name"], $com["email1"]);
-	$mail->AltBody = "Cela fait longtemps que l'on ne vous a pas vu sur moncycle.app, tout va bien?";
-
-	$mail->send();
-
-	db_update_is_inactive($db, $com["no_user_account"], 1);
-
-	echo "reminder sent to {$com["email1"]} (and {$com["email2"]})";
-	echo PHP_EOL;
+foreach (db_select_user_account_inactif($db) as $account) {
+	$sent = mail_send_reminder($account);
+	if ($sent) db_update_is_inactive($db, $account["no_user_account"], 1);
+	echo ($sent ? "reminder sent to " : "COULD NOT send a reminder to ") . "{$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
 }
 
-// RGPD: WARN THEN DELETE ACCOUNTS INACTIVE FOR ACCOUNT_INACTIVITY_DELETE_YEARS
+// RGPD: WARN, THEN DELETE, THE ACCOUNTS INACTIVE FOR ACCOUNT_INACTIVITY_DELETE_YEARS
 
-$user_account_to_warn = db_select_user_account_to_warn_before_deletion($db, ACCOUNT_INACTIVITY_DELETE_YEARS, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE);
-
-foreach($user_account_to_warn as $account) {
-
-	$mail = mail_init();
-
-	$mail->addAddress($account["email1"], $account["email1"]);
-	if (!empty($account["email2"])) $mail->addAddress($account["email2"], $account["email2"]);
-
-	$mail->isHTML(true);
-	$mail->Subject = "Votre compte moncycle.app va être supprimé dans " . ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE . " jours";
-	$mail->Body = mail_body_account_deletion_warning($account["name"], $account["email1"], ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE);
-	$mail->AltBody = "Faute d'activité, votre compte moncycle.app sera supprimé dans " . ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE . " jours. Connectez-vous pour le conserver.";
-
-	$mail->send();
-
-	echo "deletion warning sent to {$account["email1"]} (and {$account["email2"]})";
-	echo PHP_EOL;
+foreach (db_select_user_account_to_warn_before_deletion($db, ACCOUNT_INACTIVITY_DELETE_YEARS, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE) as $account) {
+	$sent = mail_send_deletion_warning($account, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE);
+	echo ($sent ? "deletion warning sent to " : "COULD NOT send a deletion warning to ") . "{$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
 }
 
-$user_account_to_delete = db_select_user_account_to_delete($db, ACCOUNT_INACTIVITY_DELETE_YEARS);
-
-foreach($user_account_to_delete as $account) {
-
+foreach (db_select_user_account_to_delete($db, ACCOUNT_INACTIVITY_DELETE_YEARS) as $account) {
 	db_delete_user_account($db, $account["no_user_account"]);
-
-	echo "account {$account["email1"]} deleted (" . ACCOUNT_INACTIVITY_DELETE_YEARS . " years without activity, RGPD)";
-	echo PHP_EOL;
+	echo "account {$account["email1"]} deleted (" . ACCOUNT_INACTIVITY_DELETE_YEARS . " years without activity, RGPD)" . PHP_EOL;
 }
 
-// SUPPR DES TOKENS EXPIRES
+// EXPIRED TOKENS
 
-$ret = db_delete_vieux_auth_token($db);
-echo $ret . " old tokens deleted";
-echo PHP_EOL;
+echo db_delete_vieux_auth_token($db) . " old tokens deleted" . PHP_EOL;
+echo db_delete_vieux_login_attempt_ip($db) . " old login attempts (IP) deleted" . PHP_EOL;
 
-$ret = db_delete_vieux_login_attempt_ip($db);
-echo $ret . " old login attempts (IP) deleted";
-echo PHP_EOL;
-
-// RESET DES COMPTEURS DE STAT
+// THE VISIT COUNTERS: every day, every Sunday, the first of the month
 
 db_update_reset_key_value($db, "pub_visite_jour");
 echo "daily stats reset";
 
-$auj = getdate();
+$today = getdate();
 
-if ($auj["wday"]==0) {
+if ($today["wday"] == 0) {
 	db_update_reset_key_value($db, "pub_visite_hebdo");
 	echo ", weekly stats reset";
 }
 
-if ($auj["mday"]==1) {
+if ($today["mday"] == 1) {
 	db_update_reset_key_value($db, "pub_visite_mensuel");
 	echo ", monthly stats reset";
 }

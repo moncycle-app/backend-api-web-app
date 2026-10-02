@@ -7,6 +7,8 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
+require_once __DIR__ . "/date.php";
+
 // reads and JSON-decodes the raw request body. Sends a 400 error and exits if it's missing,
 // empty, or not a JSON object -- endpoints that take no body (GET, DELETE-by-query-string)
 // don't call this.
@@ -49,4 +51,18 @@ function http_iso8601(?string $utc_timestamp): ?string {
 function http_from_iso8601(?string $timestamp): ?string {
 	if (empty($timestamp)) return null;
 	return preg_replace('/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}).*$/', '$1 $2', trim($timestamp));
+}
+
+// The client's own timestamp of a write ("lastWriteClientUtc") as a UTC "Y-m-d H:i:s", or the
+// server's clock when it is absent or not a valid timestamp.
+function http_client_timestamp(?string $iso8601): string {
+	$utc = http_from_iso8601($iso8601);
+	return $utc && date_validate_timestamp($utc) ? $utc : date('Y-m-d H:i:s');
+}
+
+// The answer of the endpoints a browser calls straight (downloads, pages): a plain-text 400.
+function http_text_error(string $message): never {
+	http_response_code(400);
+	print("ERREUR: " . $message);
+	exit;
 }

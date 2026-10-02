@@ -19,6 +19,12 @@ function date_humain_week_day($date, $week_days, $sep='/') {
 	return $week_days[intval(date_format($date, 'w'))] . date_format($date, ' d' . $sep . 'm');
 }
 
+// "YYYY-MM-DD" (spaces around are allowed) -> the date itself, or null when it is not a real calendar date.
+function date_parse_ymd(mixed $value): ?string {
+	if (!is_string($value) || !preg_match('/^\s*(\d{4})-(\d{2})-(\d{2})\s*$/', $value, $m)) return null;
+	return checkdate(intval($m[2]), intval($m[3]), intval($m[1])) ? trim($value) : null;
+}
+
 function date_validate_timestamp($timestamp) {
     $pattern = '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/';
     if (!preg_match($pattern, $timestamp)) return false;

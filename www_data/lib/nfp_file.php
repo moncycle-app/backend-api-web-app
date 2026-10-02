@@ -29,26 +29,12 @@
 ** place.
 */
 
+require_once __DIR__ . "/account.php";
 require_once __DIR__ . "/data.php";
+require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/date.php";
 require_once __DIR__ . "/day_format.php";
 require_once __DIR__ . "/nfp_format.php";
-
-// ---------------------------------------------------------------------------
-// The account's method, as the format names it.
-//
-// nfp_method packs the method and whether temperature is tracked into one 1-4
-// integer: 1 = Billings + temperature, 2 = Billings, 3 = FertilityCare,
-// 4 = FertilityCare + temperature (NFP_METHOD_ID_*, constants.php).
-// ---------------------------------------------------------------------------
-
-function nfp_file_method_name(int $nfp_method): string {
-	return in_array($nfp_method, NFP_METHOD_IDS_FERTILITYCARE, true) ? NFP_METHOD_FERTILITY_CARE : NFP_METHOD_BILLINGS;
-}
-
-function nfp_file_method_tracks_temperature(int $nfp_method): bool {
-	return in_array($nfp_method, NFP_METHOD_IDS_WITH_TEMPERATURE, true);
-}
 
 // ---------------------------------------------------------------------------
 // Shared text hygiene.
@@ -166,7 +152,7 @@ function nfp_file_day_to_nfp(array $day): array {
 // cycle lookup, the days, and the descriptions of those days in one go.
 function nfp_file_export_cycles($db, string $start_date, string $end_date, array $user_account): array {
 	$no_user_account = intval($user_account["no_user_account"]);
-	$method = nfp_file_method_name(intval($user_account["nfp_method"]));
+	$method = account_method_name(intval($user_account["nfp_method"]));
 
 	$cycle_start_date = db_select_cycle($db, $start_date, $no_user_account)[0]["cycle"] ?? $start_date;
 
@@ -237,7 +223,7 @@ function nfp_file_export($db, string $start_date, string $end_date, array $user_
 	}
 
 	$file["userMethodPreferences"] = [
-		"preferredMethod" => nfp_file_method_name(intval($user_account["nfp_method"])),
+		"preferredMethod" => account_method_name(intval($user_account["nfp_method"])),
 	];
 	$file["cycles"] = nfp_file_export_cycles($db, $start_date, $end_date, $user_account);
 
@@ -364,7 +350,7 @@ function nfp_file_build_plan(object $file, array $user_account): array {
 	$plan = [];
 	$dates_seen = [];
 
-	$account_method = nfp_file_method_name(intval($user_account["nfp_method"]));
+	$account_method = account_method_name(intval($user_account["nfp_method"]));
 
 	$floor = new DateTime(NFP_DATE_FLOOR);
 	$ceiling = new DateTime('today');

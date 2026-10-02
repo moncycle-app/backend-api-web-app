@@ -7,6 +7,8 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
+require_once __DIR__ . "/db.php";
+
 function data_construnct_day($db, $date, $no_user_account, $raw_day=null, $cycle=null, $pos=null) {
 	$ob_data = array();
 
