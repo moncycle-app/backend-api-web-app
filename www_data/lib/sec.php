@@ -69,9 +69,9 @@ function sec_auth_token($db) {
 	if (isset($head["Authorization"]) && str_contains($head["Authorization"], "Bearer ")) $auth_token = explode(' ', trim($head["Authorization"]), 2)[1];
 	if (strlen($auth_token) > 0) {
 		$user_account = db_select_user_account_auth_token($db, sec_hash_token($auth_token));
-		if (isset($user_account[0]) && isset($user_account[0]["user_enabled"]) && boolval($user_account[0]["user_enabled"])) {
-			db_update_auth_token_use($db, $user_account[0]["no_auth_token"]);
-			return $user_account[0];
+		if (!is_null($user_account) && boolval($user_account["user_enabled"] ?? false)) {
+			db_update_auth_token_use($db, $user_account["no_auth_token"]);
+			return $user_account;
 		}
 	}
 	return null;
@@ -160,7 +160,7 @@ function sec_totp_code_valid(array $user_account, $code): bool {
 // they have none (or one that has been purged).
 function sec_captcha_issue($db, string $phrase): void {
 	$cookie_token = sec_cookie_token();
-	$known = $cookie_token !== "" && isset(db_select_auth_token_captcha($db, $cookie_token)[0]["no_auth_token"]);
+	$known = $cookie_token !== "" && !is_null(db_select_auth_token_captcha($db, $cookie_token));
 
 	if (!$known) {
 		$cookie_token = sec_password_aleatoire(64);
@@ -179,7 +179,7 @@ function sec_captcha_issue($db, string $phrase): void {
 function sec_captcha_take($db): ?string {
 	if (sec_cookie_token() === "") return null;
 
-	$stored = db_select_auth_token_captcha($db, sec_cookie_token())[0] ?? null;
+	$stored = db_select_auth_token_captcha($db, sec_cookie_token());
 	if (is_null($stored)) return null;
 
 	db_update_auth_token_use($db, $stored["no_auth_token"]);
@@ -244,7 +244,7 @@ function sec_login($db, array $body): array {
 	}
 
 	$client_ip = sec_client_ip();
-	$user_account = db_select_user_account_par_mail($db, $body["email"])[0] ?? [];
+	$user_account = db_select_user_account_par_mail($db, $body["email"]) ?? [];
 	$account_locked = sec_login_account_locked($user_account);
 
 	// surfaced on every outcome below (successes included): it is a hint for the client's *next*

@@ -22,7 +22,7 @@ $db = db_open();
 
 foreach (db_select_cycles_recent($db) as $account) {
 
-	$cycle_start = db_select_cycle($db, $account["cycle_complet"], $account["no_user_account"])[0]["cycle"] ?? null;
+	$cycle_start = db_select_cycle($db, $account["cycle_complet"], $account["no_user_account"]);
 	if (is_null($cycle_start)) continue;
 
 	$days = doc_export_days($db, $cycle_start, $account["cycle_complet"], $account);

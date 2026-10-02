@@ -27,7 +27,7 @@ if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
 
 // The answer is the same whether or not the account exists, and takes as long, so that nobody
 // can use this to find out who has one.
-if (boolval(db_select_user_account_existe($db, $email)[0]["user_account_existe"])) {
+if (db_select_user_account_existe($db, $email)) {
 	$password = sec_password_aleatoire();
 	db_update_password_par_mail($db, sec_hash($password), $email);
 	mail_send_new_password($email, $password);

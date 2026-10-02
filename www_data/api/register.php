@@ -39,7 +39,7 @@ if (!sec_captcha_matches($captcha, $body["captcha"] ?? "")) {
 	http_error(403, "captcha_invalid", "Error in captcha input.");
 }
 
-if (boolval(db_select_user_account_existe($db, $body["email"])[0]["user_account_existe"])) {
+if (db_select_user_account_existe($db, $body["email"])) {
 	http_error(409, "account_exists", "Account already exist.");
 }
 
@@ -50,7 +50,7 @@ if (intval($body["birthYear"]) < (intval(date("Y")) - 100) || intval($body["birt
 // the password is generated, and only sent by mail
 $password = sec_password_aleatoire();
 $new_account_no = db_insert_user_account(
-	$db, $body["firstName"], account_method_id_from_json($body), $body["birthYear"], $body["email"], sec_hash($password),
+	$db, $body["firstName"], account_method_id_from_json($body), intval($body["birthYear"]), $body["email"], sec_hash($password),
 	$body["discoveredComment"] ?? null, boolval($body["okForResearch"] ?? false)
 );
 

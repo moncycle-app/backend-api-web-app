@@ -154,7 +154,7 @@ function nfp_file_export_cycles($db, string $start_date, string $end_date, array
 	$no_user_account = intval($user_account["no_user_account"]);
 	$method = account_method_name(intval($user_account["nfp_method"]));
 
-	$cycle_start_date = db_select_cycle($db, $start_date, $no_user_account)[0]["cycle"] ?? $start_date;
+	$cycle_start_date = db_select_cycle($db, $start_date, $no_user_account) ?? $start_date;
 
 	$raw_days = db_select_day_timelines_frame($db, $cycle_start_date, $end_date, $no_user_account);
 	$raw_days = array_column($raw_days, null, 'date_obs');
@@ -931,10 +931,10 @@ function nfp_file_resolve_description($db, int $no_user_account, string $name, i
 	// both types is reported on the second use even when this very import created it.
 	if (!isset($cache[$name])) {
 		$existing = db_select_description_exact_name($db, $no_user_account, $name);
-		if (isset($existing[0]["no_description"])) {
+		if (isset($existing["no_description"])) {
 			// Reused whatever its recorded type: description has a unique key on
 			// (no_user_account, name), so one name is one row. api/day.php does the same.
-			$cache[$name] = ["id" => intval($existing[0]["no_description"]), "type" => intval($existing[0]["type"])];
+			$cache[$name] = ["id" => intval($existing["no_description"]), "type" => intval($existing["type"])];
 		}
 		else {
 			$no_description = intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
@@ -972,7 +972,7 @@ function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overi
 		$date = $entry["date"];
 
 		$existing = db_select_day_timeline($db, $date, $no_user_account);
-		$exists = isset($existing[0]["no_day"]);
+		$exists = isset($existing["no_day"]);
 
 		if ($exists) $already[] = $date;
 
@@ -982,16 +982,10 @@ function nfp_file_write_plan($db, int $no_user_account, array $plan, bool $overi
 		}
 
 		$no_day = $exists
-			? intval($existing[0]["no_day"])
+			? intval($existing["no_day"])
 			: intval(db_insert_day_timeline($db, $date, $no_user_account));
 
-		$fields = $entry["fields"];
-		db_update_day_timeline(
-			$db, $date, $no_user_account, $last_write_client_UTC,
-			$fields["stamp"], $fields["fc_score"], $fields["fc_arrow"], $fields["temp"], $fields["htemp"],
-			$fields["is_peak"], $fields["union_sex"], $fields["cycle_1st_day"], $fields["day_not_observed"],
-			$fields["pregnancy"], $fields["comment"], $fields["counter_start"]
-		);
+		db_update_day_timeline($db, $date, $no_user_account, $last_write_client_UTC, $entry["fields"]);
 
 		$wanted = [];
 		foreach ($entry["sensations"] as $name) {

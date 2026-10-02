@@ -18,7 +18,7 @@ if (empty($body["oldPassword"]) || empty($body["newPassword"])) {
 	http_error(400, "missing_fields", "'oldPassword' and 'newPassword' are required.");
 }
 
-$user_account = db_select_user_account_par_mail($db, $user_account["email1"])[0] ?? [];
+$user_account = db_select_user_account_par_mail($db, $user_account["email1"]) ?? [];
 
 if (strlen($body["newPassword"]) < PASSWORD_MIN_LENGTH) {
 	http_error(422, "password_too_short", "New password is too short (minimum " . PASSWORD_MIN_LENGTH . " characters).");

@@ -186,7 +186,7 @@ function day_to_json(array $day): array {
 	return array_merge($json, day_format_fc_score_decode($day['fc_score'] ?? null));
 }
 
-// Builds the positional values db_update_day_timeline() expects from the JSON day shape.
+// Builds the fields db_update_day_timeline() expects from the JSON day shape.
 // Matches the existing upsert semantics of api/day.php: a POST is expected to carry the full
 // current state of the day, not a sparse patch, so an omitted field is written as empty/false,
 // same as before this change. This only translates encoding -- it doesn't touch the DB and

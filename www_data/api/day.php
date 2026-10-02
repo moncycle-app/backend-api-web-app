@@ -102,15 +102,10 @@ elseif ($_SERVER['REQUEST_METHOD'] == "POST") {
 		$db->exec("START TRANSACTION");
 
 		$existing = db_select_day_timeline($db, $date, $user_account["no_user_account"]);
-		$is_new = !isset($existing[0]);
-		$no_day = $is_new ? db_insert_day_timeline($db, $date, $user_account["no_user_account"]) : $existing[0]["no_day"];
+		$is_new = is_null($existing);
+		$no_day = $is_new ? db_insert_day_timeline($db, $date, $user_account["no_user_account"]) : $existing["no_day"];
 
-		db_update_day_timeline(
-			$db, $date, $user_account["no_user_account"], $last_write_client_UTC,
-			$fields['stamp'], $fields['fc_score'], $fields['fc_arrow'], $fields['temp'], $fields['htemp'],
-			$fields['is_peak'], $fields['union_sex'], $fields['cycle_1st_day'], $fields['day_not_observed'],
-			$fields['pregnancy'], $fields['comment'], $fields['counter_start']
-		);
+		db_update_day_timeline($db, $date, $user_account["no_user_account"], $last_write_client_UTC, $fields);
 
 		$old_description = db_select_all_description_for_day_timeline($db, $user_account["no_user_account"], $no_day);
 		$old_description_no = array_column($old_description, "no_description");
@@ -149,7 +144,7 @@ elseif ($_SERVER['REQUEST_METHOD'] == "DELETE") {
 
 	$date = trim($_GET['date']);
 
-	db_update_day_timeline($db, $date, $user_account["no_user_account"], date('Y-m-d H:i:s'), '', null, null, null, null, null, null, null, null, null, null, null);
+	db_update_day_timeline($db, $date, $user_account["no_user_account"], date('Y-m-d H:i:s'));
 
 	http_no_content();
 }

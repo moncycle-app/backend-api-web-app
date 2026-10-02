@@ -13,8 +13,7 @@ function data_construnct_day($db, $date, $no_user_account, $raw_day=null, $cycle
 	$ob_data = array();
 
 	if (is_null($cycle)) {
-		$cycle_raw = db_select_cycle($db, $date, $no_user_account);
-		$cycle = $cycle_raw[0]["cycle"] ?? null;
+		$cycle = db_select_cycle($db, $date, $no_user_account);
 		$ob_data["cycle"] = $cycle;
 	}
 	elseif (!is_null($cycle)) $ob_data["cycle"] = $cycle;
@@ -25,7 +24,7 @@ function data_construnct_day($db, $date, $no_user_account, $raw_day=null, $cycle
 	}
 	elseif (!is_null($pos)) $ob_data["pos"] = $pos;
 
-	if(is_null($raw_day)) $raw_day = db_select_day_timeline($db, $date, $no_user_account)[0] ?? array();
+	if(is_null($raw_day)) $raw_day = db_select_day_timeline($db, $date, $no_user_account) ?? array();
 	if(!empty($raw_day)) {
 		$ob_data = array_merge($ob_data, $raw_day);
 		$ob_data["description"] = db_select_all_description_for_day_timeline($db, $no_user_account, $ob_data["no_day"]);
@@ -39,11 +38,11 @@ function data_construnct_day($db, $date, $no_user_account, $raw_day=null, $cycle
 
 // resolves a free-text description name to its id, creating it (with the given type) the
 // first time it's used -- mirrors the dedupe-by-name already used by the account settings
-// picklist (db_select_description_from_name).
+// picklist (db_select_description_exact_name).
 function data_resolve_description_id($db, $no_user_account, $name, $type, $last_write_client_UTC) {
 	$name = trim($name);
-	$existing = db_select_description_from_name($db, $no_user_account, $name);
-	if (isset($existing[0]["no_description"])) return intval($existing[0]["no_description"]);
+	$existing = db_select_description_exact_name($db, $no_user_account, $name);
+	if (isset($existing["no_description"])) return intval($existing["no_description"]);
 	return intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
 }
 

@@ -73,7 +73,7 @@ elseif ($_SERVER['REQUEST_METHOD'] == "DELETE") {
 		http_error(404, "not_found", "'id' does not match a known description.");
 	}
 
-	db_delete_descriptions($db, $_GET["id"], $no_user_account);
+	db_delete_descriptions($db, intval($_GET["id"]), $no_user_account);
 
 	http_no_content();
 }
