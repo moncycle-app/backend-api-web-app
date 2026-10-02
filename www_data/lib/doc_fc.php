@@ -10,7 +10,6 @@
 /*
 ** The FertilityCare chart (nfp_method 3 and 4): a grid, A3 landscape. Sizes are in mm.
 **
-**
 ** One row of the grid per cycle, 35 days wide; a longer cycle carries on in the next row. Each
 ** day is a column of cells: stamp, baby, peak, date, bleeding, mucus, other (arrow, pain codes,
 ** union), [temperature,] comment. The layout (DOC_FC_*) is in constants.php.
@@ -23,13 +22,7 @@ require_once __DIR__ . "/doc.php";
 require_once __DIR__ . "/doc_pdf.php";
 
 function doc_fc_pdf(array $days, int $nfp_method, string $name, bool $anonymous = false): DocPdf {
-	$first_col_width = DOC_FC_FIRST_COL_W;
-	$top_margin = DOC_PDF_MARGIN;
-	$left_margin = DOC_PDF_MARGIN;
-	$grid_gray = DOC_FC_GRID_GRAY;
 	$with_temperature = account_tracks_temperature($nfp_method);
-	$lines_per_page = $with_temperature ? DOC_FC_LINES_PER_PAGE_TEMPERATURE : DOC_FC_LINES_PER_PAGE;
-
 	if ($anonymous) $name = doc_get_initials($name);
 
 	$h_start_date = date_human(new DateTime($days[0]["date"]));
@@ -37,91 +30,116 @@ function doc_fc_pdf(array $days, int $nfp_method, string $name, bool $anonymous 
 	$h_current_date = date_human(new DateTime());
 
 	$pdf = new DocPdf('L', 'A3', 'MONCYCLE.APP tableau du ' . $h_start_date, $anonymous ? "$name (anonyme)" : $name);
-	$pdf->SetMargins($left_margin, $top_margin);
+	$pdf->SetMargins(DOC_PDF_MARGIN, DOC_PDF_MARGIN);
+	$grid = doc_fc_layout($pdf, $with_temperature, $anonymous);
 
-	$grid = [
-		"cell_w" => ($pdf->GetPageWidth() - $first_col_width - 2 * $left_margin) / DOC_FC_DAYS_PER_ROW,
+	// built once, then paginated: the page count cannot disagree with what is drawn
+	$lines_per_page = $with_temperature ? DOC_FC_LINES_PER_PAGE_TEMPERATURE : DOC_FC_LINES_PER_PAGE;
+	$pages = array_chunk(doc_fc_grid_rows($days), $lines_per_page);
+
+	foreach ($pages as $page_index => $page_rows) {
+		$page_title = $anonymous ? " (anonyme)" : " - observations du $h_start_date au $h_end_date";
+		$page_title .= " - document créé le $h_current_date - page " . ($page_index + 1) . " sur " . count($pages) . " - ";
+
+		$pdf->AddPage();
+		$pdf->SetDrawColor($grid["gray"], $grid["gray"], $grid["gray"]);
+		doc_fc_draw_title($pdf, $name, doc_pdf_text($page_title), $grid);
+
+		$y = doc_fc_draw_day_numbers($pdf, $grid);
+		for ($line = 0; $line < $lines_per_page; $line++) {
+			$y = doc_fc_draw_row($pdf, $page_rows[$line] ?? [], $grid, $y);
+		}
+		doc_fc_draw_bar($pdf, $grid, $y, false);
+	}
+
+	return $pdf;
+}
+
+// The measures of the grid, all in one place: the width of a day, the height of a line of text, of
+// the stamp cell and of one row of the grid, the margins, the grey of the lines, and the legend
+// column (row => [label, height]).
+function doc_fc_layout(DocPdf $pdf, bool $with_temperature, bool $anonymous): array {
+	$legend = [];
+	foreach (DOC_FC_ROW_LABELS as $row => $label) {
+		if ($row === "temperature" && !$with_temperature) continue;
+		$legend[$row] = [$label, $row === "baby" ? DOC_FC_STAMP_H : DOC_FC_LINE_H];
+	}
+
+	return [
+		"cell_w" => ($pdf->GetPageWidth() - DOC_FC_FIRST_COL_W - 2 * DOC_PDF_MARGIN) / DOC_FC_DAYS_PER_ROW,
 		"line_h" => DOC_FC_LINE_H,
 		"stamp_h" => DOC_FC_STAMP_H,
 		"color_coef" => DOC_FC_COLOR_COEF,
 		"temperature" => $with_temperature,
 		"anonymous" => $anonymous,
+		"left" => DOC_PDF_MARGIN,
+		"top" => DOC_PDF_MARGIN,
+		"first_col_w" => DOC_FC_FIRST_COL_W,
+		"gray" => DOC_FC_GRID_GRAY,
+		"full_w" => $pdf->GetPageWidth() - 2 * DOC_PDF_MARGIN,
+		"separator_h" => DOC_FC_SEPARATOR_H,
+		"row_h" => DOC_FC_LINE_H * ($with_temperature ? 8 : 7) + DOC_FC_STAMP_H,
+		"legend" => $legend,
 	];
-	$line_h = $grid["line_h"];
-	$content_h = $line_h * ($with_temperature ? 8 : 7) + $grid["stamp_h"];
-	$separator_h = DOC_FC_SEPARATOR_H;
-	$full_w = $pdf->GetPageWidth() - 2 * $left_margin;
+}
 
-	// the legend column: row => [label, height]
-	$legend = [];
-	foreach (DOC_FC_ROW_LABELS as $row => $label) {
-		if ($row === "temperature" && !$with_temperature) continue;
-		$legend[$row] = [$label, $row === "baby" ? $grid["stamp_h"] : $line_h];
+// the line at the top of a page: the name, what the page holds, and the link to the site
+function doc_fc_draw_title(DocPdf $pdf, string $name, string $page_title, array $grid): void {
+	$pdf->UseStyle('fc.header.name');
+	$pdf->Cell($pdf->GetStringWidth(doc_pdf_text($name)), $grid["line_h"], doc_pdf_text($name), 0, 0, 'L');
+	$pdf->UseStyle('fc.header');
+	$pdf->Cell($pdf->GetStringWidth($page_title), $grid["line_h"], $page_title, 0, 0, 'L');
+	$pdf->UseStyle('fc.header.link');
+	$pdf->Cell($pdf->GetStringWidth(" MONCYCLE.APP"), $grid["line_h"], "MONCYCLE.APP", 0, 0, 'L', false, "https://www.moncycle.app/");
+}
+
+// the day numbers across the top; returns where the first row of the grid starts
+function doc_fc_draw_day_numbers(DocPdf $pdf, array $grid): float {
+	$pdf->SetXY($grid["left"], $grid["top"] + $grid["line_h"] + 2);
+	$pdf->UseStyle('fc.day_numbers');
+	$pdf->SetFillColor(220, 220, 220);
+	$pdf->Cell($grid["first_col_w"], $grid["line_h"], "", "LTR", 0, 'L');
+	for ($day = 1; $day <= DOC_FC_DAYS_PER_ROW; $day++) $pdf->Cell($grid["cell_w"], $grid["line_h"], $day, "TR", 0, 'C', true);
+	return $pdf->GetY() + $grid["line_h"];
+}
+
+// the bar between two rows of the grid (which also sets the colour of the lines), and under the last
+function doc_fc_draw_bar(DocPdf $pdf, array $grid, float $y, bool $set_line_color = true): void {
+	$pdf->SetFillColor($grid["gray"], $grid["gray"], $grid["gray"]);
+	if ($set_line_color) $pdf->SetDrawColor($grid["gray"], $grid["gray"], $grid["gray"]);
+	$pdf->SetXY($grid["left"], $y);
+	$pdf->Cell($grid["full_w"], $grid["separator_h"], '', 'TLBR', 0, '', true);
+}
+
+// One row of the grid: the bar above it, the legend column, the cells of its days, and the vertical
+// lines between them. $cells are the days of the row (see doc_fc_grid_rows()), none for an empty
+// row. Returns the y under the row.
+function doc_fc_draw_row(DocPdf $pdf, array $cells, array $grid, float $y): float {
+	doc_fc_draw_bar($pdf, $grid, $y);
+	$y += $grid["separator_h"];
+
+	// the legend column
+	$pdf->UseStyle('fc.cell');
+	$pdf->SetDrawColor(255 / $grid["color_coef"], 255 / $grid["color_coef"], 255 / $grid["color_coef"]);
+	$legend_y = $y;
+	foreach ($grid["legend"] as $row => [$text, $height]) {
+		$pdf->SetXY($grid["left"], $legend_y);
+		$pdf->Cell($grid["first_col_w"], $height, $text, $row === "comment" ? "" : "B", 0, 'R');
+		$legend_y += $height;
 	}
 
-	// built once, then paginated: the page count cannot disagree with what is drawn
-	$pages = array_chunk(doc_fc_grid_rows($days), $lines_per_page);
-	$page_count = count($pages);
-
-	foreach ($pages as $page_index => $page_rows) {
-		$pdf->AddPage();
-		$pdf->SetDrawColor($grid_gray, $grid_gray, $grid_gray);
-
-		$page_title = $anonymous ? " (anonyme)" : " - observations du $h_start_date au $h_end_date";
-		$page_title .= " - document créé le $h_current_date - page " . ($page_index + 1) . " sur $page_count - ";
-		$page_title = doc_pdf_text($page_title);
-		$pdf->UseStyle('fc.header.name');
-		$pdf->Cell($pdf->GetStringWidth(doc_pdf_text($name)), $line_h, doc_pdf_text($name), 0, 0, 'L');
-		$pdf->UseStyle('fc.header');
-		$pdf->Cell($pdf->GetStringWidth($page_title), $line_h, $page_title, 0, 0, 'L');
-		$pdf->UseStyle('fc.header.link');
-		$pdf->Cell($pdf->GetStringWidth(" MONCYCLE.APP"), $line_h, "MONCYCLE.APP", 0, 0, 'L', false, "https://www.moncycle.app/");
-
-		// the day numbers across the top
-		$pdf->SetXY($left_margin, $top_margin + $line_h + 2);
-		$pdf->UseStyle('fc.day_numbers');
-		$pdf->SetFillColor(220, 220, 220);
-		$pdf->Cell($first_col_width, $line_h, "", "LTR", 0, 'L');
-		for ($j = 0; $j < DOC_FC_DAYS_PER_ROW; $j++) $pdf->Cell($grid["cell_w"], $line_h, $j + 1, "TR", 0, 'C', true);
-		$y = $pdf->GetY() + $line_h;
-
-		for ($line = 0; $line < $lines_per_page; $line++) {
-			$pdf->SetFillColor($grid_gray, $grid_gray, $grid_gray);
-			$pdf->SetDrawColor($grid_gray, $grid_gray, $grid_gray);
-			$pdf->SetXY($left_margin, $y);
-			$pdf->Cell($full_w, $separator_h, '', 'TLBR', 0, '', true);
-			$y += $separator_h;
-
-			// the legend column
-			$pdf->UseStyle('fc.cell');
-			$pdf->SetDrawColor(255 / $grid["color_coef"], 255 / $grid["color_coef"], 255 / $grid["color_coef"]);
-			$legend_y = $y;
-			foreach ($legend as $row => [$text, $h]) {
-				$pdf->SetXY($left_margin, $legend_y);
-				$pdf->Cell($first_col_width, $h, $text, $row === "comment" ? "" : "B", 0, 'R');
-				$legend_y += $h;
-			}
-
-			$x = $left_margin + $first_col_width;
-			for ($j = 0; $j < DOC_FC_DAYS_PER_ROW; $j++) {
-				doc_fc_draw_cell($pdf, $page_rows[$line][$j] ?? null, $grid, $x + $grid["cell_w"] * $j, $y);
-			}
-
-			// the vertical lines between the cells
-			$pdf->SetDrawColor($grid_gray, $grid_gray, $grid_gray);
-			$pdf->Line($left_margin, $y, $left_margin, $y + $content_h);
-			for ($j = 0; $j <= DOC_FC_DAYS_PER_ROW; $j++) {
-				$pdf->Line($x + $grid["cell_w"] * $j, $y, $x + $grid["cell_w"] * $j, $y + $content_h);
-			}
-			$y += $content_h;
-		}
-
-		$pdf->SetFillColor($grid_gray, $grid_gray, $grid_gray);
-		$pdf->SetXY($left_margin, $y);
-		$pdf->Cell($full_w, $separator_h, '', 'TLBR', 0, '', true);
+	$x = $grid["left"] + $grid["first_col_w"];
+	for ($day = 0; $day < DOC_FC_DAYS_PER_ROW; $day++) {
+		doc_fc_draw_cell($pdf, $cells[$day] ?? null, $grid, $x + $grid["cell_w"] * $day, $y);
 	}
 
-	return $pdf;
+	// the vertical lines between the cells
+	$pdf->SetDrawColor($grid["gray"], $grid["gray"], $grid["gray"]);
+	$pdf->Line($grid["left"], $y, $grid["left"], $y + $grid["row_h"]);
+	for ($day = 0; $day <= DOC_FC_DAYS_PER_ROW; $day++) {
+		$pdf->Line($x + $grid["cell_w"] * $day, $y, $x + $grid["cell_w"] * $day, $y + $grid["row_h"]);
+	}
+	return $y + $grid["row_h"];
 }
 
 // The rows of the grid: a new row at every cycle start, and when a row is full. Each cell is
