@@ -338,10 +338,11 @@ $(document).ready(function(){
 			return;
 		}
 		$("#but_mdp_change").prop("disabled", true);
-		var payload = {oldPassword: $("#i_old_pw").val(), newPassword: $("#i_pw1").val()};
+		var payload = {oldPassword: $("#i_old_pw").val(), newPassword: $("#i_pw1").val(), logoutOtherDevices: $("#i_logout_other_devices").is(":checked")};
 		$.ajax({type: "POST", url: "../api/password_change", contentType: "application/json", data: JSON.stringify(payload)}).done(function(ret){
 			$("#but_mdp_change").prop("disabled", false);
 			$("#form_mdp_change input[type=password]").val('');
+			$("#i_logout_other_devices").prop("checked", false);
 			$("#mdp_change_ok").text('✅ enregistré');
 		}).fail(function(jqXHR){
 			console.error(jqXHR);

@@ -772,9 +772,10 @@ paths:
         The new password must be **at least 8 characters** and must be different from the
         current one.
 
-        Existing tokens are **not** revoked. The user stays logged in everywhere, including on
-        any device a third party might hold. If that matters for your client, call
-        `GET /logout` on the other sessions, or tell the user to.
+        By default existing tokens are **not** revoked: the user stays logged in everywhere,
+        including on any device a third party might hold. Send `logoutOtherDevices: true` to
+        close every other session of the account in the same change. The session making the
+        request is never closed, and its token stays valid.
       requestBody:
         required: true
         content:
@@ -789,6 +790,13 @@ paths:
                 newPassword:
                   type: string
                   description: Minimum 8 characters. Must differ from the current one.
+                logoutOtherDevices:
+                  type: boolean
+                  default: false
+                  description: |-
+                    `true` closes every other session of the account (their tokens stop working,
+                    each of those devices has to log in again). The calling session stays open.
+                    The password change and the sign-out happen together or not at all.
       responses:
         "200":
           description: Password changed.
@@ -803,8 +811,13 @@ paths:
                       changed:
                         type: boolean
                         enum: [true]
+                      loggedOutDevices:
+                        type: integer
+                        description: Number of other sessions closed. Always `0` unless `logoutOtherDevices` was `true`.
         "400":
-          description: "`missing_fields` — `oldPassword` or `newPassword` is absent or empty."
+          description: |-
+            `missing_fields` — `oldPassword` or `newPassword` is absent or empty.
+            `invalid_parameter` — `logoutOtherDevices` is present but is not a JSON boolean.
           content:
             application/json:
               schema:

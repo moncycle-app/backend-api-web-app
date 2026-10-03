@@ -193,6 +193,11 @@ function db_delete_auth_token($db, $no_auth_token, $no_user_account) {
 	return db_exec($db, "DELETE FROM auth_token WHERE no_auth_token = :no_auth_token AND no_user_account = :no_user_account", ["no_auth_token" => $no_auth_token, "no_user_account" => $no_user_account]);
 }
 
+// Every session of the account but one (the caller's own): answers how many were closed.
+function db_delete_auth_tokens_other($db, $no_user_account, $no_auth_token_kept) {
+	return db_exec($db, "DELETE FROM auth_token WHERE no_user_account = :no_user_account AND no_auth_token <> :no_auth_token", ["no_user_account" => $no_user_account, "no_auth_token" => $no_auth_token_kept]);
+}
+
 // sessions not used for 40 days, or older than a year (those that expire: a captcha's does)
 function db_delete_old_auth_token($db) {
 	return db_exec($db, "DELETE FROM auth_token WHERE (date_creation < CURDATE() - INTERVAL 365 DAY OR date_use < CURDATE() - INTERVAL 40 DAY) AND expire > 0");
