@@ -122,6 +122,14 @@ function moncycle_app_redirect_if_unauthenticated(jqXHR) {
 	}
 }
 
+// Something changed on the server that the local copy (js/store.js) shows: the copy is brought up to
+// date once the changes stop coming (a name typed letter by letter is one change per letter).
+let moncycle_app_sync_timer = null;
+function moncycle_app_sync_later() {
+	clearTimeout(moncycle_app_sync_timer);
+	moncycle_app_sync_timer = setTimeout(function () { moncycle_store.sync().catch(function () { }); }, 1500);
+}
+
 function moncycle_app_error_message(jqXHR) {
 	return ((jqXHR.responseJSON || {}).error || {}).message || "erreur inconnue";
 }
@@ -155,6 +163,8 @@ function moncycle_app_description_from_api(d) {
 }
 
 $(document).ready(function(){
+
+	moncycle_store.init();
 
 	// TELECHARGEMENT DES DONNES DES UTILISATEUR
 	$.get("api/key_infos", {}).done(function(ret) {
@@ -238,6 +248,7 @@ $(document).ready(function(){
 			let payload = {name: name, type: moncycle_app_desc_type_from_int[type_int], id: id};
 			$.ajax({type: "POST", url: "api/description", contentType: "application/json", data: JSON.stringify(payload)}).done(function(ret){
 				$("#desc_net_stat").html(' ✅&nbsp;enregistré');
+				moncycle_app_sync_later();
 			}).fail(function(jqXHR){
 				$("#desc_net_stat").html('');
 				console.error(jqXHR);
@@ -259,6 +270,7 @@ $(document).ready(function(){
 				$(`#f_edit_description_${id}`).remove();
 				$(`#f_delete_description_${id}`).remove();
 				$("#desc_net_stat").html(' ✅&nbsp;supprimé');
+				moncycle_app_sync_later();
 			}).fail(function(jqXHR){
 				$("#desc_net_stat").html('');
 				console.error(jqXHR);
@@ -280,6 +292,7 @@ $(document).ready(function(){
 			$("#desc_net_stat").html(' ✅&nbsp;enregistré');
 			$("#f_new_description")[0].reset();
 			$.get("api/description", {}).done(load_description).fail(moncycle_app_redirect_if_unauthenticated);
+			moncycle_app_sync_later();
 		}).fail(function(jqXHR){
 			$("#desc_net_stat").html('');
 			console.error(jqXHR);
@@ -297,7 +310,6 @@ $(document).ready(function(){
 	const moncycle_app_account_field_map = {name: "name", email2: "secondaryEmail", age: "birthYear", timeline_asc: "timelineAscending", research: "research"};
 	$(".auto_save").on("keyup change", function() {
 		$("#net_stat").text('⏳');
-		localStorage.timeline_asc = $("#i_timeline_asc").prop('checked');
 		let field_name = $(this).attr('name');
 		let payload = {};
 		if (field_name == "nfp_method") {
@@ -319,6 +331,7 @@ $(document).ready(function(){
 			$("#net_stat").html(' ✅&nbsp;enregistré');
 			$("#net_stat").addClass('vert');
 			$("#net_stat").removeClass('rouge');
+			moncycle_app_sync_later();
 		}).fail(function(jqXHR){
 			console.error(jqXHR);
 			$("#net_stat").html(' ❌&nbsp;erreur');
@@ -540,13 +553,8 @@ $(document).ready(function(){
 			}).done(function (ret) {
 				import_done();
 				$("#import_report").html(import_render_report(ret.data || {}));
-				// A real import adds days and cycles, and the timeline reads both from
-				// localStorage before asking the server. Same two keys tableau.js drops after
-				// it creates a cycle: without this the new data is simply not drawn.
-				if (!dry_run) {
-					localStorage.removeItem("day_timeline");
-					localStorage.removeItem("constante");
-				}
+				// A real import adds days and cycles: the local copy gets them with a sync.
+				if (!dry_run) moncycle_app_sync_later();
 			}).fail(function (jqXHR) {
 				import_done();
 				moncycle_app_redirect_if_unauthenticated(jqXHR);

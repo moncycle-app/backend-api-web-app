@@ -350,7 +350,7 @@
 	border-radius: 5px;
 }
 
-#jour_form #bulk_form #i_bulk_compter {
+#jour_form #bulk_form #i_bulk_count {
 	width: 50px;
 	text-align: center;
 }
@@ -361,6 +361,33 @@
 
 .err {
 	color: red;
+}
+
+/* the bar at the bottom of the page that says a change could not be sent (above the day form) */
+.sync_status {
+	position: fixed;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	z-index: 1000000;
+	padding: 8px 12px;
+	font-size: .85em;
+	text-align: center;
+	color: white;
+	background-color: #555;
+}
+
+.sync_status.sync_error {
+	background-color: #b3261e;
+}
+
+.sync_status.sync_warning {
+	background-color: #8a5a00;
+}
+
+.sync_status button {
+	margin-left: 8px;
+	font-size: 1em;
 }
 
 h2 {

@@ -77,7 +77,7 @@ elseif ($_SERVER['REQUEST_METHOD'] == "DELETE") {
 
 	$date = date_parse_ymd($_GET['date'] ?? null) ?? http_error(400, "invalid_date", "'date' query parameter is required and must be in YYYY-MM-DD format.");
 
-	db_update_day_timeline($db, $date, $no_user_account, date('Y-m-d H:i:s'));
+	data_clear_day($db, $no_user_account, $date, http_client_timestamp($_GET['lastWriteClientUtc'] ?? null));
 
 	http_no_content();
 }

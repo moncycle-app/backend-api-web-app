@@ -28,6 +28,7 @@
 		<meta property="og:description" content="Application de suivi de cycle pour les méthodes naturelles de régulation des naissances." />
 		<script type="text/javascript" src="vendor/components/jquery/jquery.min.js"></script> 
 		<script type="text/javascript" src="vendor/chartjs/chart.js"></script> 
+		<script type="text/javascript" src="js/store.js"></script>
 		<script type="text/javascript" src="js/tableau.js"></script>
 		<link rel="stylesheet" href="css/commun.css" />
 		<link rel="stylesheet" href="css/tableau.css" />
@@ -46,6 +47,7 @@
 			<div id="actu_contenu"></div>
 			<button type="button" id="fermer_actu">OK merci &#x1F44D;</button>
 		</div>
+		<div class="sync_status" id="sync_status" style="display:none"></div>
 		<div class="contennu macro" id="recap" style="display:none"></div>
 		<div class="contennu micro" id="timeline" style="display:none"></div>
 		<div id="jour_form" class="popup" style="display:none">
@@ -57,9 +59,10 @@
 				<button type="button" id="jour_form_submit">✏️</button>
 				<span class="popup_enregistratement_status" style="display: none;" id="jour_form_saving">&nbsp;⏳&nbsp;enregistrement...</span>
 				<span class="popup_enregistratement_status vert" style="display: none;" id="jour_form_saved">&nbsp;✅&nbsp;enregistré</span>
+				<span class="popup_enregistratement_status rouge" style="display: none;" id="jour_form_unsent">&nbsp;⚠️&nbsp;pas encore envoyé</span>
 				<div id="bulk_form" style="display:none">
-					<span>Appliquer cette observation aux <input id="i_bulk_user_accountr" type="number" value="3" min="1" max="365" class="" /> jours precedents du même cycle.</span>
-					<button type="button" id="bulk_but_submit_user_accountr">↩️ Appliquer</button>
+					<span>Appliquer cette observation aux <input id="i_bulk_count" type="number" value="3" min="1" max="365" class="" /> jours precedents du même cycle.</span>
+					<button type="button" id="bulk_but_submit">↩️ Appliquer</button>
 				</div>
 				<div id="jour_form_titre" class="bold uppercase"></div>
 			</div>

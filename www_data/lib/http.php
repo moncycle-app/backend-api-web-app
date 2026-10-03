@@ -54,9 +54,9 @@ function http_from_iso8601(?string $timestamp): ?string {
 }
 
 // The client's own timestamp of a write ("lastWriteClientUtc") as a UTC "Y-m-d H:i:s", or the
-// server's clock when it is absent or not a valid timestamp.
-function http_client_timestamp(?string $iso8601): string {
-	$utc = http_from_iso8601($iso8601);
+// server's clock when it is absent or not a valid timestamp (a body can hold any JSON value).
+function http_client_timestamp(mixed $iso8601): string {
+	$utc = is_string($iso8601) ? http_from_iso8601($iso8601) : null;
 	return $utc && date_validate_timestamp($utc) ? $utc : date('Y-m-d H:i:s');
 }
 

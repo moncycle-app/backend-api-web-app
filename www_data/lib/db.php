@@ -254,7 +254,7 @@ function db_select_description_name_exists($db, $name, $no_user_account, $no_des
 		["name" => $name, "no_user_account" => $no_user_account, "no_description" => $no_description]));
 }
 
-// The labels with the number of days each is on. The sync reads only those written since a date.
+// The labels with the number of days each is on.
 function db_select_description_with_count($db, $no_user_account) {
 	return db_rows($db,
 		"SELECT d.no_description, d.name, COUNT(od.no_day) AS use_count, d.no_user_account, d.type, d.last_write_client_UTC, d.last_write_db
@@ -262,16 +262,6 @@ function db_select_description_with_count($db, $no_user_account) {
 		WHERE d.no_user_account = :no_user_account
 		GROUP BY d.no_description, d.name, d.no_user_account, d.type, d.last_write_client_UTC, d.last_write_db ORDER BY use_count DESC, d.name DESC",
 		["no_user_account" => $no_user_account]
-	);
-}
-
-function db_select_description_with_count_modified($db, $modified_since, $no_user_account) {
-	return db_rows($db,
-		"SELECT d.no_description, d.name, COUNT(od.no_day) AS use_count, d.no_user_account, d.type, d.last_write_client_UTC, d.last_write_db
-		FROM description AS d LEFT JOIN link_day_timeline_description AS od ON od.no_description = d.no_description
-		WHERE d.no_user_account = :no_user_account AND d.last_write_client_UTC >= :modified_since
-		GROUP BY d.no_description, d.name, d.no_user_account, d.type, d.last_write_client_UTC, d.last_write_db ORDER BY use_count DESC, d.name DESC",
-		["no_user_account" => $no_user_account, "modified_since" => $modified_since]
 	);
 }
 
@@ -341,6 +331,17 @@ function db_delete_linked_descriptions($db, $no_day, $no_description) {
 		["no_description" => $no_description, "no_day" => $no_day]);
 }
 
+// Stamps the days a label is on as written now. A day shows its labels by name and type, so renaming,
+// retyping or deleting the label changes those days for the sync, though their rows do not change.
+function db_update_day_timeline_touch_description($db, $no_user_account, $no_description) {
+	return db_exec($db,
+		"UPDATE day_timeline AS dt JOIN link_day_timeline_description AS ld ON ld.no_day = dt.no_day
+		SET dt.last_write_db = CURRENT_TIMESTAMP
+		WHERE ld.no_description = :no_description AND dt.no_user_account = :no_user_account",
+		["no_description" => $no_description, "no_user_account" => $no_user_account]
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Days. date_obs is a DATE and unique per account (unique_user_account_and_date): equality on the
 // account then a range on the date is a range scan of that index, which also gives the ORDER BY.
@@ -354,10 +355,33 @@ function db_select_day_timeline($db, $date, $no_user_account): ?array {
 	return db_row($db, "SELECT * FROM day_timeline WHERE date_obs = :date AND no_user_account = :no_user_account LIMIT 1", ["date" => $date, "no_user_account" => $no_user_account]);
 }
 
-function db_select_day_timelines_modified($db, $modified_since, $no_user_account) {
+// The database's own clock, the one that stamps last_write_db: the sync cursor is read from it, so a
+// client's clock never decides what it receives.
+function db_select_now($db): string {
+	return db_value($db, "SELECT NOW()");
+}
+
+// The dates of the days written since a moment, less $overlap_seconds (last_write_db, the database's
+// clock). A day never stamped counts as written, so a first sync cannot miss it.
+function db_select_day_timeline_dates_written_since($db, $since, $overlap_seconds, $no_user_account) {
+	return db_column($db,
+		"SELECT date_obs FROM day_timeline
+		WHERE no_user_account = :no_user_account AND (last_write_db IS NULL OR last_write_db >= :since - INTERVAL :overlap_seconds SECOND)
+		ORDER BY date_obs ASC",
+		["no_user_account" => $no_user_account, "since" => $since, "overlap_seconds" => $overlap_seconds]
+	);
+}
+
+// The days from a date up to, not including, another (null: no end), with the columns the JSON day
+// shows -- not the deprecated sensation column.
+function db_select_day_timelines_range($db, $start_date, $end_date, $no_user_account) {
 	return db_rows($db,
-		"SELECT * FROM day_timeline WHERE last_write_client_UTC >= :modified_since AND no_user_account = :no_user_account ORDER BY last_write_client_UTC DESC",
-		["modified_since" => $modified_since, "no_user_account" => $no_user_account]
+		"SELECT no_day, date_obs, day_not_observed, fc_score, fc_arrow, stamp, temperature, time_temp_taken, is_peak, counter_start,
+		union_sex, cycle_1st_day, pregnancy, comment, last_write_client_UTC, last_write_db
+		FROM day_timeline
+		WHERE no_user_account = :no_user_account AND date_obs >= :start_date AND (:end_date IS NULL OR date_obs < :end_date)
+		ORDER BY date_obs ASC",
+		["no_user_account" => $no_user_account, "start_date" => $start_date, "end_date" => $end_date]
 	);
 }
 
@@ -396,6 +420,8 @@ function db_insert_day_timeline($db, $date, $no_user_account) {
 
 // Writes what a day holds. $fields (see day_format_from_json()): stamp, fc_score, fc_arrow, temp, htemp, is_peak,
 // union_sex, cycle_1st_day, day_not_observed, pregnancy, comment, counter_start; one left out is written empty.
+// last_write_db is set here rather than left to ON UPDATE: a write that changes no column of the row
+// (only the labels it carries) must still show up in the sync.
 function db_update_day_timeline($db, $date, $no_user_account, $last_write_client_UTC, array $fields = []) {
 	$fields += [
 		"stamp" => '', "fc_score" => null, "fc_arrow" => null, "temp" => null, "htemp" => null, "is_peak" => null, "union_sex" => null,
@@ -404,7 +430,8 @@ function db_update_day_timeline($db, $date, $no_user_account, $last_write_client
 	return db_exec($db,
 		"UPDATE day_timeline SET stamp = :stamp, fc_score = :fc_score, fc_arrow = :fc_arrow, temperature = :temp, time_temp_taken = :htemp,
 		is_peak = :is_peak, union_sex = :union_sex, cycle_1st_day = :cycle_1st_day, day_not_observed = :day_not_observed,
-		pregnancy = :pregnancy, comment = :comment, counter_start = :counter_start, last_write_client_UTC = :last_write_client_UTC
+		pregnancy = :pregnancy, comment = :comment, counter_start = :counter_start, last_write_client_UTC = :last_write_client_UTC,
+		last_write_db = CURRENT_TIMESTAMP
 		WHERE date_obs = :date AND no_user_account = :no_user_account",
 		$fields + ["last_write_client_UTC" => $last_write_client_UTC, "date" => $date, "no_user_account" => $no_user_account]
 	);

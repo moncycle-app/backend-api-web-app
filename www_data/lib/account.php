@@ -10,6 +10,10 @@
 // The user_account row as the code and the JSON API see it: its method, and what a
 // POST /api/account body changes.
 
+require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/http.php";
+require_once __DIR__ . "/sec.php";
+
 // ---------------------------------------------------------------------------
 // nfp_method: one 1-4 int in the DB, a method name plus a temperature flag everywhere else
 // (NFP_METHOD_BY_ID, constants.php).
@@ -72,4 +76,33 @@ function account_apply_json(array $account, array $body): array {
 	}
 
 	return [$new, $changed];
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/key_infos
+// ---------------------------------------------------------------------------
+
+// The account summary a client starts from, shared by GET /api/key_infos and GET /api/sync:
+// who the user is, their settings, the shape of their timeline. $user_account is the row
+// sec_auth_token() read. Nothing secret in it.
+function account_key_infos($db, array $user_account): array {
+	$nfp_method = intval($user_account["nfp_method"]);
+
+	return [
+		"userId" => $user_account["no_user_account"],
+		"email" => $user_account["email1"],
+		"secondaryEmail" => $user_account["email2"],
+		"method" => account_method_name($nfp_method),
+		"temperatureTracking" => account_tracks_temperature($nfp_method),
+		"birthYear" => $user_account["age"],
+		"name" => $user_account["name_user_account"],
+		"inscriptionDate" => http_iso8601($user_account["inscription_date"]),
+		"sponsor" => boolval($user_account["sponsor"]),
+		"research" => boolval($user_account["research"]),
+		"timelineAscending" => boolval($user_account["timeline_asc"]),
+		"allCyclesFirstDay" => db_select_cycles($db, $user_account["no_user_account"]),
+		"allPregnancyDates" => db_select_pregnancies($db, $user_account["no_user_account"]),
+		"totpState" => sec_totp_state_name($user_account["totp_state"]),
+		"lastWriteClientUtc" => http_iso8601($user_account["last_write_client_UTC"]),
+	];
 }

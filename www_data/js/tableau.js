@@ -92,8 +92,6 @@ const moncycle_app_text = {
 		"←" : "⬅️",
 		""  : ""
 	},
-	loading : "chargement...",
-	loading_glyph : "⏳",
 	to_fill_in : "à renseigner",
 	to_fill_in_glyph : "👋",
 	not_observed : "jour non observé",
@@ -135,6 +133,24 @@ const moncycle_app_text = {
 	},
 	fc_syntax_valid : "syntaxe valide",
 	fc_syntax_invalid : "syntaxe invalide",
+
+	/* --- keeping the local copy and the server together ------------------ */
+	// the bar at the bottom of the page: only what the user has to know (the routine syncs are silent)
+	sync_pending : function (n) {
+		return `⏳ ${n} modification${n > 1 ? "s" : ""} en cours d'envoi...`;
+	},
+	// n changes are kept on this device but the server has not got them
+	sync_not_sent : function (n) {
+		return `⚠️ ${n} modification${n > 1 ? "s" : ""} enregistrée${n > 1 ? "s" : ""} sur cet appareil, pas encore sur le serveur. Nouvel essai automatique.`;
+	},
+	sync_offline : "⚠️ Connexion impossible : les données affichées peuvent ne pas être à jour.",
+	sync_server_error : "⚠️ Le serveur ne répond pas correctement : nouvel essai automatique.",
+	// the server refused a change for good, "message" is its own wording
+	sync_rejected : function (message) {
+		return `❌ Modification refusée par le serveur, elle n'a pas été enregistrée : ${message}`;
+	},
+	sync_retry : "Réessayer",
+	sync_dismiss : "OK",
 
 	/* --- description picker (sensations / observations / autre) --------- */
 	desc_add_saving : "⏳",
@@ -369,58 +385,45 @@ moncycle_app = {
 	graph_data : {},
 	graphs : {},
 	cycle_curseur : 0,
-	a_le_focus: true,
-	date_chargement: null,
-	utilisateurs_beta : [5],
+	date_loaded: null,
 	constante : {},
-	description : {},
+	description : [],
 	day_timeline : {},
 	timeline_asc : true,
+	// what the cycles drawn were made from (see structure_of): when the copy says otherwise, they are drawn again
+	structure : null,
+
+	/* -----------------------------------------------------------------------
+	** START
+	**
+	** The page is drawn from the local copy (js/store.js) at once, when there is one, and the sync
+	** that follows brings what changed elsewhere. A change of the user is applied to the copy first,
+	** then sent: the page shows an error when the server could not take it.
+	** ====================================================================== */
 	letsgo : function() {
 		console.log(moncycle_app_text.console_banner);
-		if (!localStorage.auth) window.location.replace('/auth');
-		moncycle_app.date_chargement = moncycle_app.date.str(moncycle_app.date.now());
-		if (localStorage.description != null) {
-			moncycle_app.description = JSON.parse(localStorage.description);
+		if (!localStorage.auth) {
+			window.location.replace('/auth');
+			return;
 		}
-		if (localStorage.constante != null) {
-			moncycle_app.constante = JSON.parse(localStorage.constante);
-		}
-		$.get("api/description", {}).done(function(ret) {
-			let data = ret.data.map(moncycle_app.description_from_api);
-			moncycle_app.description = data;
-			localStorage.description = JSON.stringify(data);
-		}).fail(moncycle_app.redirection_connexion);
-		$.get("api/key_infos", {}).done(function(ret) {
-			let data = moncycle_app.constante_from_api(ret.data);
-			moncycle_app.constante = data;
-			localStorage.constante = JSON.stringify(data);
-			moncycle_app.timeline_asc = data.timeline_asc;
-			localStorage.timeline_asc = JSON.stringify(data.timeline_asc);
-			document.title = moncycle_app_text.page_title(moncycle_app.constante.name);
-			if (moncycle_app.cycle_curseur == 0) moncycle_app.remplir_page_de_cycle();
-			$("#name").html(moncycle_app.constante.name);
-			if (moncycle_app.constante.sponsor) $("#name").append(moncycle_app_text.sponsor_badge);
-			$(".main_button").css("display","inline-block");
-			if (moncycle_app.timeline_asc) $("#charger_cycle").hide();
-			else $("#charger_cycle").show();
-		}).fail(moncycle_app.redirection_connexion);
-		if (localStorage.constante != null && localStorage.timeline_asc != null) {
-			moncycle_app.constante = JSON.parse(localStorage.constante);
-			moncycle_app.timeline_asc = JSON.parse(localStorage.timeline_asc);
-			moncycle_app.remplir_page_de_cycle();
-		}
-		if (moncycle_app.timeline_asc) $("#charger_cycle").hide();
+		moncycle_app.date_loaded = moncycle_app.date.str(moncycle_app.date.now());
+		moncycle_store.init();
+		moncycle_store.on("status", moncycle_app.show_sync_status);
+		moncycle_store.on("changed", moncycle_app.store_changed);
+		moncycle_store.on("sent", moncycle_app.day_sent);
+		moncycle_store.on("failed", moncycle_app.day_failed);
 		$("#charger_cycle").click(moncycle_app.charger_cycle);
 		$("#jour_form_close").click(moncycle_app.close_menu);
 		$("#jour_form_submit").click(moncycle_app.submit_menu);
 		$("#jour_form_next").click(moncycle_app.open_menu);
 		$("#jour_form_prev").click(moncycle_app.open_menu);
-		$("#bulk_but_submit_compter").click(moncycle_app.bulk_submit_menu);
+		$("#bulk_but_submit").click(moncycle_app.bulk_submit_menu);
 		$("#jour_form_bulk_but").click(moncycle_app.bulk_show_hide);
 		$("#jour_form #form_data input:not(.desc_add_input), #jour_form textarea").on("change", moncycle_app.submit_menu);
 		$("#form_fc").on("keyup", moncycle_app.fc_note2form);
 		$("#jour_form_suppr").click(moncycle_app.suppr_day_timeline);
+		$("#sync_status").on("click", "#sync_retry", function () { moncycle_store.sync().catch(function () { }); });
+		$("#sync_status").on("click", "#sync_dismiss", moncycle_store.dismiss_error);
 		moncycle_app.bind_desc_add_forms();
 		$("#but_mini_maxi").click(moncycle_app.mini_maxi_switch);
 		$("#go_baby").click(moncycle_app.go_blank_or_empty);
@@ -442,15 +445,113 @@ moncycle_app = {
 			}
 		});
 		$(window).focus(function() {
-			if (moncycle_app.date.str(moncycle_app.date.now()) != moncycle_app.date_chargement) location.reload(false);
+			if (moncycle_app.date.str(moncycle_app.date.now()) != moncycle_app.date_loaded) location.reload(false);
 			return false;
 		})
-		window.addEventListener("storage", function () {
-			if (this.localStorage.auth != moncycle_app.constante.no_user_account) window.location.href = window.location.href;
-			return false;
+		// another tab wrote its copy: nothing to do. It logged out, or logged in as someone else: leave.
+		window.addEventListener("storage", function (event) {
+			if (event.key !== null && event.key != "auth") return;
+			if (localStorage.auth != moncycle_app.constante.no_user_account) window.location.href = window.location.href;
 		}, false);
+		if (moncycle_store.account) moncycle_app.show_account();
+		moncycle_store.sync().catch(function () { });
 		moncycle_app.charger_actu();
 	},
+	// what decides how the cycles are laid out: when it changes in the copy, they have to be drawn again
+	structure_of : function (account) {
+		return JSON.stringify([account.allCyclesFirstDay, account.allPregnancyDates, account.timelineAscending, account.method, account.temperatureTracking]);
+	},
+	// The copy holds the account: draw the page header and the cycles from it.
+	show_account : function () {
+		moncycle_app.show_header();
+		moncycle_app.structure = moncycle_app.structure_of(moncycle_store.account);
+		if (moncycle_app.cycle_curseur == 0) moncycle_app.remplir_page_de_cycle();
+	},
+	show_header : function () {
+		moncycle_app.constante = moncycle_app.constante_from_api(moncycle_store.account);
+		moncycle_app.timeline_asc = moncycle_app.constante.timeline_asc;
+		moncycle_app.description = moncycle_store.descriptions.map(moncycle_app.description_from_api);
+		document.title = moncycle_app_text.page_title(moncycle_app.constante.name);
+		$("#name").html(moncycle_app.constante.name);
+		if (moncycle_app.constante.sponsor) $("#name").append(moncycle_app_text.sponsor_badge);
+		$(".main_button").css("display","inline-block");
+		if (moncycle_app.timeline_asc) $("#charger_cycle").hide();
+		else $("#charger_cycle").show();
+	},
+	// Draws every cycle again from the copy (the cycles changed, or the way they are laid out).
+	rebuild : function () {
+		moncycle_app.page_a_recharger = false;
+		$.each(moncycle_app.graphs, function (id, graph) { graph.destroy(); });
+		moncycle_app.graphs = {};
+		moncycle_app.graph_data = {};
+		moncycle_app.sommets = [];
+		moncycle_app.counter_starts = {};
+		moncycle_app.day_timeline = {};
+		moncycle_app.cycle_curseur = 0;
+		moncycle_app.form_nouveau_cycle_active = false;
+		moncycle_app.cycle_title_opened = null;
+		$("#timeline").empty();
+		$("#recap").empty();
+		$("#charger_cycle").prop("disabled", false);
+		moncycle_app.show_account();
+	},
+	// What happened to the copy: the days that changed are drawn again, and the cycles when their
+	// structure moved (at once, or when the day form is closed if it is open).
+	store_changed : function (change) {
+		if (change.descriptions) moncycle_app.description = moncycle_store.descriptions.map(moncycle_app.description_from_api);
+		if (!moncycle_store.account) return;
+		if (moncycle_app.structure === null) {
+			moncycle_app.show_account();
+			return;
+		}
+		if (change.account || change.source == "sync") {
+			moncycle_app.page_a_recharger = moncycle_app.structure_of(moncycle_store.account) !== moncycle_app.structure;
+			if (moncycle_app.page_a_recharger && moncycle_app.menu_opened_date === null) {
+				moncycle_app.rebuild();
+				return;
+			}
+			// the cycles stay as drawn: only the header (name, sponsor) can have changed
+			if (!moncycle_app.page_a_recharger) moncycle_app.show_header();
+		}
+		change.days.forEach(moncycle_app.refresh_day);
+	},
+	// The write of a day was taken by the server.
+	day_sent : function (detail) {
+		if (detail.date != moncycle_app.menu_opened_date || moncycle_store.pending[detail.date]) return;
+		$("#jour_form_saving").hide();
+		$("#jour_form_unsent").hide();
+		$("#jour_form_saved").show();
+	},
+	day_failed : function (detail) {
+		if (detail.date != moncycle_app.menu_opened_date) return;
+		$("#jour_form_saving").hide();
+		$("#jour_form_unsent").hide();
+	},
+	// The bar at the bottom of the page, and the indicator of the day form. Silent unless something needs the user.
+	show_sync_status : function (state) {
+		let text = "";
+		let css = "sync_error";
+		if (state.error && state.error.kind == "rejected") text = moncycle_app_text.sync_rejected(state.error.message);
+		else if (state.pending > 0 && state.error) text = moncycle_app_text.sync_not_sent(state.pending);
+		else if (state.error) {
+			text = state.error.kind == "network" ? moncycle_app_text.sync_offline : moncycle_app_text.sync_server_error;
+			css = "sync_warning";
+		}
+		else if (state.pending > 0) {
+			text = moncycle_app_text.sync_pending(state.pending);
+			css = "sync_busy";
+		}
+		$("#sync_status").empty().attr("class", "sync_status " + css).toggle(text != "");
+		if (text != "") {
+			$("#sync_status").append($("<span>").text(text));
+			if (state.error && state.error.kind == "rejected") $("#sync_status").append(" ").append($("<button>", {type: "button", id: "sync_dismiss"}).text(moncycle_app_text.sync_dismiss));
+			else if (css != "sync_busy") $("#sync_status").append(" ").append($("<button>", {type: "button", id: "sync_retry"}).text(moncycle_app_text.sync_retry));
+		}
+		let unsent = state.pending > 0 && state.error && state.error.kind != "rejected";
+		if (unsent) $("#jour_form_saving").hide();
+		$("#jour_form_unsent").toggle(!!(unsent && moncycle_app.menu_opened_date !== null && moncycle_store.pending[moncycle_app.menu_opened_date]));
+	},
+
 	mini_maxi : "mini",
 	mini_maxi_switch : function () {
 		if (moncycle_app.mini_maxi=="maxi"){
@@ -485,12 +586,6 @@ moncycle_app = {
 		}
 		else moncycle_app.charger_cycle();
 	},
-	redirection_connexion : function(err) {
-		if (err.status == 401 || err.status == 403 || err.status == 407) {
-			window.localStorage.clear();
-			window.location.replace('/auth');
-		}
-	},
 	charger_actu : function() {
 		$.get("https://www.moncycle.app/actu.html", function(data) {
 			let html = $.parseHTML(data);
@@ -503,7 +598,6 @@ moncycle_app = {
 			});
 		});
 	},
-	loading_day_timeline : {date_obs: "", pos: 0, chargement: true, temperature: NaN, cycle: ""},
 	charger_cycle : function() {
 		if (moncycle_app.cycle_curseur >= moncycle_app.constante.all_cycles_1st_day.length) {
 			moncycle_app.form_nouveau_cycle();
@@ -540,57 +634,57 @@ moncycle_app = {
 			$("#timeline").prepend(moncycle_app.cycle2timeline(date_cycle_str, nb_jours, date_fin));
 			$("#recap").prepend(moncycle_app.cycle2recap(date_cycle_str, nb_jours, date_fin));
 		}
-		let dates_req = [];
 		let dates_data_holder = {};
-		let sotred_obs = {}
-		if (localStorage.day_timeline) sotred_obs = JSON.parse(localStorage.day_timeline);
 		for (let pas = 0; pas < nb_jours; pas++) {
 			let date_obs = new Date(date_cycle);
 			date_obs.setDate(date_obs.getDate()+pas);
 			let date_obs_str = moncycle_app.date.str(date_obs);
-			let data = null;
-			if (sotred_obs[date_obs_str]) data = sotred_obs[date_obs_str];
-			else {
-				data = moncycle_app.loading_day_timeline;
-				data["date_obs"] = date_obs_str;
-				data["pos"] = pas+1;
-				data["cycle"] = date_cycle_str;
-			}
+			let data = moncycle_app.view_day(date_obs_str, date_cycle_str, pas+1);
 			dates_data_holder[date_obs_str] = data;
 			moncycle_app.day_timeline[date_obs_str] = data;
 			if (moncycle_app.timeline_asc) $(`#c-${date_cycle_str} .contenu`).prepend(moncycle_app.day_timeline2timeline(data));
 			else $(`#c-${date_cycle_str} .contenu`).append(moncycle_app.day_timeline2timeline(data));
 			$(`#rc-${date_cycle_str} .contenu`).append(moncycle_app.day_timeline2recap(data));
-			dates_req.push(date_obs_str);
+			moncycle_app.track_day(date_obs_str, data);
 		}
+		$(`.pas_${moncycle_app.constante.nfp_method_name}`).css("display", "none");
+		moncycle_app.trois_jours();
 		moncycle_app.graph_preparation_data(dates_data_holder);
-		while (dates_req.length>200) moncycle_app.charger_day_timeline(dates_req.splice(0, 200).join(','));
-		moncycle_app.charger_day_timeline(dates_req.join(','));
-		if (moncycle_app.constante.nfp_method == 1 || moncycle_app.constante.nfp_method == 4) moncycle_app.cycle2graph(date_cycle_str);
+		if (moncycle_app.constante.nfp_method == 1 || moncycle_app.constante.nfp_method == 4) {
+			moncycle_app.cycle2graph(date_cycle_str);
+			moncycle_app.graph_update(date_cycle_str);
+		}
 		if (form_nouv_cycle && !moncycle_app.timeline_asc) moncycle_app.form_nouveau_cycle(false);
 	},
-	charger_day_timeline : function(o_date) {
-		$.get("api/day", { date: o_date }).done(function(ret) {
-			let sotred_obs = {};
-			if (localStorage.day_timeline) sotred_obs = JSON.parse(localStorage.day_timeline);
-			let adapted = {};
-			$.each(ret.data, function (o_date, o_raw) {
-				let o_data = moncycle_app.day_from_api(o_raw);
-				adapted[o_date] = o_data;
-				moncycle_app.day_timeline[o_date] = o_data;
-				sotred_obs[o_date] = o_data;
-				$(`#o-${o_date}`).replaceWith(moncycle_app.day_timeline2timeline(o_data));
-				$(`#ro-${o_date}`).replaceWith(moncycle_app.day_timeline2recap(o_data));
-				if (o_data.is_peak && $.inArray(o_date, moncycle_app.sommets)<0) moncycle_app.sommets.push(o_date);
-				else if (!o_data.is_peak && $.inArray(o_date, moncycle_app.sommets)>=0) moncycle_app.sommets.splice($.inArray(o_date, moncycle_app.sommets), 1);
-				if (o_data.counter_start) moncycle_app.counter_starts[o_date] = o_data.counter_start;
-				else if (!o_data.counter_start && o_date in moncycle_app.counter_starts) delete moncycle_app.counter_starts[o_date];
-			});
-			localStorage.day_timeline = JSON.stringify(sotred_obs);
-			$(`.pas_${moncycle_app.constante.nfp_method_name}`).css("display", "none");
-			moncycle_app.trois_jours();
-			moncycle_app.graph_preparation_data(adapted);
-		}).fail(moncycle_app.redirection_connexion);
+	// A day of the local copy, in the flat shape the drawing functions read. A date that holds nothing is
+	// an empty day; $cycle and $pos say where it stands when the caller knows.
+	view_day : function (date, cycle, pos) {
+		let day = moncycle_store.days[date];
+		if (!day) {
+			day = moncycle_store.blank_day(date);
+			Object.assign(day, cycle ? {cycleStartDate : cycle, cycleDay : pos} : moncycle_store.cycle_of(date));
+		}
+		return moncycle_app.day_from_api(day);
+	},
+	// the peak days and the counters the "+1 +2 +3" marks of the other days come from
+	track_day : function (date, data) {
+		if (data.is_peak && $.inArray(date, moncycle_app.sommets)<0) moncycle_app.sommets.push(date);
+		else if (!data.is_peak && $.inArray(date, moncycle_app.sommets)>=0) moncycle_app.sommets.splice($.inArray(date, moncycle_app.sommets), 1);
+		if (data.counter_start) moncycle_app.counter_starts[date] = data.counter_start;
+		else if (date in moncycle_app.counter_starts) delete moncycle_app.counter_starts[date];
+	},
+	// A day changed in the copy: draw it again, if it is on the page.
+	refresh_day : function (date) {
+		let shown = moncycle_app.day_timeline[date];
+		if (!shown) return;
+		let data = moncycle_app.view_day(date, shown.cycle, shown.pos);
+		moncycle_app.day_timeline[date] = data;
+		$(`#o-${date}`).replaceWith(moncycle_app.day_timeline2timeline(data));
+		$(`#ro-${date}`).replaceWith(moncycle_app.day_timeline2recap(data));
+		moncycle_app.track_day(date, data);
+		$(`.pas_${moncycle_app.constante.nfp_method_name}`).css("display", "none");
+		moncycle_app.trois_jours();
+		moncycle_app.graph_preparation_data({[date]: data});
 	},
 	form_nouveau_cycle_active: false,
 	form_nouveau_cycle: function (prepend=true) {
@@ -629,27 +723,7 @@ moncycle_app = {
 				alert(moncycle_app_text.new_cycle_date_error);
 				return;
 			}
-			$.ajax({
-				type: "POST",
-				url: "api/day",
-				contentType: "application/json",
-				data: JSON.stringify({date: nouveau_cycle_date, cycleFirstDay: true}),
-			}).done(function(ret){
-				if (!prepend) {
-					localStorage.removeItem("day_timeline");
-					localStorage.removeItem("constante");
-					location.reload(false);
-					return;
-				}
-				moncycle_app.constante.all_cycles_1st_day.push(nouveau_cycle_date);
-				$("#charger_cycle").prop("disabled", false);
-				moncycle_app.form_nouveau_cycle_active = false;
-				$("#nouveau_cycle").remove();
-				$("#nocycle").remove();
-				moncycle_app.charger_cycle();
-			}).fail(function (jqXHR) {
-				console.error(jqXHR.responseText);
-			});
+			moncycle_store.queue_day({date: nouveau_cycle_date, cycleFirstDay: true, lastWriteClientUtc: moncycle_app.date.nowInUTC()});
 		});
 	},
 	trois_jours : function() {
@@ -809,16 +883,6 @@ moncycle_app = {
 		let o_class = "obs";
 		if (j.pregnancy) o_class += " o_gross";
 		let day_timeline = $("<div>", {id: o_id, class: o_class, date: moncycle_app.date.str(o_date)});
-		if (j.chargement) {
-			day_timeline.append(`<span class='s'></span>`);
-			day_timeline.append(`<span class='g g_loading'>${moncycle_app_text.loading_glyph}</span>`);
-			day_timeline.append(`<span class='c'></span>`);
-			if (moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4) {
-				day_timeline.append(`<span class='fc'></span>`);
-				day_timeline.append(`<span class='fc'></span>`);
-			}
-			return day_timeline;
-		}
 		day_timeline.click(moncycle_app.open_menu);
 		let color = "vide";
 		let index_couleur = j.stamp;
@@ -889,11 +953,6 @@ moncycle_app = {
 		day_timeline.append(`<span class='d ${d_bold}'>${moncycle_app_text.date_row(o_date)}</span>`);
 		let pos = $(`<span class='j'>${j.pos}</span>`);
 		day_timeline.append(pos);
-		if (j.chargement) {
-			day_timeline.append(`<span class='g g_loading'>${moncycle_app_text.loading_glyph}</span>`);
-			day_timeline.append(`<span class='l'>${moncycle_app_text.loading}</span>`);
-			return day_timeline;
-		}
 		day_timeline.click(moncycle_app.open_menu);
 		let tbd = true;
 		if (j.pregnancy) {
@@ -1016,7 +1075,7 @@ moncycle_app = {
 			form.find(".desc_add_submit").prop("disabled", false);
 			let desc = {no_description : raw.data.id, name : raw.data.name, type : desc_type, use_count : 0};
 			moncycle_app.description.push(desc);
-			localStorage.description = JSON.stringify(moncycle_app.description);
+			moncycle_store.add_description({id : raw.data.id, name : raw.data.name, type : raw.data.type});
 			let chip = moncycle_app.render_desc_chip(desc, false);
 			$(moncycle_app.desc_container_id[desc_type]).append(chip);
 			chip.find(".i_desc").on("change", moncycle_app.submit_menu);
@@ -1026,7 +1085,6 @@ moncycle_app = {
 			form.find(".desc_add_submit").prop("disabled", false);
 			status.text(moncycle_app_text.desc_add_error);
 			console.error(err);
-			moncycle_app.redirection_connexion(err);
 		});
 	},
 	menu_opened_date : null,
@@ -1062,6 +1120,7 @@ moncycle_app = {
 		$("#fc_msg").empty();
 		$("#jour_form_saving").hide();
 		$("#jour_form_saved").hide();
+		$("#jour_form_unsent").toggle(!!moncycle_store.pending[date]);
 		$("#form_date").val(j.date_obs);
 		if (j.fc_score && (moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4)) {
 			$("#form_fc").val(j.fc_score);
@@ -1096,11 +1155,7 @@ moncycle_app = {
 		$(".i_desc").on("change", moncycle_app.submit_menu);
 		$(".desc_add_form").hide().find(".desc_add_status").empty();
 		$(".desc_add_toggle").show();
-		if (j.cycle_1st_day) {
-			$("#ev_cycle_1st_day").prop('checked', true);
-			$("#ev_cycle_1st_day").attr('initial', true);
-		}
-		else $("#ev_cycle_1st_day").attr('initial', false);
+		if (j.cycle_1st_day) $("#ev_cycle_1st_day").prop('checked', true);
 		if (j.union_sex) $("#ev_union").prop('checked', true);
 		if (j.is_peak) $("#ev_is_peak").prop('checked', true);
 		if (j.counter_start && j.counter_start > 0) {
@@ -1110,11 +1165,6 @@ moncycle_app = {
 		}
 		if (j.day_not_observed) $("#ev_jesaispas").prop('checked', true);
 		if (j.pregnancy) $("#ev_pregnancy").prop('checked', true);
-		$("#ev_pregnancy").attr('initial', new Boolean(j.pregnancy));
-		$(".ev_reload").change(function () {
-			moncycle_app.page_a_recharger = (JSON.parse($("#ev_cycle_1st_day").attr('initial')) != $("#ev_cycle_1st_day").is(':checked'));
-			if (!moncycle_app.page_a_recharger) moncycle_app.page_a_recharger = (JSON.parse($("#ev_pregnancy").attr('initial')) != $("#ev_pregnancy").is(':checked'));
-		});
 		$("#from_com").val(j.comment);
 		$("html, body").css({
 			"overflow": "hidden",
@@ -1135,15 +1185,15 @@ moncycle_app = {
 		$("#bulk_form").hide();
 		$("#jour_form").hide();
 		moncycle_app.menu_opened_date = null;
-		if (moncycle_app.page_a_recharger) {
-			localStorage.removeItem("day_timeline");
-			localStorage.removeItem("constante");
-			location.reload(false);
-		}
+		// the cycles moved while the form was open: draw them again from the copy
+		if (moncycle_app.page_a_recharger) moncycle_app.rebuild();
 	},
+	// The form is the full state of the day: it goes into the local copy at once and the page draws it
+	// (store_changed), then the store sends it; day_sent / day_failed / show_sync_status say how it went.
 	submit_menu : function () {
 		$("#jour_form_saving").show();
 		$("#jour_form_saved").hide();
+		$("#jour_form_unsent").hide();
 		$("#form_save_time").val(moncycle_app.date.nowInUTC());
 		if (this.id == "form_fc") moncycle_app.fc_note2form();
 		else moncycle_app.fc_form2note();
@@ -1157,20 +1207,10 @@ moncycle_app = {
 			if (j == d.length) d.push({"date" : moncycle_app.menu_opened_date});
 			else d[j]["value"] = moncycle_app.menu_opened_date;
 		}
-		let payload = moncycle_app.day_to_api(d);
-		$.ajax({type: "POST", url: "api/day", contentType: "application/json", data: JSON.stringify(payload)}).done(function(ret){
-			$("#jour_form_saving").hide();
-			$("#jour_form_saved").show();
-			moncycle_app.charger_day_timeline(ret.data.date);
-		}).fail(function (jqXHR) {
-			$("#jour_form_saving").hide();
-			console.error(jqXHR.responseText);
-			$("#form_err").val(jqXHR.responseText);
-			moncycle_app.redirection_connexion(jqXHR);
-		});
+		moncycle_store.queue_day(moncycle_app.day_to_api(d));
 	},
 	bulk_submit_menu : function () {
-		let nb_of_days = $("#i_bulk_compter").val();
+		let nb_of_days = $("#i_bulk_count").val();
 		if (nb_of_days > 365) {
 			alert(moncycle_app_text.bulk_too_many_days(365));
 			return;
@@ -1184,12 +1224,6 @@ moncycle_app = {
 			moncycle_app.menu_opened_date = moncycle_app.date.str(date_cursor);
 			if (moncycle_app.menu_opened_date==moncycle_app.day_timeline[menu_current_date]["cycle"]) $("#ev_cycle_1st_day").prop('checked', true);
 			else $("#ev_cycle_1st_day").prop('checked', false);
-			let laoding_obs = moncycle_app.loading_day_timeline;
-			laoding_obs["date_obs"] = moncycle_app.menu_opened_date;
-			laoding_obs["pos"] = moncycle_app.day_timeline[menu_current_date]["pos"]-j;
-			laoding_obs["cycle"] = moncycle_app.day_timeline[menu_current_date]["cycle"];
-			$(`#o-${moncycle_app.menu_opened_date}`).replaceWith(moncycle_app.day_timeline2timeline(laoding_obs));
-			$(`#ro-${moncycle_app.menu_opened_date}`).replaceWith(moncycle_app.day_timeline2recap(laoding_obs));
 			moncycle_app.submit_menu();
 			j += 1;
 		}
@@ -1200,16 +1234,8 @@ moncycle_app = {
 		let date = moncycle_app.date.parse($("#form_date").val());
 		date.setHours(9);
 		if (confirm(moncycle_app_text.confirm_delete_day(date))) {
-			let date_id = moncycle_app.date.str(date);
-			if (moncycle_app.day_timeline[date_id]["cycle_1st_day"] || moncycle_app.day_timeline[date_id]["pregnancy"]) moncycle_app.page_a_recharger = true;
-			$.ajax({type : 'DELETE', "url" : "api/day?date=" + encodeURIComponent(date_id)}).done(function(){
-				moncycle_app.charger_day_timeline(date_id);
-				moncycle_app.close_menu();
-			}).fail(function (jqXHR) {
-				console.error(jqXHR.responseText);
-				$("#form_err").val(jqXHR.responseText);
-				moncycle_app.redirection_connexion(jqXHR);
-			});
+			moncycle_store.queue_delete(moncycle_app.date.str(date), moncycle_app.date.nowInUTC());
+			moncycle_app.close_menu();
 		}
 	},
 	graph_preparation_data : function (data) {

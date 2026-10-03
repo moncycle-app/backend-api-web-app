@@ -190,8 +190,9 @@ info:
     Two timestamps appear on days, descriptions and the account:
 
     - **`lastWriteClientUtc`** — *your* clock. You send it. If you omit it, or it is not valid,
-      the server writes its own clock instead. This is the field `GET /sync` filters on.
-    - **`lastWriteDb`** — the server clock. Read-only. The server always sets it.
+      the server writes its own clock instead. It is stored and returned as you gave it.
+    - **`lastWriteDb`** — the server clock. Read-only. The server always sets it. This is the
+      field `GET /sync` is based on, so a wrong clock on your side cannot make you miss anything.
 
     A field that is `null` means "no value recorded". An empty array (`[]`) means "no labels".
     An empty string (`""`) is used for `comment` when there is no comment. Booleans are real
@@ -234,30 +235,48 @@ info:
       `observation`, sending it inside `freeMucusSensation` links the existing `observation`
       label. It does not create a second one.
 
-    ## 8. Keeping two clients in sync
+    ## 8. Keeping a local copy in sync
 
-    `GET /sync?fromTimestamp=...` returns every day and every description whose
-    `lastWriteClientUtc` is **greater than or equal to** the timestamp you pass. Use it like
-    this:
+    `GET /sync?fromTimestamp=...` is made for a client that keeps its own copy of the account:
+    a phone, a browser, a script. It answers with everything that copy may lack.
+
+    | Key | What it holds |
+    |---|---|
+    | `syncTimestamp` | The server clock when it started to answer. **Keep it**: it is the `fromTimestamp` of your next call. |
+    | `days` | The days written since `fromTimestamp`, and the days that follow them in their cycle. A cleared day is among them, empty. |
+    | `descriptions` | **Every** label of the account, with its `useCount`. |
+    | `keyInfos` | The account summary of `GET /key_infos`. |
+
+    The loop:
 
     ```
-    1. remember the timestamp of your last successful sync   (lastSync)
-    2. GET /sync?fromTimestamp=<lastSync>
-    3. merge the returned days and descriptions into your local store
-    4. POST your own local changes to /day and /description
-    5. save the new lastSync
+    1. POST your own unsent changes to /day and /description        (your changes first)
+    2. GET /sync?fromTimestamp=<lastSync>     (the first time: 1970-01-01T00:00:00Z)
+    3. merge into your copy:
+         - each returned day replaces yours; an empty day means "forget this day";
+         - the returned labels replace yours; the returned key infos replace yours;
+         - except a day you changed after step 1: keep yours, you are about to send it
+    4. save syncTimestamp as lastSync, once step 3 is done
     ```
 
-    Three honest limits, so you do not debug them yourself:
+    What the server does for you, so that this loop is enough:
 
-    - **The filter uses the client clock**, not the server clock. If a client has a wrong
-      clock, its writes can land outside the window and be missed. Subtract a safety margin
-      from `lastSync` (a few minutes) and make your merge idempotent.
-    - **The bound is inclusive** (`>=`). The last record of a sync comes back again on the next
-      one. Your merge must tolerate that.
-    - **Deletions are not reported.** A deleted *day* comes back as a blanked day, so you do
-      see it. A deleted *description* simply disappears from the list, with no tombstone. To
-      detect that, compare with a full `GET /description`.
+    - **The server clock decides, not yours.** Days are selected on `lastWriteDb`, and
+      `syncTimestamp` comes from the same clock. A client whose clock is wrong misses nothing.
+    - **A safety margin is taken for you.** The server reads from 120 seconds *before*
+      `fromTimestamp`: a write is stamped when it starts but only seen when it is committed, and
+      the bound is inclusive anyway. So the last days of a sync come back in the next one.
+      **Your merge must tolerate a day received twice** — replacing it is enough.
+    - **Deletions are reported.** `DELETE /day` does not remove the row: the day stays, empty,
+      with the time it was cleared, and comes back in `days` with every field empty. A deleted
+      label is absent from `descriptions`, which always lists all of them: forget the ones that
+      are not in the list. Renaming, retyping or deleting a label also reports the days that
+      carry it, with their new `freeMucus*` lists.
+    - **A change of cycle reports the cycle.** Setting or clearing `cycleFirstDay` changes the
+      `cycleStartDate` and `cycleDay` of every following day up to the next first day. Those days
+      come back too, so you never have to compute a cycle yourself.
+    - **Nothing is paged.** The answer is as big as the changed days (about 500 bytes a day). The
+      first call returns the whole timeline.
 
     ## 9. Login protection
 
@@ -1506,7 +1525,7 @@ paths:
       tags: [observations]
       summary: Clear one day
       description: |-
-        Clears the content of one day.
+        Clears the content of one day: every field, and the free-text labels linked to it.
 
         ### It clears, it does not remove
 
@@ -1514,23 +1533,21 @@ paths:
 
         - the date still appears in `GET /day`, with all values empty;
         - a later `POST` on that date answers `200`, not `201`;
-        - `GET /sync` reports it as a changed day, which is how other clients learn about the
-          deletion.
+        - `GET /sync` reports it as a changed, empty day, which is how other clients learn about
+          the deletion. That is why the row is kept: it carries the time it was cleared.
 
-        ### Two things it does not clear
+        ### What it clears
 
-        **Free-text labels survive.** `freeMucusSensation` and `freeMucusObservation` stay
-        linked to the day. If you want a truly empty day, send a `POST` with only the date
-        instead of calling `DELETE`:
-
-        ```
-        POST /day  {"date": "2026-03-10"}     <- clears everything, labels included
-        DELETE /day?date=2026-03-10           <- clears the fields, keeps the labels
-        ```
+        **The labels are unlinked from the day.** `freeMucusSensation` and `freeMucusObservation`
+        come back empty, and the `useCount` of those labels goes down. The labels themselves stay
+        in `GET /description`: deleting one is `DELETE /description`.
 
         **The cycle flag is cleared**, so deleting a day that started a cycle merges that cycle
         into the previous one. Every later day gets a new `cycleStartDate` and `cycleDay`. Check
         before deleting a day where `cycleFirstDay` is `true`.
+
+        On a day that exists, `POST /day` with only the date does the same. On a date that was
+        never written, `DELETE` does nothing and `POST` creates an empty day.
 
         The call is idempotent, and a date that was never written is not an error.
       parameters:
@@ -1543,6 +1560,17 @@ paths:
             format: date
             pattern: '^\s*\d{4}-\d{2}-\d{2}\s*$'
           example: "2026-03-10"
+        - name: lastWriteClientUtc
+          in: query
+          required: false
+          description: |-
+            Your clock when the user cleared the day, ISO 8601 UTC, kept as the time of the
+            deletion. Defaults to the server's time. A client that sends its changes later (it
+            was offline) gives the time they were made.
+          schema:
+            type: string
+            format: date-time
+          example: "2026-03-10T07:12:00Z"
       responses:
         "204":
           description: Cleared. No body. Also returned for a date that held nothing.
@@ -1686,9 +1714,9 @@ paths:
         so check `useCount` from `GET /description` first and warn the user when it is not `0`.
         The days themselves are kept; only the label disappears from them.
 
-        **Other clients cannot detect this through `GET /sync`.** A deleted label leaves no
-        trace there (see introduction, section 8). After a delete, refresh with a full
-        `GET /description`.
+        **Other clients learn it through `GET /sync`.** `descriptions` there always lists every
+        label, so the deleted one is missing, and the days that carried it come back without it
+        (see introduction, section 8).
       parameters:
         - name: id
           in: query
@@ -1720,39 +1748,39 @@ paths:
   /sync:
     get:
       tags: [observations]
-      summary: What changed since a given time?
+      summary: What changed since the last sync?
       description: |-
-        Returns every day and every label whose `lastWriteClientUtc` is **greater than or equal
-        to** `fromTimestamp`. This is how two clients of the same account stay consistent
-        without downloading the whole timeline.
+        Brings a local copy of the account up to date: the days written since `fromTimestamp`,
+        every label, and the account summary. This is how several clients of the same account
+        stay consistent without downloading the whole timeline each time.
 
-        Read **section 8** of the introduction for the loop and for the three limits. In short:
+        Read **section 8** of the introduction for the loop. In short:
 
-        - the filter uses the **client** clock, so subtract a safety margin from your last sync
-          time, and make your merge idempotent;
-        - the bound is **inclusive**, so the last record comes back again next time;
-        - a deleted **day** appears as a blanked day, but a deleted **label** leaves no trace.
+        - take the cursor from `syncTimestamp` of the previous answer, never from your own clock;
+          the very first call is `fromTimestamp=1970-01-01T00:00:00Z`;
+        - the server subtracts a safety margin (120 seconds) and the bound is inclusive, so the
+          last days come back again: **replace what you hold, do not append**;
+        - a cleared day comes back empty, a deleted label is absent from `descriptions`, and a
+          change of cycle start brings back the days that follow it.
 
-        The two lists are independent. Both can be empty, which simply means "nothing changed".
-        A first full download is `fromTimestamp=1970-01-01T00:00:00Z`.
-
-        Days returned here carry the same computed `cycleStartDate` and `cycleDay` as in
-        `GET /day`. Labels carry `useCount`.
+        `days` is a flat array in date order, not an object keyed by date like `GET /day`. Each
+        day is exactly what `GET /day` shows, `cycleStartDate` and `cycleDay` included.
+        `descriptions` is exactly `GET /description`. `keyInfos` is exactly `GET /key_infos`.
       parameters:
         - name: fromTimestamp
           in: query
           required: true
           description: |-
-            A UTC timestamp. Both ISO 8601 (`2026-03-10T15:30:45Z`) and the bare form
-            (`2026-03-10 15:30:45`) are accepted. Any timezone offset you send is ignored, and the
-            value is read as UTC.
+            A UTC timestamp, normally the `syncTimestamp` of the previous call. Both ISO 8601
+            (`2026-03-10T15:30:45Z`) and the bare form (`2026-03-10 15:30:45`) are accepted. Any
+            timezone offset you send is ignored, and the value is read as UTC.
           schema:
             type: string
             format: date-time
           example: "2026-03-10T15:30:45Z"
       responses:
         "200":
-          description: OK. Either list can be empty.
+          description: OK. `days` can be empty, which simply means "no day changed".
           content:
             application/json:
               schema:
@@ -1761,16 +1789,29 @@ paths:
                   data:
                     type: object
                     properties:
+                      syncTimestamp:
+                        type: string
+                        format: date-time
+                        description: |-
+                          The server clock when it started to answer. Send it as `fromTimestamp`
+                          next time, once you have merged this answer.
+                        example: "2026-03-10T15:31:02Z"
                       days:
                         type: array
-                        description: Changed days, as a flat array — not keyed by date like `GET /day`.
+                        description: |-
+                          Changed days, in date order, as a flat array. A cleared day is there
+                          with every field empty.
                         items:
                           $ref: '#/components/schemas/Day'
                       descriptions:
                         type: array
-                        description: Changed labels. Deleted labels are **not** listed.
+                        description: |-
+                          **Every** label of the account, not only the changed ones. A label that
+                          is not in the list does not exist any more.
                         items:
                           $ref: '#/components/schemas/Description'
+                      keyInfos:
+                        $ref: '#/components/schemas/KeyInfos'
         "400":
           description: |-
             `missing_parameter` — `fromTimestamp` was not sent.
@@ -2120,8 +2161,8 @@ paths:
           in: query
           required: false
           description: |-
-            The client's UTC clock, ISO 8601, recorded on every day the import writes so
-            `GET /sync` can order it against other devices. Defaults to the server's time.
+            The client's UTC clock, ISO 8601, recorded on every day the import writes.
+            Defaults to the server's time.
           schema:
             type: string
             format: date-time
@@ -2594,13 +2635,15 @@ components:
           nullable: true
           description: |-
             Your own clock, ISO 8601 UTC. The server uses its own clock if this is absent or
-            invalid. **This is the field `GET /sync` filters on** — see introduction, section 8.
+            invalid. It is stored and returned as given; `GET /sync` does not use it.
           example: "2026-03-10T07:12:00Z"
         lastWriteDb:
           type: string
           format: date-time
           nullable: true
-          description: "**Read-only.** The server clock at the last write."
+          description: |-
+            **Read-only.** The server clock at the last write of the day, or of a label it
+            carries. `GET /sync` selects days on this field.
           example: "2026-03-10T07:12:03Z"
 
     Description:

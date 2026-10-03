@@ -47,11 +47,10 @@ if ($_SERVER['REQUEST_METHOD'] == "POST") {
 	$last_write_client_UTC = http_client_timestamp($body["lastWriteClientUtc"] ?? null);
 
 	$is_new = is_null($id);
-	if ($is_new) $id = db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC);
-	else db_update_description_name_type($db, $no_user_account, $id, $name, $type, $last_write_client_UTC);
+	$id = data_save_description($db, $no_user_account, $id, $name, $type, $last_write_client_UTC);
 
 	http_data($is_new ? 201 : 200, [
-		"id" => intval($id),
+		"id" => $id,
 		"name" => $name,
 		"type" => DESCRIPTION_TYPE_NAMES[$type],
 		"lastWriteClientUtc" => http_iso8601($last_write_client_UTC),
@@ -73,7 +72,7 @@ elseif ($_SERVER['REQUEST_METHOD'] == "DELETE") {
 		http_error(404, "not_found", "'id' does not match a known description.");
 	}
 
-	db_delete_descriptions($db, intval($_GET["id"]), $no_user_account);
+	data_delete_description($db, $no_user_account, intval($_GET["id"]));
 
 	http_no_content();
 }

@@ -106,6 +106,15 @@ const EXPORT_TYPE_NFP = "nfp";
 const EXPORT_TYPES = [EXPORT_TYPE_PDF, EXPORT_TYPE_CSV, EXPORT_TYPE_NFP];
 
 // ===========================================================================
+// SYNC -- GET /api/sync (api/sync.php, lib/data.php)
+// ===========================================================================
+
+// How far before the cursor a client sends the sync reads. A row is stamped (last_write_db) when its
+// statement runs but only seen once its transaction commits, so a read made in between would skip it
+// for good. A client replaces what it holds by what it receives, so reading a row twice is harmless.
+const SYNC_OVERLAP_SECONDS = 120;
+
+// ===========================================================================
 // DAY FORMAT -- the codes day_timeline stores (lib/day_format.php)
 // ===========================================================================
 
