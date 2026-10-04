@@ -251,7 +251,7 @@ info:
 
     ```
     1. POST your own unsent changes to /day and /description        (your changes first)
-    2. GET /sync?fromTimestamp=<lastSync>     (the first time: 1970-01-01T00:00:00Z)
+    2. GET /sync?fromTimestamp=<lastSync>     (the first time: GET /sync, with no parameter)
     3. merge into your copy:
          - each returned day replaces yours; an empty day means "forget this day";
          - the returned labels replace yours; the returned key infos replace yours;
@@ -1162,6 +1162,12 @@ paths:
                 sponsor:
                   type: boolean
                   description: Marks the account as a financial supporter of the project.
+                autoMailExport:
+                  type: boolean
+                  description: |-
+                    Send the export of each finished cycle by email (PDF, CSV and NFP file, to the login
+                    address and to `secondaryEmail`). `true` by default for every account; `false` stops
+                    these emails.
                 lastWriteClientUtc:
                   type: string
                   format: date-time
@@ -1187,7 +1193,7 @@ paths:
                         description: Names of the settings that were really changed. Empty when nothing was.
                         items:
                           type: string
-                          enum: [name, secondaryEmail, method, birthYear, timelineAscending, research, sponsor]
+                          enum: [name, secondaryEmail, method, birthYear, timelineAscending, research, sponsor, autoMailExport]
                         example: [method]
                       lastWriteClientUtc:
                         type: string
@@ -1757,7 +1763,7 @@ paths:
         Read **section 8** of the introduction for the loop. In short:
 
         - take the cursor from `syncTimestamp` of the previous answer, never from your own clock;
-          the very first call is `fromTimestamp=1970-01-01T00:00:00Z`;
+          the very first call sends no `fromTimestamp` at all, which reads from the start;
         - the server subtracts a safety margin (120 seconds) and the bound is inclusive, so the
           last days come back again: **replace what you hold, do not append**;
         - a cleared day comes back empty, a deleted label is absent from `descriptions`, and a
@@ -1769,11 +1775,13 @@ paths:
       parameters:
         - name: fromTimestamp
           in: query
-          required: true
+          required: false
           description: |-
-            A UTC timestamp, normally the `syncTimestamp` of the previous call. Both ISO 8601
-            (`2026-03-10T15:30:45Z`) and the bare form (`2026-03-10 15:30:45`) are accepted. Any
-            timezone offset you send is ignored, and the value is read as UTC.
+            A UTC timestamp, normally the `syncTimestamp` of the previous call. **Leave it out
+            (or empty) the first time**: the sync then starts at `1970-01-01T00:00:00Z` and
+            returns the whole timeline. Both ISO 8601 (`2026-03-10T15:30:45Z`) and the bare form
+            (`2026-03-10 15:30:45`) are accepted. Any timezone offset you send is ignored, and the
+            value is read as UTC.
           schema:
             type: string
             format: date-time
@@ -1813,9 +1821,7 @@ paths:
                       keyInfos:
                         $ref: '#/components/schemas/KeyInfos'
         "400":
-          description: |-
-            `missing_parameter` — `fromTimestamp` was not sent.
-            `invalid_timestamp` — it is not a valid UTC timestamp.
+          description: "`invalid_timestamp` — `fromTimestamp` is sent but is not a valid UTC timestamp."
           content:
             application/json:
               schema:
@@ -2418,6 +2424,11 @@ components:
           description: |-
             Display preference: `true` puts today at the top of the table. The API itself always
             returns days in ascending date order.
+        autoMailExport:
+          type: boolean
+          description: |-
+            Is the export of each finished cycle sent by email (PDF, CSV and NFP file)? `true` by
+            default.
         allCyclesFirstDay:
           type: array
           description: |-

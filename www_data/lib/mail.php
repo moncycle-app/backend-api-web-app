@@ -100,17 +100,136 @@ function mail_send_new_password(string $email, string $password): bool {
 		'Nouveau mot de passe temporaire: ' . $password);
 }
 
-// The export of a finished cycle (a row of db_select_cycles_finished()), with $files attached:
-// [file name => content].
-function mail_send_cycle(array $account, string $first_day, string $last_day, int $nb_days, array $files): bool {
-	$name = htmlspecialchars($account["name"]);
-	$content = <<<HTML
-	Vous trouverez en PJ un export au format PDF et CSV de votre cycle du $first_day au $last_day d'une durée de $nb_days jours.<br />
-	<br />
+// ---------------------------------------------------------------------------
+// The mail of a finished cycle. It has its own layout (a card on a light background, the cycle
+// in figures, one row per attachment) and not the shared mail_html() frame, because its footer
+// cannot say that mails are needed to run the app: the user can turn this one off.
+// ---------------------------------------------------------------------------
+
+// The sentences the HTML and the text version of the cycle mail share: what each attachment is for
+// (the NFP one is exactly two sentences: what the file is, then where else it works), and how to turn
+// the mail off, as the account page words it (account.html, "Exporter mes données").
+function mail_cycle_words(): array {
+	return [
+		"pdf" => "Le graphique de votre cycle, à partager avec votre moniteur, votre instructrice ou votre médecin.",
+		"csv" => "Vos observations jour par jour, à ouvrir dans LibreOffice ou Microsoft Excel pour une analyse plus détaillée.",
+		"nfp" => "Le fichier NFP contient toutes les données de ce cycle dans un format d’échange : conservez-le comme sauvegarde, vous pourrez le réimporter dans moncycle.app depuis « Mon compte », section « Importer mes données ». Il est également compatible avec d’autres applications si vous souhaitez migrer vos données.",
+		"opt_out" => "Cet envoi est automatique. Vous pouvez le désactiver à tout moment : ouvrez « Mon compte », section « Exporter mes données », puis décochez « Recevoir automatiquement chaque cycle par e-mail ».",
+	];
+}
+
+// An escaped sentence with French typography: no line break inside « », nor before a colon.
+function mail_cycle_typography(string $text): string {
+	return str_replace(["« ", " »", " :"], ["«&nbsp;", "&nbsp;»", "&nbsp;:"], htmlspecialchars($text));
+}
+
+// One attachment: a colour badge with its format, and what the file is for ($about is escaped by the caller).
+function mail_cycle_file(string $format, string $color, string $tint, string $about): string {
+	return <<<HTML
+	<tr>
+		<td width="52" valign="top" style="padding:0 14px 18px 0;">
+			<div style="width:52px;line-height:30px;text-align:center;border-radius:8px;background:{$tint};color:{$color};font-size:12px;font-weight:700;letter-spacing:.6px;">{$format}</div>
+		</td>
+		<td valign="top" style="padding:0 0 18px 0;font-size:14px;line-height:21px;color:#3d4a42;">{$about}</td>
+	</tr>
 	HTML;
-	return mail_send([$account["email1"], $account["email2"]], "Cycle de $nb_days jours du $first_day",
-		mail_html("Bonjour {$name},", $content, mail_why("vous possédez un compte sur MONCYCLE.APP")),
-		"Export de votre cycle du $first_day au $last_day de $nb_days jours.\n\nmoncycle.app", $files);
+}
+
+function mail_cycle_html(string $name, string $first_day, string $last_day, int $nb_days): string {
+	$name = htmlspecialchars($name);
+	$account_url = APP_URL . "account";
+	$words = mail_cycle_words();
+	$files = mail_cycle_file("PDF", "#b03a2e", "#fbeceb", mail_cycle_typography($words["pdf"]))
+		. mail_cycle_file("CSV", "#1e824c", "#e6f4ec", mail_cycle_typography($words["csv"]))
+		. mail_cycle_file("NFP", "#3949ab", "#eaecf8", mail_cycle_typography($words["nfp"]));
+	$opt_out = mail_cycle_typography($words["opt_out"]);
+	$wordmark = "mon<span style='color:#1e824c;'>cycle</span>.app";
+	return <<<HTML
+	<!DOCTYPE html>
+	<html lang="fr">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light only" />
+		<meta name="supported-color-schemes" content="light only" />
+		<title>Votre cycle est terminé</title>
+	</head>
+	<body style="margin:0;padding:0;background:#f1f5f2;">
+	<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#f1f5f2;font-size:1px;line-height:1px;">Votre cycle de {$nb_days} jours est terminé : PDF, CSV et NFP en pièces jointes.</div>
+	<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f1f5f2" style="background:#f1f5f2;">
+	<tr><td align="center" style="padding:28px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+		<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
+			<tr><td style="padding:0 6px 14px 6px;font-size:20px;font-weight:700;letter-spacing:-.2px;color:#1b2a21;">{$wordmark}</td></tr>
+			<tr><td bgcolor="#ffffff" style="background:#ffffff;border:1px solid #e1e9e3;border-radius:16px;overflow:hidden;">
+				<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+					<tr><td height="6" bgcolor="#1e824c" style="height:6px;line-height:6px;font-size:0;background:#1e824c;">&nbsp;</td></tr>
+					<tr><td style="padding:32px 32px 6px 32px;">
+						<div style="font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#1e824c;">Cycle terminé</div>
+						<div style="padding-top:8px;font-size:24px;line-height:30px;font-weight:700;color:#1b2a21;">Bonjour {$name},</div>
+						<div style="padding-top:10px;font-size:15px;line-height:23px;color:#3d4a42;">Voici l’export complet de votre cycle, dans trois formats, pour le consulter, le partager ou le conserver.</div>
+					</td></tr>
+					<tr><td style="padding:22px 32px 6px 32px;">
+						<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#eef7f1" style="background:#eef7f1;border-radius:12px;">
+							<tr>
+								<td style="padding:18px 22px;">
+									<div style="font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:#5b7566;">Cycle</div>
+									<div style="padding-top:3px;font-size:17px;line-height:23px;font-weight:600;color:#17301f;">du {$first_day} au {$last_day}</div>
+								</td>
+								<td align="right" style="padding:18px 22px;">
+									<div style="font-size:34px;line-height:36px;font-weight:700;color:#1e824c;">{$nb_days}</div>
+									<div style="font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:#5b7566;">jours</div>
+								</td>
+							</tr>
+						</table>
+					</td></tr>
+					<tr><td style="padding:26px 32px 0 32px;">
+						<div style="padding-bottom:16px;font-size:16px;font-weight:700;color:#1b2a21;">Dans les pièces jointes</div>
+						<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+							{$files}
+						</table>
+					</td></tr>
+					<tr><td style="padding:6px 32px 8px 32px;">
+						<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f6f7f6" style="background:#f6f7f6;border-radius:12px;">
+							<tr><td style="padding:16px 20px;font-size:13px;line-height:20px;color:#4b574f;">
+								{$opt_out}
+								<div style="padding-top:12px;"><a href="{$account_url}" style="display:inline-block;padding:9px 16px;border-radius:8px;background:#1e824c;color:#ffffff;font-size:13px;font-weight:600;text-decoration:none;">Gérer cet envoi</a></div>
+							</td></tr>
+						</table>
+					</td></tr>
+					<tr><td style="padding:22px 32px 30px 32px;font-size:15px;line-height:23px;color:#3d4a42;">À bientôt sur <a href="https://www.moncycle.app" style="color:#1b2a21;font-weight:700;text-decoration:none;">{$wordmark}</a></td></tr>
+				</table>
+			</td></tr>
+			<tr><td style="padding:16px 10px 0 10px;font-size:12px;line-height:18px;color:#7a867f;text-align:center;">
+				Ce mail a été envoyé automatiquement par MONCYCLE.APP, merci de ne pas y répondre.<br />
+				Vous le recevez car l’envoi automatique des cycles est activé sur votre compte.
+			</td></tr>
+		</table>
+	</td></tr>
+	</table>
+	</body>
+	</html>
+	HTML;
+}
+
+function mail_cycle_text(string $name, string $first_day, string $last_day, int $nb_days): string {
+	$account_url = APP_URL . "account";
+	$words = mail_cycle_words();
+	return "Bonjour {$name},\n\n"
+		. "Votre cycle est terminé : du {$first_day} au {$last_day}, {$nb_days} jours. Voici son export complet, en pièces jointes.\n\n"
+		. "- PDF : {$words["pdf"]}\n"
+		. "- CSV : {$words["csv"]}\n"
+		. "- NFP : {$words["nfp"]}\n\n"
+		. "{$words["opt_out"]}\n{$account_url}\n\n"
+		. "À bientôt sur moncycle.app\n\n"
+		. "Ce mail a été envoyé automatiquement par MONCYCLE.APP, merci de ne pas y répondre. Vous le recevez car l'envoi automatique des cycles est activé sur votre compte.";
+}
+
+// The export of a finished cycle (a row of db_select_cycles_finished()), with $files attached:
+// [file name => content], the PDF, the CSV and the NFP file.
+function mail_send_cycle(array $account, string $first_day, string $last_day, int $nb_days, array $files): bool {
+	return mail_send([$account["email1"], $account["email2"]], "Votre cycle du $first_day au $last_day ($nb_days jours)",
+		mail_cycle_html($account["name"], $first_day, $last_day, $nb_days),
+		mail_cycle_text($account["name"], $first_day, $last_day, $nb_days), $files);
 }
 
 function mail_send_reminder(array $account): bool {

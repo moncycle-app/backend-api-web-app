@@ -144,3 +144,14 @@ function nfp_export_file($db, string $start_date, string $end_date, array $user_
 
 	return $file;
 }
+
+// The file as the text a download or a mail attachment carries. $pretty is for reading it in the browser.
+// JSON_UNESCAPED_UNICODE / _SLASHES keep accented comments and the ISO-8601 timestamp readable in the
+// file; JSON_PRESERVE_ZERO_FRACTION keeps a round 37.0 a number.
+function nfp_export_json($db, string $start_date, string $end_date, array $user_account, bool $anonymous, bool $pretty = false): string {
+	$app_version = json_decode(file_get_contents(__DIR__ . "/../api/version.json"), true)["version"] ?? "";
+	$file = nfp_export_file($db, $start_date, $end_date, $user_account, $anonymous, $app_version);
+
+	$flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION;
+	return json_encode($file, $pretty ? ($flags | JSON_PRETTY_PRINT) : $flags);
+}

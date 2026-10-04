@@ -3,7 +3,7 @@ SET NAMES utf8mb4;
 DELETE FROM `user_account` WHERE `no_user_account` = 2;
 DELETE FROM `user_account` WHERE `no_user_account` = 3;
 
-INSERT INTO `user_account` (`no_user_account`, `name`, `nfp_method`, `age`, `email1`, `email2`, `password`, `totp_state`, `totp_secret`, `nb_connection_attempts`, `timeline_asc`, `sponsor`, `research`, `user_enabled`, `is_inactive`)
+INSERT INTO `user_account` (`no_user_account`, `name`, `nfp_method`, `age`, `email1`, `email2`, `password`, `language`, `totp_state`, `totp_secret`, `nb_connection_attempts`, `timeline_asc`, `sponsor`, `research`, `user_enabled`, `is_inactive`)
 VALUES
 	(2,'Démo Billings',2,1990,'demo.bill@moncycle.app',NULL,'$2y$10$hTn9Xjg4wk/ovWEY8BWXau.Y1ODRoX03c2zlp6Rnmib1yUcVpp0sC','FR',0,NULL,0,1,0,0,1,0),
 	(3,'Démo FertilityCare',3,1990,'demo.fc@moncycle.app',NULL,'$2y$10$hTn9Xjg4wk/ovWEY8BWXau.Y1ODRoX03c2zlp6Rnmib1yUcVpp0sC','FR',0,NULL,0,1,0,0,1,0);

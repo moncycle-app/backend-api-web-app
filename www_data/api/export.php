@@ -74,14 +74,9 @@ elseif ($type === EXPORT_TYPE_PDF) {
 }
 
 else {
-	$app_version = json_decode(file_get_contents("version.json"), true)["version"] ?? "";
-	$nfp_data = nfp_export_file($db, $start_date, $end_date, $user_account, $anonymous, $app_version);
+	$nfp_json = nfp_export_json($db, $start_date, $end_date, $user_account, $anonymous, $json_in_page);
 
 	header('Content-Type: application/json');
 	if (!$json_in_page) header('Content-Disposition: attachment; filename="' . $filename . '.nfp"');
-
-	// JSON_UNESCAPED_UNICODE / _SLASHES keep accented comments and the ISO-8601 timestamp
-	// readable in the file; JSON_PRESERVE_ZERO_FRACTION keeps a round 37.0 a number.
-	$flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION;
-	print(json_encode($nfp_data, $json_in_page ? ($flags | JSON_PRETTY_PRINT) : $flags));
+	print($nfp_json);
 }

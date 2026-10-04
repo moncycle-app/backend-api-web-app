@@ -57,7 +57,6 @@ const moncycle_store = {
 	wake_min_interval : 20000,
 	request_timeout : 30000,
 	retry_delays : [5000, 15000, 60000, 300000],
-	epoch : "1970-01-01T00:00:00Z",
 	// the content a Day holds, as opposed to where it stands in its cycle and when it was written
 	day_meta : ["date", "cycleStartDate", "cycleDay", "lastWriteClientUtc", "lastWriteDb"],
 	codified_fields : ["codifiedBleedingObservation", "codifiedMucusSensation", "codifiedMucusObservation", "codifiedNumberObservations", "codifiedPainObservations"],
@@ -376,8 +375,9 @@ const moncycle_store = {
 		moncycle_store.write(moncycle_store.keys.descriptions, moncycle_store.descriptions);
 	},
 
-	// Sends the queue, oldest first, one request at a time. Resolves when it is empty; rejects at the
-	// first failure that a later try can mend (the rest waits, a retry is planned).
+	// Sends the queue, oldest first, one request at a time. Resolves when it is empty. Rejects when something
+	// is left that a later try can mend, and a retry is planned: no answer at all stops the pass (the network
+	// is down), but a server that fails on one day (an error page, a 5xx) does not hold back the others.
 	flush : function () {
 		if (moncycle_store.expired) return Promise.reject();
 		if (!moncycle_store.flushing) {
@@ -390,9 +390,11 @@ const moncycle_store = {
 		return moncycle_store.flushing;
 	},
 	flush_queue : async function () {
+		let failed = {};   // dates the server could not take in this pass
+		let failure = null;
 		while (true) {
-			let date = Object.keys(moncycle_store.pending)[0];
-			if (date === undefined) return;
+			let date = Object.keys(moncycle_store.pending).find(function (queued) { return !(queued in failed); });
+			if (date === undefined) break;
 			let entry = moncycle_store.pending[date];
 			try {
 				let answer = await moncycle_store.send(date, entry);
@@ -401,14 +403,22 @@ const moncycle_store = {
 			catch (jqXHR) {
 				if (moncycle_store.expired || moncycle_store.is_unauthorized(jqXHR)) throw jqXHR;
 				let error = moncycle_store.error_of(jqXHR);
-				if (error.kind != "rejected") {
-					moncycle_store.error = error;
-					moncycle_store.plan_retry();
-					throw jqXHR;
+				if (error.kind == "rejected") {
+					moncycle_store.rejected(date, entry, error);
+					await moncycle_store.reload_stale().catch(function () { });
+					continue;
 				}
-				moncycle_store.rejected(date, entry, error);
-				await moncycle_store.reload_stale().catch(function () { });
+				moncycle_store.error = error;
+				failure = jqXHR;
+				failed[date] = true;
+				if (error.kind == "network") break;
 			}
+		}
+		if (failure) {
+			// (a day sent after the failure cleared the error: something is still waiting, so it is shown again)
+			moncycle_store.error = moncycle_store.error_of(failure);
+			moncycle_store.plan_retry();
+			throw failure;
 		}
 	},
 	send : function (date, entry) {
@@ -525,8 +535,9 @@ const moncycle_store = {
 
 	pull : function () {
 		moncycle_store.touched = {};
-		let from = moncycle_store.last_sync || moncycle_store.epoch;
-		return moncycle_store.request("GET", "api/sync?fromTimestamp=" + encodeURIComponent(from)).then(function (ret) {
+		// the first sync has no cursor: the server then reads from the start
+		let query = moncycle_store.last_sync ? "?fromTimestamp=" + encodeURIComponent(moncycle_store.last_sync) : "";
+		return moncycle_store.request("GET", "api/sync" + query).then(function (ret) {
 			let changes = moncycle_store.merge(ret.data);
 			moncycle_store.error = null;
 			moncycle_store.last_pull = Date.now();

@@ -122,11 +122,11 @@ function db_insert_user_account($db, $name, $nfp_method, $age, $email, $password
 	);
 }
 
-// $fields: name, email2, nfp_method, age, sponsor, timeline_asc, research (see account_apply_json())
+// $fields: name, email2, nfp_method, age, sponsor, timeline_asc, research, auto_mail_export (see account_apply_json())
 function db_update_user_account_settings($db, $no_user_account, array $fields, $last_write_client_UTC) {
 	return db_exec($db,
 		"UPDATE user_account SET `name` = :name, email2 = :email2, nfp_method = :nfp_method, age = :age, sponsor = :sponsor,
-		timeline_asc = :timeline_asc, research = :research, last_write_client_UTC = :last_write_client_UTC
+		timeline_asc = :timeline_asc, research = :research, auto_mail_export = :auto_mail_export, last_write_client_UTC = :last_write_client_UTC
 		WHERE no_user_account = :no_user_account",
 		$fields + ["last_write_client_UTC" => $last_write_client_UTC, "no_user_account" => $no_user_account]
 	);
@@ -166,7 +166,7 @@ function db_select_user_account_auth_token($db, $auth_token_str): ?array {
 		"SELECT J.no_user_account, J.no_auth_token, C.name AS name_user_account, J.contry_code, J.name AS name_auth_token,
 		J.date_creation AS d_creation_auth_token, J.date_use AS d_use_auth_token, C.nfp_method, C.age, C.email1, C.email2,
 		C.nb_connection_attempts, C.sponsor, C.user_enabled, C.is_inactive, C.last_auth_date, C.inscription_date,
-		C.last_password_change, C.register_comment, C.totp_secret, C.totp_state, C.research, C.timeline_asc, C.last_write_client_UTC
+		C.last_password_change, C.register_comment, C.totp_secret, C.totp_state, C.research, C.timeline_asc, C.auto_mail_export, C.last_write_client_UTC
 		FROM auth_token AS J INNER JOIN user_account AS C ON J.no_user_account = C.no_user_account
 		WHERE auth_token_str = :auth_token_str LIMIT 1",
 		["auth_token_str" => $auth_token_str]
@@ -460,12 +460,13 @@ function db_select_cycle($db, $date, $no_user_account): ?string {
 // What the cron works on
 // ---------------------------------------------------------------------------
 
-// the accounts whose cycle began two days ago, so that the cycle before it is finished
+// the accounts whose cycle began two days ago, so that the cycle before it is finished, and that
+// have not turned the automatic mail of a cycle off (auto_mail_export)
 function db_select_cycles_finished($db) {
 	return db_rows($db,
 		"SELECT SUBDATE(obs.date_obs, 1) AS cycle_complet, obs.no_user_account, c.name, c.nfp_method, c.email1, c.email2
 		FROM day_timeline AS obs JOIN user_account AS c ON obs.no_user_account = c.no_user_account
-		WHERE obs.date_obs = CURDATE() - INTERVAL 2 DAY AND (obs.cycle_1st_day = 1 OR obs.pregnancy = 1)"
+		WHERE obs.date_obs = CURDATE() - INTERVAL 2 DAY AND (obs.cycle_1st_day = 1 OR obs.pregnancy = 1) AND c.auto_mail_export = 1"
 	);
 }
 

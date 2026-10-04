@@ -60,7 +60,7 @@
 				<br /><br /><br /><br />
 			</div>
 
-			<h2>Exporter mes données</h2>
+			<h2>Exporter mes données <span class="net_stat" id="export_net_stat"></span></h2>
 			<p>
 				Vous avez la possibilité d’exporter tout ou partie de vos observations dans le format de votre choix. Cela vous permet de regrouper plusieurs cycles dans un même fichier. Les formats disponibles sont :
 				<ul>
@@ -81,6 +81,12 @@
 			<span class="rouge" id="export_err"></span>
 			</form>
 			<br /><br />
+			<input class="auto_save" value="1" type="checkbox" id="i_auto_mail_export" name="auto_mail_export" data-net-stat="export_net_stat" /> <label for="i_auto_mail_export"><b>Recevoir automatiquement chaque cycle par e-mail.</b></label><br />
+			<span class="label_info">
+				À la fin de chaque cycle d’au moins 5 jours, vous recevez par e-mail (et sur votre 2e adresse si vous en avez indiqué une)
+				l’export de ce cycle aux formats PDF, CSV et NFP. Décochez cette case pour ne plus recevoir ces e-mails.
+			</span>
+			<br /><br /><br />
 			Comme demandé par la RGPD, vous avez aussi la possibilité d’exporter l’ensemble des données liées à votre compte. Cet export sera au format CSV.</p>
 			<a href="api/all_of_my_data_plz"><input type="button" value="📦 Exporter l'ensemble des données brutes de mon compte" /></a>
 			<br /><br /><br /><br />

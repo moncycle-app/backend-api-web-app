@@ -16,6 +16,7 @@ CREATE TABLE `user_account` (
   `timeline_asc` tinyint(1) unsigned NOT NULL DEFAULT 1,
   `sponsor` tinyint(1) unsigned NOT NULL DEFAULT 0,
   `research` tinyint(1) unsigned NOT NULL DEFAULT 0,
+  `auto_mail_export` tinyint(1) unsigned NOT NULL DEFAULT 1,
   `user_enabled` tinyint(1) unsigned NOT NULL DEFAULT 1,
   `is_inactive` tinyint(1) unsigned NOT NULL DEFAULT 0,
   `last_auth_date` timestamp NULL DEFAULT NULL,

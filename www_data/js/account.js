@@ -184,6 +184,7 @@ $(document).ready(function(){
 		$(`#m_${nfp_method}`).attr("checked", "");
 		if (moncycle_app_usr.research) $("#i_research").prop('checked', true);
 		if (moncycle_app_usr.timelineAscending) $("#i_timeline_asc").prop('checked', true);
+		$("#i_auto_mail_export").prop('checked', !!moncycle_app_usr.autoMailExport);
 		let d = new Date(moncycle_app_usr.inscriptionDate);
 		let m = d.getMonth()+1;
 		let j = d.getDate();
@@ -307,9 +308,11 @@ $(document).ready(function(){
 
 
 	// MISE A JOURS DES PARAMETTRE DU COMPTE
-	const moncycle_app_account_field_map = {name: "name", email2: "secondaryEmail", age: "birthYear", timeline_asc: "timelineAscending", research: "research"};
+	const moncycle_app_account_field_map = {name: "name", email2: "secondaryEmail", age: "birthYear", timeline_asc: "timelineAscending", research: "research", auto_mail_export: "autoMailExport"};
 	$(".auto_save").on("keyup change", function() {
-		$("#net_stat").text('⏳');
+		// the status goes next to the section the field is in (data-net-stat), the settings one by default
+		let net_stat = $("#" + ($(this).data("net-stat") || "net_stat"));
+		net_stat.text('⏳');
 		let field_name = $(this).attr('name');
 		let payload = {};
 		if (field_name == "nfp_method") {
@@ -328,15 +331,15 @@ $(document).ready(function(){
 			data: JSON.stringify(payload),
 		}).done(function(ret){
 			if (ret.data && ret.data.name) $("#name").text(ret.data.name);
-			$("#net_stat").html(' ✅&nbsp;enregistré');
-			$("#net_stat").addClass('vert');
-			$("#net_stat").removeClass('rouge');
+			net_stat.html(' ✅&nbsp;enregistré');
+			net_stat.addClass('vert');
+			net_stat.removeClass('rouge');
 			moncycle_app_sync_later();
 		}).fail(function(jqXHR){
 			console.error(jqXHR);
-			$("#net_stat").html(' ❌&nbsp;erreur');
-			$("#net_stat").addClass('rouge');
-			$("#net_stat").removeClass('vert');
+			net_stat.html(' ❌&nbsp;erreur');
+			net_stat.addClass('rouge');
+			net_stat.removeClass('vert');
 		});
 	});
 

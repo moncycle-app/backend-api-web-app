@@ -130,3 +130,8 @@ CREATE TABLE `login_attempt_ip` (
 ALTER TABLE `user_account`
 ADD `language` varchar(2) COLLATE 'utf8mb4_bin' NOT NULL AFTER `password`;
 UPDATE `user_account` SET `language` = 'FR';
+
+-- the automatic mail of a finished cycle (PDF, CSV and NFP): on for every account, as it was before the option
+ALTER TABLE `user_account`
+ADD `auto_mail_export` tinyint(1) unsigned NOT NULL DEFAULT 1 AFTER `research`,
+ALGORITHM=INSTANT, LOCK=NONE;

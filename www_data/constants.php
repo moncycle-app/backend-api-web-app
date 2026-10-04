@@ -114,6 +114,9 @@ const EXPORT_TYPES = [EXPORT_TYPE_PDF, EXPORT_TYPE_CSV, EXPORT_TYPE_NFP];
 // for good. A client replaces what it holds by what it receives, so reading a row twice is harmless.
 const SYNC_OVERLAP_SECONDS = 120;
 
+// What a sync with no fromTimestamp reads from: the start of everything, as a client's first sync does.
+const SYNC_FROM_START = "1970-01-01 00:00:00";
+
 // ===========================================================================
 // DAY FORMAT -- the codes day_timeline stores (lib/day_format.php)
 // ===========================================================================
@@ -148,6 +151,9 @@ const DAY_LIMIT_FC_SCORE_CHARS = 32;        // day_timeline.fc_score   varchar(3
 const DAY_LIMIT_COUNTER_START = 255;        // day_timeline.counter_start tinyint unsigned
 const DAY_TEMPERATURE_STORABLE_MIN = 0.0;   // day_timeline.temperature decimal(4,2) unsigned
 const DAY_TEMPERATURE_STORABLE_MAX = 99.99;
+// the range of a TIMESTAMP column (last_write_client_UTC, in UTC): a client clock outside it cannot be stored
+const TIMESTAMP_STORABLE_MIN = "1970-01-01 00:00:01";
+const TIMESTAMP_STORABLE_MAX = "2038-01-19 03:14:07";
 
 // ===========================================================================
 // NFP FILE FORMAT -- schema, limits and vocabularies (lib/nfp_format.php)

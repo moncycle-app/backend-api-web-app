@@ -54,10 +54,12 @@ function http_from_iso8601(?string $timestamp): ?string {
 }
 
 // The client's own timestamp of a write ("lastWriteClientUtc") as a UTC "Y-m-d H:i:s", or the
-// server's clock when it is absent or not a valid timestamp (a body can hold any JSON value).
+// server's clock when it is absent, not a valid timestamp (a body can hold any JSON value), or outside
+// what the column can store: a client whose clock is wrong must still be able to write.
 function http_client_timestamp(mixed $iso8601): string {
 	$utc = is_string($iso8601) ? http_from_iso8601($iso8601) : null;
-	return $utc && date_validate_timestamp($utc) ? $utc : date('Y-m-d H:i:s');
+	$storable = $utc && date_validate_timestamp($utc) && $utc >= TIMESTAMP_STORABLE_MIN && $utc <= TIMESTAMP_STORABLE_MAX;
+	return $storable ? $utc : date('Y-m-d H:i:s');
 }
 
 // The answer of the endpoints a browser calls straight (downloads, pages): a plain-text 400.

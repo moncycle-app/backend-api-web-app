@@ -11,6 +11,7 @@ require_once "../config.php";
 require_once "../lib/doc_csv.php";
 require_once "../lib/doc_export.php";
 require_once "../lib/mail.php";
+require_once "../lib/nfp_export.php";
 
 header("Content-Type: text/plain");
 
@@ -19,7 +20,8 @@ echo "moncycle.app cron worker" . PHP_EOL;
 
 $db = db_open();
 
-// THE EXPORT OF A CYCLE THAT ENDED, by mail (cycles of at least 5 days)
+// THE EXPORT OF A CYCLE THAT ENDED, by mail: PDF, CSV and NFP (cycles of at least 5 days, accounts that
+// have not turned auto_mail_export off)
 
 foreach (db_select_cycles_finished($db) as $account) {
 
@@ -34,10 +36,13 @@ foreach (db_select_cycles_finished($db) as $account) {
 	doc_csv_cycle($csv, $days, $nfp_method);
 	rewind($csv);
 
+	// the NFP export reads the account the way a logged-in request gives it: the name is "name_user_account"
+	$nfp = nfp_export_json($db, $cycle_start, $account["cycle_complet"], $account + ["name_user_account" => $account["name"]], false);
+
 	$file_name = 'moncycle_app_' . date_human(new DateTime($cycle_start), '_');
 	$sent = mail_send_cycle(
 		$account, date_human(new DateTime($days[0]["date"])), date_human(new DateTime(end($days)["date"])), count($days),
-		["$file_name.pdf" => doc_export_pdf($days, $nfp_method, $account["name"])->Output('S'), "$file_name.csv" => stream_get_contents($csv)]
+		["$file_name.pdf" => doc_export_pdf($days, $nfp_method, $account["name"])->Output('S'), "$file_name.csv" => stream_get_contents($csv), "$file_name.nfp" => $nfp]
 	);
 	fclose($csv);
 

@@ -50,6 +50,7 @@ function account_apply_json(array $account, array $body): array {
 	$new = [
 		"name" => $account["name_user_account"], "email2" => $account["email2"], "nfp_method" => $account["nfp_method"],
 		"age" => $account["age"], "sponsor" => $account["sponsor"], "timeline_asc" => $account["timeline_asc"], "research" => $account["research"],
+		"auto_mail_export" => $account["auto_mail_export"],
 	];
 	$changed = [];
 
@@ -69,7 +70,7 @@ function account_apply_json(array $account, array $body): array {
 		$new["age"] = intval($body["birthYear"]);
 		$changed[] = "birthYear";
 	}
-	foreach (["timelineAscending" => "timeline_asc", "research" => "research", "sponsor" => "sponsor"] as $json => $column) {
+	foreach (["timelineAscending" => "timeline_asc", "research" => "research", "sponsor" => "sponsor", "autoMailExport" => "auto_mail_export"] as $json => $column) {
 		if (!isset($body[$json])) continue;
 		$new[$column] = boolval($body[$json]) ? 1 : 0;
 		$changed[] = $json;
@@ -100,6 +101,7 @@ function account_key_infos($db, array $user_account): array {
 		"sponsor" => boolval($user_account["sponsor"]),
 		"research" => boolval($user_account["research"]),
 		"timelineAscending" => boolval($user_account["timeline_asc"]),
+		"autoMailExport" => boolval($user_account["auto_mail_export"]),
 		"allCyclesFirstDay" => db_select_cycles($db, $user_account["no_user_account"]),
 		"allPregnancyDates" => db_select_pregnancies($db, $user_account["no_user_account"]),
 		"totpState" => sec_totp_state_name($user_account["totp_state"]),
