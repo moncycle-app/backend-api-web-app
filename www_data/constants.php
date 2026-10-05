@@ -264,6 +264,7 @@ const NFP_CYCLE_FIELDS_STRUCTURAL = ["method", "cycleStartDate", "days"];   // t
 const DOC_WEEK_DAYS = ["D", "L", "M", "M", "J", "V", "S"];   // initials of the days, Sunday first, on the charts
 const DOC_BABY_IMAGE = __DIR__ . "/img/baby.png";            // drawn on a stamp that has the baby
 const DOC_CSV_LIST_JOINER = " | ";                           // joins the descriptions of a day in one CSV cell, in both CSV exports
+const DOC_COMMENT_OTHER_JOINER = " | ";                      // between a day's comment and its descriptions with no type yet, which follow it in the CSV and in both PDFs
 
 // The fields a mucusNotObserved day leaves empty in the CSV and in both PDFs, even when old values
 // are stored: the NFP incompatibility list, plus the FertilityCare recurrence count, the stamp and
@@ -297,7 +298,6 @@ const DOC_PDF_STYLES = [
 	'bill.counter' => ['Helvetica', 'B', 7.5, [30, 130, 76]],
 	'bill.union' => ['ZapfDingbats', '', 8, [172, 36, 51]],
 	'bill.text' => ['Helvetica', '', 8, [30, 30, 30]],
-	'bill.other' => ['Helvetica', 'I', 8, [90, 90, 90]],
 	'bill.comment' => ['Helvetica', 'I', 7.5, [70, 70, 70]],
 	'bill.temperature' => ['Helvetica', '', 8, DOC_BILL_TEMPERATURE_COLOR],
 	'bill.temperature_time' => ['Helvetica', '', 6, [140, 140, 140]],
@@ -355,7 +355,6 @@ const DOC_BILL_MARKERS = ["peak", "counter", "union"];   // the optional columns
 const DOC_BILL_TEXT_COLUMNS = [
 	"freeMucusSensation" => ["SENSATIONS", 'bill.text'],
 	"freeMucusObservation" => ["OBSERVATIONS", 'bill.text'],
-	"freeOther" => ["AUTRE", 'bill.other'],
 	"comments" => ["COMMENTAIRE", 'bill.comment'],
 ];
 

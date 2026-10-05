@@ -22,7 +22,7 @@ require_once __DIR__ . "/doc.php";
 
 // Named after the NFP fields, or after the API's day where NFP has none (date, cycleDay,
 // cycleFirstDay).
-function doc_csv_columns(array $days, int $nfp_method): array {
+function doc_csv_columns(int $nfp_method): array {
 	$temperature = account_tracks_temperature($nfp_method) ? ["temperature", "temperatureTime"] : [];
 
 	if (account_method_name($nfp_method) === NFP_METHOD_FERTILITY_CARE) {
@@ -32,23 +32,13 @@ function doc_csv_columns(array $days, int $nfp_method): array {
 			...$temperature, "isPeak", "sexUnion", "booleanPregnancyDetected", "comments"];
 	}
 
-	// only accounts the v15 migration left unclassified text on have any, so the column only
-	// appears when an exported day actually shows one
-	$other = [];
-	foreach ($days as $day) {
-		if (!empty(doc_display_day($day)["freeOther"])) {
-			$other = ["freeOther"];
-			break;
-		}
-	}
-
 	return ["date", "cycleDay", "cycleFirstDay", "mucusNotObserved", "stampColor", "stampBaby",
-		"freeMucusSensation", "freeMucusObservation", ...$other,
+		"freeMucusSensation", "freeMucusObservation",
 		...$temperature, "isPeak", "counterStart", "sexUnion", "booleanPregnancyDetected", "comments"];
 }
 
 function doc_csv_cycle($out, array $days, int $nfp_method): void {
-	$columns = doc_csv_columns($days, $nfp_method);
+	$columns = doc_csv_columns($nfp_method);
 
 	fwrite($out, "\xEF\xBB\xBF");
 	doc_csv_row($out, $columns);
@@ -109,7 +99,7 @@ function doc_csv_value(array $day, string $column): string {
 	if (is_null($value)) return '';
 
 	return match ($column) {
-		"freeMucusSensation", "freeMucusObservation", "freeOther" =>
+		"freeMucusSensation", "freeMucusObservation" =>
 			doc_csv_free_text(implode(DOC_CSV_LIST_JOINER, array_map('day_format_clean_text', $value))),
 		"comments" => doc_csv_free_text(day_format_clean_text($value)),
 		"temperature" => number_format($value, 2, CSV_SEP === ';' ? ',' : '.', ''),

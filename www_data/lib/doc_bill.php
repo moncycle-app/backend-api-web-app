@@ -106,7 +106,7 @@ function doc_bill_rows(array $days): array {
 
 		// each description list on one line, comma joined like the old free text
 		$texts = [];
-		foreach (["freeMucusSensation", "freeMucusObservation", "freeOther"] as $field) {
+		foreach (["freeMucusSensation", "freeMucusObservation"] as $field) {
 			$texts[$field] = doc_pdf_text(doc_one_line(implode(", ", $day[$field])));
 		}
 		$texts["comments"] = doc_pdf_text(doc_one_line($day["comments"]));
@@ -166,8 +166,6 @@ function doc_bill_layout(DocPdf $pdf, array $rows, bool $temperature): array {
 		foreach ($rows as $row) {
 			if ($row["texts"][$field] !== '') $widths[] = $pdf->GetStringWidth($row["texts"][$field]);
 		}
-		// the legacy column only exists for the accounts that have such text
-		if ($field === "freeOther" && empty($widths)) continue;
 		sort($widths);
 		$typical = empty($widths) ? 0.0 : $widths[intval(ceil(DOC_BILL_TEXT_TYPICAL * count($widths))) - 1];
 

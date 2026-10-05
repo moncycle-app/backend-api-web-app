@@ -1888,19 +1888,21 @@ paths:
 
         | `nfp_method` | Columns |
         |---|---|
-        | 1, 2 (Billings) | `date` `cycleDay` `cycleFirstDay` `mucusNotObserved` `stampColor` `stampBaby` `freeMucusSensation` `freeMucusObservation` [`freeOther`] [`temperature` `temperatureTime`] `isPeak` `counterStart` `sexUnion` `booleanPregnancyDetected` `comments` |
+        | 1, 2 (Billings) | `date` `cycleDay` `cycleFirstDay` `mucusNotObserved` `stampColor` `stampBaby` `freeMucusSensation` `freeMucusObservation` [`temperature` `temperatureTime`] `isPeak` `counterStart` `sexUnion` `booleanPregnancyDetected` `comments` |
         | 3, 4 (FertilityCare) | `date` `cycleDay` `cycleFirstDay` `mucusNotObserved` `stampColor` `stampBaby` `codifiedBleedingObservation` `codifiedMucusSensation` `codifiedMucusObservation` `codifiedNumberObservations` `codifiedPainObservations` `codifiedArrow` [`temperature` `temperatureTime`] `isPeak` `sexUnion` `booleanPregnancyDetected` `comments` |
 
         - `temperature` and `temperatureTime` only for methods 1 and 4.
-        - `freeOther` holds the free text the v15 migration could not class as sensation or
-          observation (descriptions of type `undefined`, the `freeOther` of a `Day`; the NFP file
-          carries them in the day's `comments`). The column only appears when at least one
-          exported day shows such a text.
+        - `comments` holds the day's comment, then the free text the v15 migration could not
+          class as sensation or observation (descriptions of type `undefined`, the `freeOther`
+          of a `Day`), joined with `, ` and added after the comment with ` | ` between the two
+          (`cramps | old text, another`). They never replace the comment, and have no column of
+          their own. The PDF charts do the same in their comment column (Billings) or cell
+          (FertilityCare), and so does the NFP file, as one more entry of the day's `comments`.
 
         Values:
 
         - booleans are `1`, or empty for false;
-        - lists (`freeMucusSensation`, `freeMucusObservation`, `freeOther`) are joined with ` | `;
+        - lists (`freeMucusSensation`, `freeMucusObservation`) are joined with ` | `;
         - dates are `YYYY-MM-DD`, `temperatureTime` is `HH:MM`;
         - `temperature` has a decimal comma when the separator is `;` (`36,45`), a point otherwise;
         - `cycleDay` counts from the latest `cycleFirstDay` inside the period, and is empty before
@@ -1914,9 +1916,10 @@ paths:
 
         **`mucusNotObserved` days.** That flag only means the mucus was not observed. On such a
         row the mucus columns are empty, even if old values are still stored for that day:
-        `freeMucusSensation`, `freeMucusObservation`, `freeOther`, `stampColor`, `stampBaby`,
+        `freeMucusSensation`, `freeMucusObservation`, `stampColor`, `stampBaby`,
         `codifiedBleedingObservation`, `codifiedMucusSensation`, `codifiedMucusObservation` and
-        `codifiedNumberObservations`. Every other column is filled as usual — `sexUnion`,
+        `codifiedNumberObservations`; the labels with no type yet are not added to `comments`.
+        Every other column is filled as usual — `sexUnion`,
         `counterStart`, `isPeak`, `temperature`, `temperatureTime`, `codifiedPainObservations`,
         `codifiedArrow`, `booleanPregnancyDetected`, `comments`, `cycleFirstDay`. The NFP export
         writes both, as it is a data file. The PDF chart follows the same rule.
@@ -1925,7 +1928,8 @@ paths:
 
         A chart of the period. For Billings, a table with one line per day and a header on every
         page: date, day of the cycle, stamp, peak, counter and union (only when the period has
-        one), sensations, observations, comment, and for method 1 the temperature with its curve
+        one), sensations, observations, comment (followed by the labels with no type yet, see the
+        CSV), and for method 1 the temperature with its curve
         (only when the period has a reading). Every cycle starts a new page, and a long text wraps
         inside its column, or ends with an ellipsis past ten lines. A day not observed and a day
         never filled in both show a light grey `?` stamp. For FertilityCare, a grid of 35 days per
@@ -1942,7 +1946,9 @@ paths:
 
         Re-importing an exported file reproduces the account exactly, with three expected
         normalisations of the FertilityCare notation: `Br` is written `B`, `x1`/`x2`/`x3` are
-        written uppercase, and `C/K` is written `CK`.
+        written uppercase, and `C/K` is written `CK`. The one other difference is the labels with
+        no type yet (`freeOther`): the file has no field for them, so they are written in the
+        day's `comments` and come back as part of the comment.
 
         This holds for every account, including ones carrying shapes the file format calls
         invalid — `POST /import` warns about those rather than refusing them, precisely so that

@@ -40,17 +40,28 @@ function doc_is_mucus_field(string $field): bool {
 	return in_array($field, DOC_MUCUS_FIELDS, true);
 }
 
-// $day as every export shows it: on a mucusNotObserved day, the mucus fields emptied.
+// $day as every export shows it: on a mucusNotObserved day, the mucus fields emptied; and the
+// descriptions with no type yet (freeOther, the free text the v15 migration could not class) moved
+// to the end of the comment, which they follow and never replace. They have no column or cell of
+// their own, so freeOther is empty in what comes out. A day that was not observed shows none.
 function doc_display_day(array $day): array {
-	if (empty($day["mucusNotObserved"])) return $day;
-	foreach ($day as $field => $value) {
-		if (!doc_is_mucus_field($field)) continue;
-		$day[$field] = match (true) {
-			is_array($value) => [],
-			is_bool($value) => false,
-			default => null,
-		};
+	if (!empty($day["mucusNotObserved"])) {
+		foreach ($day as $field => $value) {
+			if (!doc_is_mucus_field($field)) continue;
+			$day[$field] = match (true) {
+				is_array($value) => [],
+				is_bool($value) => false,
+				default => null,
+			};
+		}
 	}
+
+	$other = implode(", ", $day["freeOther"] ?? []);
+	if ($other !== '') {
+		$comment = (string) ($day["comments"] ?? '');
+		$day["comments"] = $comment === '' ? $other : $comment . DOC_COMMENT_OTHER_JOINER . $other;
+	}
+	$day["freeOther"] = [];
 	return $day;
 }
 
