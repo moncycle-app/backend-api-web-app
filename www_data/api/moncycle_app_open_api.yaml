@@ -632,7 +632,7 @@ paths:
           description: A new captcha image. Also sets or refreshes the `MONCYCLEAPP_TOKEN` cookie.
           headers:
             Set-Cookie:
-              description: "`MONCYCLEAPP_TOKEN=<random>`, sent only when the visitor has no valid cookie yet. HttpOnly, 2 days."
+              description: "`MONCYCLEAPP_TOKEN=<random>`, sent only when the visitor has no valid cookie yet. HttpOnly, SameSite=Lax, 2 days."
               schema:
                 type: string
           content:
@@ -692,7 +692,7 @@ paths:
             apart.
           headers:
             Set-Cookie:
-              description: "`MONCYCLEAPP_TOKEN=<token>`. HttpOnly, 5 years. Not sent when `alreadyAuthenticated` is true."
+              description: "`MONCYCLEAPP_TOKEN=<token>`. HttpOnly, SameSite=Lax, 5 years. Not sent when `alreadyAuthenticated` is true."
               schema:
                 type: string
           content:

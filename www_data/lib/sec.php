@@ -53,12 +53,20 @@ function sec_set_token_cookie(string $token, string $lifetime): void {
 		'path' => '/',
 		'secure' => PHP_SECURE_COOKIES,
 		'httponly' => true,
+		'samesite' => 'Lax',
 	]);
 }
 
 function sec_clear_token_cookie(): void {
-	setcookie(COOKIE_AUTH_TOKEN, '', -1, '/');
-	setcookie(COOKIE_AUTH_TOKEN_LEGACY, '', -1, '/');
+	foreach ([COOKIE_AUTH_TOKEN, COOKIE_AUTH_TOKEN_LEGACY] as $name) {
+		setcookie($name, '', [
+			'expires' => -1,
+			'path' => '/',
+			'secure' => PHP_SECURE_COOKIES,
+			'httponly' => true,
+			'samesite' => 'Lax',
+		]);
+	}
 }
 
 // The account of the token the request carries (cookie, or "Authorization: Bearer"), or null.

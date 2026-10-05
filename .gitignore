@@ -16,3 +16,4 @@ gitignore
 .vscode
 TODO.md
 CLAUDE.md
+dev.env

@@ -6,9 +6,10 @@ services:
     container_name: moncycle_app
     image: jeanio/moncycle.app
     ports:
-      - "8080:80/tcp"
+      # only the reverse proxy reaches it (a bare "8080:80" would publish on every interface)
+      - "127.0.0.1:8080:80/tcp"
     environment:
-      TZ: 'France/Paris'
+      TZ: 'Europe/Paris'
       VIRTUAL_HOST: 'YOUR.DOMAINE.NAME'
       APP_URL: 'https://YOUR.DOMAINE.NAME'
       DB_HOST: maria_db_hostname
@@ -24,6 +25,34 @@ services:
     secrets:
       - db_password
       - smtp_password
+    # the app never writes to its disk
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/apache2
+      - /var/lock/apache2
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 200
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/api/health_check"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # the default json-file driver never rotates, and the access log holds IP addresses
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 secrets:

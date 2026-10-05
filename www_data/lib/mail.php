@@ -24,6 +24,7 @@ function mail_send(array $to, string $subject, string $html, string $text, array
 		$mail->Password   = SMTP_PASSWORD;
 		$mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
 		$mail->Port       = SMTP_PORT;
+		$mail->Timeout    = 10; // seconds; PHPMailer's 300 would hold a worker for minutes on a stalled server
 		$mail->CharSet    = 'UTF-8';
 		$mail->setFrom(SMTP_MAIL, 'MONCYCLE.APP');
 
