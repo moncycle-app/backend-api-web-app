@@ -65,34 +65,38 @@ Tested with:
 
 ### Docker Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| DB_HOST | MariaDB server hostname |
-| DB_ID | MariaDB login ID |
-| DB_NAME | MariaDB database name |
-| DB_PORT | MariaDB connection port |
-| DB_PASSWORD | MariaDB password |
-| SMTP_HOST | SMTP server hostname |
-| SMTP_PORT | SMTP server port |
-| SMTP_MAIL | SMTP email address (also used for authentication) |
-| SMTP_PASSWORD | SMTP password |
-| REGISTRATION_ENABLED | Enable account creation for MONCYCLE.APP (boolean, default: true). Formerly `CREATION_COMPTE`, still read. |
-| LOGIN_ENABLED | Enable authentication for MONCYCLE.APP (boolean, default: true). Formerly `CONNEXION_COMPTE`, still read. |
-| CSV_SEP | Separator for CSV exports |
-| PDF_BILLINGS_BORDERS | Draw the lines of the Billings PDF chart (boolean, default: true; false for a chart with no line at all) |
-| LOGIN_ATTEMPTS_DECAY_MINUTES | Failed logins on an account older than this restart the count (integer, default: 60; 0 counts nothing, so no captcha and no lockout) |
-| LOGIN_CAPTCHA_THRESHOLD | Failed logins on an account after which a captcha is asked (integer, default: 3; 0 never asks) |
-| LOGIN_LOCKOUT_THRESHOLD | Failed logins on an account after which a wrong password locks it (integer, default: 15; 0 never locks) |
-| LOGIN_IP_MAX_ATTEMPTS | Failed logins from one IP before HTTP 429 (integer, default: 30; 0 for no limit) |
-| APP_URL | URL of the hosted app (used for correct links in emails) |
-| APP_SCRIPT_ALLOW | IPs allowed to call `script/` over HTTP, space separated (default: `127.0.0.1 ::1`) |
-| PHP_CACHE | Caches (default: `1`). On: PHP OPcache, which never re-reads a file (restart the container after each edit of a bind-mounted `www_data`), and the browser cache headers of Apache. `Off`: no cache at all (dev) |
-| PHP_SHOW_ERR | Show PHP errors in the browser (default: `Off`; errors are always logged to `docker logs`) |
-| PHP_ERROR_REPORTING | PHP `error_reporting`, **a number** (a name such as `E_ALL` reads as 0 and silences everything). Default: `24575` (`E_ALL` without deprecations; the QR library raises some on every `/api/totp`). `32767` is `E_ALL` |
-| PHP_ASSERTIONS | PHP `zend.assertions` (default: `-1`, assertions not compiled; `1` for dev) |
-| PHP_SECURE_COOKIES | Restrict cookies to HTTPS only (boolean, default: true) |
+An unset or empty variable takes its default; **required** ones have none and the app does not work without them.
 
-Booleans read `true`/`false`, `on`/`off`, `yes`/`no` or `1`/`0`, in any case; an unset or empty variable takes its default.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_HOST` | **required** | MariaDB server hostname. |
+| `DB_PORT` | `3306` | MariaDB server port. |
+| `DB_NAME` | **required** | MariaDB database name. |
+| `DB_ID` | **required** | MariaDB login. |
+| `DB_PASSWORD_FILE` | – | Path of a file holding the MariaDB password, typically a Docker secret (`/run/secrets/db_password`). Preferred over `DB_PASSWORD`, which it overrides when the file is readable. |
+| `DB_PASSWORD` | – | MariaDB password in clear; set it or `DB_PASSWORD_FILE`. |
+| `SMTP_HOST` | **required** | SMTP server hostname, used for the welcome, password-recovery, cycle, reminder and deletion-warning mails. |
+| `SMTP_PORT` | `465` | SMTP server port (implicit TLS only, no STARTTLS). |
+| `SMTP_MAIL` | **required** | Sender address, also used as the SMTP login. |
+| `SMTP_PASSWORD_FILE` | – | Path of a file holding the SMTP password, typically a Docker secret. Preferred over `SMTP_PASSWORD`, which it overrides when the file is readable. |
+| `SMTP_PASSWORD` | – | SMTP password in clear; set it or `SMTP_PASSWORD_FILE`. |
+| `APP_URL` | `https://tableau.moncycle.app/` | Public URL of your instance, **with a trailing `/`**: it builds the links in mails and the TOTP QR code. Set it, or the links point to the official instance. |
+| `REGISTRATION_ENABLED` | `true` | Allow account creation. Formerly `CREATION_COMPTE`, still read. |
+| `LOGIN_ENABLED` | `true` | Allow login. Formerly `CONNEXION_COMPTE`, still read. |
+| `CSV_SEP` | `;` | Separator of the CSV exports (with `;` temperatures use a decimal comma, otherwise a point). |
+| `PDF_BILLINGS_BORDERS` | `true` | Draw the lines of the Billings PDF chart; `false` gives a chart with no line at all. |
+| `LOGIN_ATTEMPTS_DECAY_MINUTES` | `60` | Failed logins on an account older than this restart the count; `0` counts nothing, so no captcha and no lockout. |
+| `LOGIN_CAPTCHA_THRESHOLD` | `3` | Failed logins on an account after which a captcha is asked; `0` never asks. |
+| `LOGIN_LOCKOUT_THRESHOLD` | `15` | Failed logins on an account after which a wrong password locks it; `0` never locks. |
+| `LOGIN_IP_MAX_ATTEMPTS` | `30` | Failed logins from one IP before HTTP 429; `0` for no limit. |
+| `APP_SCRIPT_ALLOW` | `127.0.0.1 ::1` | IPs allowed to call `script/` over HTTP, space separated; everyone else gets a 403. |
+| `PHP_SECURE_COOKIES` | `true` | Send cookies over HTTPS only; turn off for plain-HTTP dev. |
+| `PHP_CACHE` | `1` | `1` enables PHP OPcache and the Apache browser-cache headers; `Off` disables every cache (dev). With OPcache on, restart the container after each edit of a bind-mounted `www_data`. |
+| `PHP_SHOW_ERR` | `Off` | `On` shows PHP errors in the browser; they are always logged to `docker logs`. |
+| `PHP_ERROR_REPORTING` | `24575` | PHP `error_reporting` as **a number**: `24575` is `E_ALL` without deprecations (the QR library raises some on every `/api/totp`), `32767` is `E_ALL`. |
+| `PHP_ASSERTIONS` | `-1` | PHP `zend.assertions`: `-1` compiles assertions out (prod), `1` enables them (dev). |
+
+Booleans read `true`/`false`, `on`/`off`, `yes`/`no` or `1`/`0`, in any case.
 
 The `PHP_*` variables read by `php.ini` (`PHP_CACHE`, `PHP_SHOW_ERR`, `PHP_ERROR_REPORTING`, `PHP_ASSERTIONS`) are the exception: leave one out rather than empty, an empty value is not replaced by the default (`PHP_ERROR_REPORTING=` means 0: nothing reported).
 

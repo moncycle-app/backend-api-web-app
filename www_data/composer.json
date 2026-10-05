@@ -4,13 +4,13 @@
 	"homepage": "https://www.moncycle.app",
 	"license": "Creative Commons - CC BY-NC-SA",
 	"require": {
-		"phpmailer/phpmailer": "6.*",
+		"phpmailer/phpmailer": "7.*",
 		"fpdf/fpdf" : "1.*",
-		"components/jquery" : "3.7.*",
+		"components/jquery" : "4.0.*",
 		"swagger-api/swagger-ui" : "5.*",
 		"spomky-labs/otphp" : "11.*",
-		"bacon/bacon-qr-code" : "2.*",
-		"gregwar/captcha": "1.*",
+		"bacon/bacon-qr-code" : "3.*",
+		"gregwar/captcha": "2.*",
 		"justinrainbow/json-schema" : "6.*" 
 	}
 }

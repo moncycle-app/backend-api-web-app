@@ -11,7 +11,7 @@ services:
     environment:
       TZ: 'Europe/Paris'
       VIRTUAL_HOST: 'YOUR.DOMAINE.NAME'
-      APP_URL: 'https://YOUR.DOMAINE.NAME'
+      APP_URL: 'https://YOUR.DOMAINE.NAME/'
       DB_HOST: maria_db_hostname
       DB_ID: maria_db_login_id
       DB_NAME: maria_db_name
