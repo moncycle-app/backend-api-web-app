@@ -25,8 +25,21 @@ require_once __DIR__ . "/db.php";
 function nfp_export_day(array $day): array {
 	$nfp = [];
 
+	// The descriptions with no type yet (freeOther) have no field in the format: they ride along in
+	// "comments", as one more entry after the day's own, joined with ", ". The import joins the
+	// entries with a newline into the single comment of the day and refuses the file past
+	// DAY_LIMIT_COMMENT_CHARS, so a name that does not fit in what the comment leaves is left out:
+	// a file this app exports must always import.
 	$comment = day_format_clean_text((string) ($day['comment'] ?? ''));
-	if ($comment !== '') $nfp['comments'] = [$comment];
+	$room = DAY_LIMIT_COMMENT_CHARS - ($comment !== '' ? mb_strlen($comment) + 1 : 0);
+	$other = '';
+	foreach ($day['freeOther'] ?? [] as $name) {
+		$name = day_format_clean_text($name);
+		$joined = $other === '' ? $name : $other . ', ' . $name;
+		if ($name !== '' && mb_strlen($joined) <= $room) $other = $joined;
+	}
+	$comments = array_values(array_filter([$comment, $other], fn($entry) => $entry !== ''));
+	if (!empty($comments)) $nfp['comments'] = $comments;
 
 	if (!empty($day['dayNotObserved'])) $nfp['mucusNotObserved'] = true;
 	if (day_format_filled($day, 'stampColor')) $nfp['stampColor'] = $day['stampColor'];

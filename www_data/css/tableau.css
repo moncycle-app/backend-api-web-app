@@ -240,6 +240,14 @@
 	font-size: .9em;
 }
 
+.day .o_sens {
+	font-weight: bold;
+}
+
+.day .o_other {
+	text-decoration: line-through;
+}
+
 .day .c {
 	font-size: .7em;
 	font-style: italic;
@@ -733,6 +741,12 @@ h2 {
 
 .desc_add_status {
 	font-size: .8em;
+}
+
+.desc_hint {
+	margin: 0;
+	font-size: .8em;
+	color: gray;
 }
 
 @media (min-width: 601px) {

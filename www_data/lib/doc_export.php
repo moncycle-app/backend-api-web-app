@@ -20,11 +20,8 @@ require_once __DIR__ . "/doc_fc.php";
 //
 // A recorded day is day_format_to_json()'s output, with the NFP names for the two fields the API
 // names differently (dayNotObserved -> mucusNotObserved, comment -> comments, which stays one
-// string: day_timeline holds a single comment), and two additions:
-//   - freeOther: the names of the day's type-0 descriptions, the free text the v15 migration
-//     could not class as freeMucusSensation or freeMucusObservation. day_format_to_json() leaves
-//     them out.
-//   - isGap: false.
+// string: day_timeline holds a single comment), and one addition, isGap: false. freeOther, the
+// free text the v15 migration could not class, comes from day_format_to_json() like the rest.
 // A date with no record at all between two recorded days is a gap entry: the same keys, all
 // empty, and isGap true. A gap is not a mucusNotObserved day, which is a record.
 //
@@ -82,11 +79,6 @@ function doc_export_day(array $row): array {
 	$day["comments"] = $day["comment"];
 	// the last two are sync metadata, not the day's content, and the export query skips them
 	unset($day["dayNotObserved"], $day["comment"], $day["lastWriteClientUtc"], $day["lastWriteDb"]);
-
-	$day["freeOther"] = [];
-	foreach ($row["description"] ?? [] as $description) {
-		if (intval($description["type"]) === DESCRIPTION_TYPE_UNDEFINED) $day["freeOther"][] = $description["name"];
-	}
 
 	$day["isGap"] = false;
 	return $day;

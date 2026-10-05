@@ -159,6 +159,8 @@ const moncycle_app_text = {
 	desc_add_duplicate : function (name) {
 		return `❌ « ${name} » existe déjà`;
 	},
+	// tooltip of a description with no type yet, struck through in the timeline
+	desc_legacy_title : "Sans type : sensation ou observation ? Touchez le jour pour l’ouvrir",
 }
 
 moncycle_app = {
@@ -297,6 +299,10 @@ moncycle_app = {
 			let match = moncycle_app.description.find(sd => sd.name == name && sd.type == 2);
 			description.push(match || {no_description: null, name: name, type: 2, use_count: 0});
 		});
+		(d.freeOther || []).forEach(name => {
+			let match = moncycle_app.description.find(sd => sd.name == name && sd.type == 0);
+			description.push(match || {no_description: null, name: name, type: 0, use_count: 0});
+		});
 		return {
 			date_obs : d.date,
 			cycle : d.cycleStartDate,
@@ -370,11 +376,14 @@ moncycle_app = {
 		}, codified);
 		payload.freeMucusObservation = [];
 		payload.freeMucusSensation = [];
+		// a day is posted whole: the labels with no type yet are sent back, or they would be unlinked
+		payload.freeOther = [];
 		get('description[]').forEach(id => {
 			let sdesc = moncycle_app.description.find(d => d.no_description == parseInt(id));
 			if (!sdesc) return;
 			if (sdesc.type == 1) payload.freeMucusObservation.push(sdesc.name);
 			else if (sdesc.type == 2) payload.freeMucusSensation.push(sdesc.name);
+			else if (sdesc.type == 0) payload.freeOther.push(sdesc.name);
 		});
 		return payload;
 	},
@@ -941,6 +950,24 @@ moncycle_app = {
 		day_timeline.append(`<span class='c'>${car_du_bas}</span>`);
 		return day_timeline;
 	},
+	// The "o" cell of a Billings day: observations as they are, sensations in bold, then the
+	// descriptions with no type yet, struck through (css/tableau.css). Built with the DOM, never as
+	// HTML: a name is free text. <b> and <s> and text nodes on purpose, `.day span` styles every span
+	// as a cell and `.day span:empty` hides it, so a day with no description keeps an empty cell.
+	description_cell : function (descriptions) {
+		let names_of = (type) => descriptions.filter(d => d.type == type).map(d => d.name);
+		let parts = [
+			...names_of(1).map(name => document.createTextNode(name)),
+			...names_of(2).map(name => $("<b>", {class: "o_sens"}).text(name)[0]),
+			...names_of(0).map(name => $("<s>", {class: "o_other", title: moncycle_app_text.desc_legacy_title}).text(name)[0]),
+		];
+		let cell = $("<span>", {class: "o pas_fc pas_fc_temp"});
+		parts.forEach((part, i) => {
+			if (i > 0) cell.append(document.createTextNode(", "));
+			cell.append(part);
+		});
+		return cell;
+	},
 	day_timeline2timeline : function(j) {
 		let o_date = moncycle_app.date.parse(j.date_obs);
 		let o_id = "o-" + moncycle_app.date.str(o_date);
@@ -1011,9 +1038,7 @@ moncycle_app = {
 			day_timeline.append(`<span class='s'>${j.is_peak ? moncycle_app_text.peak_bill : ""}</span>`);
 			day_timeline.append(`<span class='n'></span>`);
 			if (!j.day_not_observed) {
-				let description_tbl = [];
-				for (const sdesc of j.description) description_tbl.push(sdesc.name);
-				day_timeline.append(`<span class='o pas_fc pas_fc_temp'>${description_tbl.join(', ')}</span>`);
+				day_timeline.append(moncycle_app.description_cell(j.description));
 				if (moncycle_app.arrow_id[j.fc_arrow]) day_timeline.append(`<span class='fle pas_bill pas_bill_temp'>${moncycle_app_text.arrow_glyph[j.fc_arrow] || ""}</span>`);
 			}
 			else day_timeline.append(`<span class='p'>${moncycle_app_text.not_observed}</span>`);

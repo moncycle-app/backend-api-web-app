@@ -205,7 +205,7 @@ function day_format_validate(array $day): array {
 		}
 	}
 
-	foreach (['freeMucusSensation', 'freeMucusObservation'] as $field) {
+	foreach (['freeMucusSensation', 'freeMucusObservation', 'freeOther'] as $field) {
 		if (!isset($day[$field])) continue;
 		if (!is_array($day[$field]) || count(array_filter($day[$field], 'is_string')) !== count($day[$field])) {
 			$problems[] = "'$field' must be a list of strings.";
@@ -243,7 +243,7 @@ function day_format_validate(array $day): array {
 function day_format_to_json(array $day): array {
 	$stamp = day_format_stamp_decode($day['stamp'] ?? null);
 
-	$descriptions = [DESCRIPTION_TYPE_SENSATION => [], DESCRIPTION_TYPE_OBSERVATION => []];
+	$descriptions = [DESCRIPTION_TYPE_SENSATION => [], DESCRIPTION_TYPE_OBSERVATION => [], DESCRIPTION_TYPE_UNDEFINED => []];
 	foreach ($day['description'] ?? [] as $description) {
 		$descriptions[intval($description['type'])][] = $description['name'];
 	}
@@ -262,6 +262,7 @@ function day_format_to_json(array $day): array {
 		'booleanPregnancyDetected' => boolval($day['pregnancy'] ?? false),
 		'freeMucusSensation' => $descriptions[DESCRIPTION_TYPE_SENSATION],
 		'freeMucusObservation' => $descriptions[DESCRIPTION_TYPE_OBSERVATION],
+		'freeOther' => $descriptions[DESCRIPTION_TYPE_UNDEFINED],
 		'temperature' => !empty($day['temperature']) ? floatval($day['temperature']) : null,
 		'temperatureTime' => $day['time_temp_taken'] ?? null,
 		'codifiedArrow' => day_format_arrow_decode($day['fc_arrow'] ?? null),

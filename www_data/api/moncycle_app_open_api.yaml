@@ -206,7 +206,7 @@ info:
 
     | Method | How a day is recorded | Fields used |
     |---|---|---|
-    | `billings` | free text, chosen by the user | `freeMucusSensation`, `freeMucusObservation` |
+    | `billings` | free text, chosen by the user | `freeMucusSensation`, `freeMucusObservation` (and `freeOther`, see below) |
     | `fertilityCare` | short standard codes | the six `codified*` fields |
 
     Common to both: `stampColor`, `stampBaby`, `isPeak`, `cycleFirstDay`, `sexUnion`,
@@ -234,6 +234,10 @@ info:
     - A name keeps the type it was first created with. If "dry" already exists as an
       `observation`, sending it inside `freeMucusSensation` links the existing `observation`
       label. It does not create a second one.
+    - A label can have no type yet (`type: "undefined"`). These are the texts the v15 migration
+      could not class. A day shows them in `freeOther`, and keeps them only if you send them
+      back there. To classify one, `POST /description` with its `id` and the new `type`: every
+      day that carries it then shows it in `freeMucusSensation` or `freeMucusObservation`.
 
     ## 8. Keeping a local copy in sync
 
@@ -271,7 +275,7 @@ info:
       with the time it was cleared, and comes back in `days` with every field empty. A deleted
       label is absent from `descriptions`, which always lists all of them: forget the ones that
       are not in the list. Renaming, retyping or deleting a label also reports the days that
-      carry it, with their new `freeMucus*` lists.
+      carry it, with their new `freeMucus*` and `freeOther` lists.
     - **A change of cycle reports the cycle.** Setting or clearing `cycleFirstDay` changes the
       `cycleStartDate` and `cycleDay` of every following day up to the next first day. Those days
       come back too, so you never have to compute a cycle yourself.
@@ -1410,10 +1414,14 @@ paths:
 
         ### Free-text labels
 
-        Names you put in `freeMucusSensation` and `freeMucusObservation` are resolved for you:
-        an existing name is reused, a new name is created. You do not need `POST /description`
-        first. Sending a name that exists under the other type links the existing label and
-        keeps its original type.
+        Names you put in `freeMucusSensation`, `freeMucusObservation` and `freeOther` are
+        resolved for you: an existing name is reused, a new name is created. You do not need
+        `POST /description` first. Sending a name that exists under another type links the
+        existing label and keeps its original type.
+
+        The day is the full state, so a label you do not send back is unlinked, `freeOther`
+        included: read the day, change what you mean to, and post all of it. A client that does
+        not know `freeOther` and omits it silently unlinks the day's untyped labels.
 
         ### Values the server quietly ignores
 
@@ -1544,9 +1552,9 @@ paths:
 
         ### What it clears
 
-        **The labels are unlinked from the day.** `freeMucusSensation` and `freeMucusObservation`
-        come back empty, and the `useCount` of those labels goes down. The labels themselves stay
-        in `GET /description`: deleting one is `DELETE /description`.
+        **The labels are unlinked from the day.** `freeMucusSensation`, `freeMucusObservation`
+        and `freeOther` come back empty, and the `useCount` of those labels goes down. The
+        labels themselves stay in `GET /description`: deleting one is `DELETE /description`.
 
         **The cycle flag is cleared**, so deleting a day that started a cycle merges that cycle
         into the previous one. Every later day gets a new `cycleStartDate` and `cycleDay`. Check
@@ -1885,8 +1893,9 @@ paths:
 
         - `temperature` and `temperatureTime` only for methods 1 and 4.
         - `freeOther` holds the free text the v15 migration could not class as sensation or
-          observation (descriptions of type 0, which the API and the NFP file leave out). The
-          column only appears when at least one exported day shows such a text.
+          observation (descriptions of type `undefined`, the `freeOther` of a `Day`; the NFP file
+          carries them in the day's `comments`). The column only appears when at least one
+          exported day shows such a text.
 
         Values:
 
@@ -2093,7 +2102,10 @@ paths:
         Whatever this app writes, it reads back. That is a property the endpoint is built to
         hold, not a coincidence: anything `/export` can emit and the import would rather not
         see is reported in `warnings` and imported anyway, never refused. Re-importing an
-        export over its own account with `overide=1` leaves that account byte-identical.
+        export over its own account with `overide=1` leaves that account byte-identical, except
+        for its labels with no type yet (`freeOther`): the file has no field for them, so an
+        export writes them as the last entry of the day's `comments`, and they come back as
+        part of the day's comment, no longer linked as labels.
 
         It is why several things the format calls invalid are only warned about here. The
         account is the source of truth, and `day_timeline` has no rule against them:
@@ -2477,7 +2489,8 @@ components:
         - **read-only**, computed by the server: `cycleStartDate`, `cycleDay`, `lastWriteDb`;
         - **common** to both methods: the stamp, `isPeak`, `cycleFirstDay`, `sexUnion`,
           `temperature`, `comment`…;
-        - **method-specific**: `freeMucus*` for Billings, `codified*` for FertilityCare.
+        - **method-specific**: `freeMucus*` and `freeOther` for Billings, `codified*` for
+          FertilityCare.
 
         Sending a field from the other method is not an error, but the app will not display it.
       required: [date]
@@ -2582,6 +2595,18 @@ components:
             type: string
             maxLength: 256
           example: [clear and stretchy]
+        freeOther:
+          type: array
+          description: |-
+            **Billings only.** Labels with no type yet, from the v15 migration. Classify them with
+            `POST /description` and the label `id`.
+
+            Always present on read, empty when the day has none. On write it is part of the full
+            state of the day like the two other lists: leave it out and these labels are unlinked.
+          items:
+            type: string
+            maxLength: 256
+          example: []
 
         temperature:
           type: number
@@ -2929,6 +2954,10 @@ components:
           description: |-
             The user's free notes. Joined with newlines into the single `comment` of the live
             `Day`, which holds **256 characters** — a longer result rejects the file.
+
+            `GET /export` also writes the day's labels with no type yet (`freeOther`) here, as one
+            last entry joined with `", "`. A name that would take the day past the 256 characters
+            is left out of the file, so that an export always imports.
           items:
             type: string
             maxLength: 256

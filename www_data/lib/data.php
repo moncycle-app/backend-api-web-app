@@ -90,7 +90,7 @@ function data_save_day($db, int $no_user_account, string $date, array $day, stri
 
 		$known = [];
 		$no_descriptions = [];
-		foreach ([DESCRIPTION_TYPE_OBSERVATION => 'freeMucusObservation', DESCRIPTION_TYPE_SENSATION => 'freeMucusSensation'] as $type => $field) {
+		foreach ([DESCRIPTION_TYPE_OBSERVATION => 'freeMucusObservation', DESCRIPTION_TYPE_SENSATION => 'freeMucusSensation', DESCRIPTION_TYPE_UNDEFINED => 'freeOther'] as $type => $field) {
 			foreach ($day[$field] ?? [] as $name) {
 				$no_descriptions[] = data_resolve_description($db, $no_user_account, $name, $type, $last_write_client_UTC, $known)["id"];
 			}

@@ -27,7 +27,7 @@
 const moncycle_store = {
 
 	// Bump it when what is kept in localStorage changes shape: the copy of the versions before is dropped.
-	schema : 1,
+	schema : 2,
 	keys : {version : "data_version", last_sync : "data_last_sync", account : "data_account", descriptions : "data_descriptions", pending : "data_pending", stale : "data_stale", day : "data_day_"},
 	// what the versions before this one kept in localStorage, and nobody reads any more
 	legacy_keys : ["description", "constante", "day_timeline", "timeline_asc"],
@@ -238,7 +238,7 @@ const moncycle_store = {
 		let day = {
 			date : date, cycleStartDate : null, cycleDay : null, cycleFirstDay : false, dayNotObserved : false,
 			stampColor : null, stampBaby : false, isPeak : false, counterStart : null, sexUnion : false, booleanPregnancyDetected : false,
-			freeMucusSensation : [], freeMucusObservation : [], temperature : null, temperatureTime : null, codifiedArrow : null,
+			freeMucusSensation : [], freeMucusObservation : [], freeOther : [], temperature : null, temperatureTime : null, codifiedArrow : null,
 			comment : "", lastWriteClientUtc : null, lastWriteDb : null,
 		};
 		moncycle_store.codified_fields.forEach(function (field) { day[field] = null; });
@@ -334,6 +334,7 @@ const moncycle_store = {
 			booleanPregnancyDetected : !!body.booleanPregnancyDetected,
 			freeMucusSensation : (body.freeMucusSensation || []).slice(),
 			freeMucusObservation : (body.freeMucusObservation || []).slice(),
+			freeOther : (body.freeOther || []).slice(),
 			temperature : temperature ? body.temperature : null,
 			temperatureTime : temperature && body.temperatureTime ? body.temperatureTime : null,
 			codifiedArrow : body.codifiedArrow || null,
