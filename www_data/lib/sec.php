@@ -15,6 +15,7 @@ use BaconQrCode\Writer;
 
 require_once __DIR__ . "/../vendor/autoload.php";
 require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/log.php";
 
 // ---------------------------------------------------------------------------
 // Passwords and tokens
@@ -69,7 +70,8 @@ function sec_clear_token_cookie(): void {
 	}
 }
 
-// The account of the token the request carries (cookie, or "Authorization: Bearer"), or null.
+// The account of the token the request carries (cookie, or "Authorization: Bearer"), or null. The
+// account and the session it finds are the ones every line of the request's log carries.
 function sec_auth_token($db) {
 	$auth_token = $_COOKIE[COOKIE_AUTH_TOKEN_LEGACY] ?? ""; // legacy, to be removed in a few release
 	if (sec_cookie_token() !== "") $auth_token = sec_cookie_token();
@@ -79,14 +81,17 @@ function sec_auth_token($db) {
 		$user_account = db_select_user_account_auth_token($db, sec_hash_token($auth_token));
 		if (!is_null($user_account) && boolval($user_account["user_enabled"] ?? false)) {
 			db_update_auth_token_use($db, $user_account["no_auth_token"]);
+			log_context(["uid" => intval($user_account["no_user_account"]), "sid" => intval($user_account["no_auth_token"])]);
 			return $user_account;
 		}
+		log_event("auth.token_rejected", ["why" => is_null($user_account) ? "unknown" : "disabled", "uid" => $user_account["no_user_account"] ?? null]);
 	}
 	return null;
 }
 
 function sec_exit_if_logged_out($user_account) {
 	if (is_null($user_account)) {
+		log_note(["err" => "unauthorized"]);
 		http_response_code(401);
 		echo json_encode(["error" => ["code" => "unauthorized", "message" => "Authentication required."]]);
 		exit;
@@ -101,11 +106,13 @@ function sec_redirect_if_logged_out($user_account) {
 	}
 }
 
-// Opens a session: stores a new token for the account, sets its cookie, and returns it.
+// Opens a session: stores a new token for the account, sets its cookie, and returns it. The new
+// session is the one the rest of the request's log names.
 function sec_auth_success($db, $user_account, $device=null) {
 	$auth_token = sec_random_password(256);
 
-	db_insert_auth_token($db, $user_account["no_user_account"], $device ?? ("AUTH | " . $_SERVER['HTTP_USER_AGENT']), "FR", sec_hash_token($auth_token));
+	$no_auth_token = db_insert_auth_token($db, $user_account["no_user_account"], $device ?? ("AUTH | " . $_SERVER['HTTP_USER_AGENT']), "FR", sec_hash_token($auth_token));
+	log_context(["uid" => intval($user_account["no_user_account"]), "sid" => intval($no_auth_token)]);
 	db_update_user_account_logged_in($db, $user_account["no_user_account"]);
 	sec_set_token_cookie($auth_token, '+5 years');
 
@@ -243,9 +250,20 @@ function sec_login_account_locked($user_account) {
 //   refusal: ["status" => 4xx, "code" => ..., "message" => ..., "meta" => [...]]
 // Every refusal but a malformed body and a rate-limited IP is also counted against the IP, and a
 // wrong password or TOTP code against the account (the captcha and lockout thresholds).
+// Every outcome is logged: the refusals as `auth.login_failed`, with the account when the address
+// has one and its count of failed attempts, this one included when it was counted against it.
 function sec_login($db, array $body): array {
-	$refuse = fn(int $status, string $code, string $message, array $meta = []) =>
-		["status" => $status, "code" => $code, "message" => $message, "meta" => $meta];
+	$user_account = [];
+
+	$refuse = function (int $status, string $code, string $message, array $meta = [], bool $counted_on_account = false) use (&$user_account) {
+		$known = isset($user_account["no_user_account"]);
+		log_event("auth.login_failed", [
+			"err" => $code,
+			"att" => $known ? sec_login_effective_attempts($user_account) + intval($counted_on_account) : null,
+			"uid" => $known ? $user_account["no_user_account"] : null,
+		]);
+		return ["status" => $status, "code" => $code, "message" => $message, "meta" => $meta];
+	};
 
 	if (!isset($body["email"]) || !isset($body["password"]) || !filter_var($body["email"], FILTER_VALIDATE_EMAIL)) {
 		return $refuse(400, "missing_credentials", "'email' and 'password' are required.");
@@ -264,7 +282,7 @@ function sec_login($db, array $body): array {
 	$counted = function (int $status, string $code, string $message, bool $wrong_credential = false) use ($db, $client_ip, $body, $meta, $refuse) {
 		if ($wrong_credential) db_update_login_failure($db, $body["email"]);
 		db_insert_login_attempt_ip($db, $client_ip);
-		return $refuse($status, $code, $message, $meta);
+		return $refuse($status, $code, $message, $meta, $wrong_credential);
 	};
 
 	if (!LOGIN_ENABLED) return $counted(403, "login_disabled", "Login is disabled.");
@@ -299,9 +317,14 @@ function sec_login($db, array $body): array {
 			$given ? "Correct password, but the TOTP code is incorrect." : "Correct password, but a TOTP code is required.", true);
 	}
 
+	// the failures this login ends, read before sec_auth_success() resets them
+	$attempts = sec_login_effective_attempts($user_account);
 	unset($user_account["password"], $user_account["totp_secret"]);
+	$token = sec_auth_success($db, $user_account);
+	log_event("auth.login_succeeded", ["att" => $attempts, "totp" => $totp_active]);
+
 	return ["status" => 200, "data" => array_merge([
-		"token" => sec_auth_success($db, $user_account),
+		"token" => $token,
 		"userId" => $user_account["no_user_account"],
 		"totpUsed" => $totp_active,
 	], $meta)];

@@ -21,6 +21,7 @@ if (!is_null($user_account)) {
 }
 
 if (!REGISTRATION_ENABLED) {
+	log_event("account.refused", ["act" => "register", "err" => "registration_disabled"]);
 	http_error(403, "registration_disabled", "Account creation has been disabled.");
 }
 
@@ -36,10 +37,12 @@ if (!filter_var($body["email"], FILTER_VALIDATE_EMAIL)) {
 }
 
 if (!sec_captcha_matches($captcha, $body["captcha"] ?? "")) {
+	log_event("account.refused", ["act" => "register", "err" => "captcha_invalid"]);
 	http_error(403, "captcha_invalid", "Error in captcha input.");
 }
 
 if (db_select_user_account_exists($db, $body["email"])) {
+	log_event("account.refused", ["act" => "register", "err" => "account_exists"]);
 	http_error(409, "account_exists", "Account already exist.");
 }
 
@@ -49,10 +52,13 @@ if (intval($body["birthYear"]) < (intval(date("Y")) - 100) || intval($body["birt
 
 // the password is generated, and only sent by mail
 $password = sec_random_password();
+$nfp_method = account_method_id_from_json($body);
 $new_account_no = db_insert_user_account(
-	$db, $body["firstName"], account_method_id_from_json($body), intval($body["birthYear"]), $body["email"], sec_hash($password),
+	$db, $body["firstName"], $nfp_method, intval($body["birthYear"]), $body["email"], sec_hash($password),
 	$body["discoveredComment"] ?? null, boolval($body["okForResearch"] ?? false)
 );
+log_context(["uid" => intval($new_account_no)]);
+log_event("account.registered", ["nfp" => $nfp_method]);
 
 http_data(201, [
 	"userId" => $new_account_no,

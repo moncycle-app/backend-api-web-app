@@ -9,14 +9,17 @@
 
 require_once "../config.php";
 require_once "../lib/doc_csv.php";
+require_once "../lib/log.php";
 require_once "../lib/sec.php";
 
+log_start(sec_client_ip());
 $db = db_open();
 
 $user_account = sec_auth_token($db);
 sec_redirect_if_logged_out($user_account);
 $no_user_account = $user_account["no_user_account"];
 
+log_event("export.raw_dump");
 header("content-type:application/csv;charset=UTF-8");
 header('Content-Disposition: attachment; filename="export_moncycle_app.csv"');
 

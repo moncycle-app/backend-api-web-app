@@ -8,6 +8,7 @@
 */
 
 require_once __DIR__ . "/date.php";
+require_once __DIR__ . "/log.php";
 
 // reads and JSON-decodes the raw request body. Sends a 400 error and exits if it's missing,
 // empty, or not a JSON object -- endpoints that take no body (GET, DELETE-by-query-string)
@@ -37,6 +38,7 @@ function http_no_content(): never {
 function http_error(int $status, string $code, string $message, array $details = []): never {
 	$error = ["code" => $code, "message" => $message];
 	if (!empty($details)) $error["details"] = $details;
+	log_note(["err" => $code]);
 	http_respond($status, ["error" => $error]);
 }
 

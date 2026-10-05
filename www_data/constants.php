@@ -118,6 +118,75 @@ const SYNC_OVERLAP_SECONDS = 120;
 const SYNC_FROM_START = "1970-01-01 00:00:00";
 
 // ===========================================================================
+// LOGS -- the app's own log (lib/log.php; the policy is README.md, "Logs")
+// ===========================================================================
+
+// The values the LOG_* settings take. LOG_LEVEL is the least severe level written: the order of
+// LOG_LEVEL_VALUES is the severity, "off" first.
+const LOG_LEVEL_VALUES = ["off", "error", "warning", "info", "debug"];
+const LOG_CATEGORY_VALUES = ["auth", "account", "data", "export", "mail", "system", "http"];
+const LOG_FORMAT_VALUES = ["json", "text"];
+const LOG_IP_VALUES = ["full", "truncate", "none"];
+
+// What lib/log.php falls back on when a setting is missing from a hand-made config.php (written
+// before the logs) or holds a value that is not one of the above. Same defaults as the config files.
+const LOG_DEFAULTS = [
+	"LOG_LEVEL" => "info",
+	"LOG_CATEGORIES" => [],
+	"LOG_OUTPUT" => "stdout",
+	"LOG_FORMAT" => "json",
+	"LOG_IP" => "full",
+	"LOG_REQUEST_ID_HEADER" => "X-Request-Id",
+];
+
+// A request id from a client is only kept when it is this plain: it is never trusted beyond correlation.
+const LOG_REQUEST_ID_PATTERN = '/^[A-Za-z0-9._:-]{1,64}$/D';
+
+// How a line is encoded: readable text, and a value that cannot be encoded is replaced, never fatal.
+const LOG_JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR;
+
+// A string is clipped to LOG_LIMIT_FIELD_CHARS and a list to LOG_LIMIT_LIST_ITEMS. A line stays under
+// LOG_LIMIT_LINE_BYTES, below PIPE_BUF (4096 on Linux): one write of that size is atomic, so the
+// workers of a prefork server never interleave their lines in a shared stream or file.
+const LOG_LIMIT_FIELD_CHARS = 200;
+const LOG_LIMIT_LIST_ITEMS = 20;
+const LOG_LIMIT_LINE_BYTES = 4000;
+
+// Every event of the log => its default level. The category is the prefix before the dot.
+const LOG_EVENTS = [
+	"auth.login_succeeded" => "info",
+	"auth.login_failed" => "warning",
+	"auth.logout" => "info",
+	"auth.captcha_issued" => "debug",
+	"auth.token_rejected" => "debug",
+	"account.registered" => "info",
+	"account.refused" => "warning",
+	"account.password_reset" => "info",
+	"account.password_reset_unknown" => "warning",
+	"account.password_changed" => "info",
+	"account.settings_changed" => "info",
+	"account.totp_setup_started" => "info",
+	"account.totp_enabled" => "info",
+	"account.totp_disabled" => "info",
+	"account.reactivated" => "info",
+	"account.deleted" => "info",
+	"data.day_saved" => "info",
+	"data.day_cleared" => "info",
+	"data.description_saved" => "info",
+	"data.description_deleted" => "info",
+	"data.import" => "info",
+	"export.file" => "info",
+	"export.raw_dump" => "info",
+	"mail.sent" => "info",
+	"mail.failed" => "error",
+	"system.exception" => "error",
+	"system.cron_started" => "info",
+	"system.cron_ended" => "info",     // "error" when the run did not reach its end
+	"system.log_sink_failed" => "error",
+	"http.request" => "info",
+];
+
+// ===========================================================================
 // DAY FORMAT -- the codes day_timeline stores (lib/day_format.php)
 // ===========================================================================
 

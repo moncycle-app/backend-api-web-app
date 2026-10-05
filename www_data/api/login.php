@@ -27,5 +27,6 @@ try {
 
 }
 catch (\Throwable $e) {
+	log_exception($e);
 	http_error(500, "unexpected_error", $e->getMessage());
 }

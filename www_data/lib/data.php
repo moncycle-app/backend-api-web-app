@@ -14,6 +14,7 @@ require_once __DIR__ . "/account.php";
 require_once __DIR__ . "/day_format.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/http.php";
+require_once __DIR__ . "/log.php";
 
 // A day as the array lib/day_format.php translates: the DB row (or just its date when the day is
 // empty), with the first day of its cycle, its position in it, and its descriptions. What the
@@ -84,21 +85,28 @@ function data_write_day($db, int $no_user_account, string $date, ?array $existin
 
 // Saves a day the API received, checked and cleaned by day_format_validate(): in one transaction, its
 // fields and its free-text descriptions (created when a name is new). True when the day is new.
+// Logged once the transaction has committed: which day, whether it is new, the descriptions it made.
 function data_save_day($db, int $no_user_account, string $date, array $day, string $last_write_client_UTC): bool {
-	return db_transaction($db, function () use ($db, $no_user_account, $date, $day, $last_write_client_UTC) {
+	[$no_day, $is_new, $created] = db_transaction($db, function () use ($db, $no_user_account, $date, $day, $last_write_client_UTC) {
 		$existing = db_select_day_timeline($db, $date, $no_user_account);
 
 		$known = [];
 		$no_descriptions = [];
+		$created = [];
 		foreach ([DESCRIPTION_TYPE_OBSERVATION => 'freeMucusObservation', DESCRIPTION_TYPE_SENSATION => 'freeMucusSensation', DESCRIPTION_TYPE_UNDEFINED => 'freeOther'] as $type => $field) {
 			foreach ($day[$field] ?? [] as $name) {
-				$no_descriptions[] = data_resolve_description($db, $no_user_account, $name, $type, $last_write_client_UTC, $known)["id"];
+				$description = data_resolve_description($db, $no_user_account, $name, $type, $last_write_client_UTC, $known);
+				$no_descriptions[] = $description["id"];
+				if ($description["created"]) $created[] = $description["id"];
 			}
 		}
 
-		data_write_day($db, $no_user_account, $date, $existing, day_format_from_json($day), $no_descriptions, $last_write_client_UTC);
-		return is_null($existing);
+		$no_day = data_write_day($db, $no_user_account, $date, $existing, day_format_from_json($day), $no_descriptions, $last_write_client_UTC);
+		return [$no_day, is_null($existing), $created];
 	});
+
+	log_event("data.day_saved", ["day" => $no_day, "dt" => $date, "new" => $is_new, "dsc" => $created ?: null]);
+	return $is_new;
 }
 
 // A write by the owner counts as activity: an account flagged inactive (the "are you still there"
@@ -107,6 +115,18 @@ function data_reactivate_account($db, array &$user_account): void {
 	if (empty($user_account["is_inactive"])) return;
 	db_update_is_inactive($db, $user_account["no_user_account"], 0);
 	$user_account["is_inactive"] = 0;
+	log_event("account.reactivated");
+}
+
+// Erases an account and all it holds: its days, descriptions and sessions go with it (cascade).
+// $why is "user_request" or "inactivity". Logged with what was erased, counted just before; the
+// cookie of a user who asked is the endpoint's to clear.
+function data_delete_account($db, array $account, string $why): void {
+	$no_user_account = intval($account["no_user_account"]);
+	$days = db_count_days_of_account($db, $no_user_account);
+	$descriptions = db_count_descriptions_of_account($db, $no_user_account);
+	db_delete_user_account($db, $no_user_account);
+	log_event("account.deleted", ["uid" => $no_user_account, "why" => $why, "ndy" => $days, "nds" => $descriptions]);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,24 +135,33 @@ function data_reactivate_account($db, array &$user_account): void {
 
 // Clears a day: its fields, and its descriptions with them. The row stays, empty, stamped with when
 // it was cleared: that is how GET /api/sync tells the other clients the day is gone. A date that was
-// never written has nothing to clear.
+// never written has nothing to clear, and logs nothing.
 function data_clear_day($db, int $no_user_account, string $date, string $last_write_client_UTC): void {
-	db_transaction($db, function () use ($db, $no_user_account, $date, $last_write_client_UTC) {
+	$no_day = db_transaction($db, function () use ($db, $no_user_account, $date, $last_write_client_UTC) {
 		$existing = db_select_day_timeline($db, $date, $no_user_account);
-		if (!is_null($existing)) data_write_day($db, $no_user_account, $date, $existing, [], [], $last_write_client_UTC);
+		return is_null($existing) ? null : data_write_day($db, $no_user_account, $date, $existing, [], [], $last_write_client_UTC);
 	});
+
+	if (!is_null($no_day)) log_event("data.day_cleared", ["day" => $no_day, "dt" => $date]);
 }
 
 // Creates a description ($no_description null), or renames and retypes one. A day shows its
 // descriptions by name and type, so the days carrying it are stamped written: the sync reports them.
 // Returns the id.
 function data_save_description($db, int $no_user_account, ?int $no_description, string $name, int $type, string $last_write_client_UTC): int {
-	if (is_null($no_description)) return intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
+	$is_new = is_null($no_description);
 
-	db_transaction($db, function () use ($db, $no_user_account, $no_description, $name, $type, $last_write_client_UTC) {
-		db_update_description_name_type($db, $no_user_account, $no_description, $name, $type, $last_write_client_UTC);
-		db_update_day_timeline_touch_description($db, $no_user_account, $no_description);
-	});
+	if ($is_new) {
+		$no_description = intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
+	}
+	else {
+		db_transaction($db, function () use ($db, $no_user_account, $no_description, $name, $type, $last_write_client_UTC) {
+			db_update_description_name_type($db, $no_user_account, $no_description, $name, $type, $last_write_client_UTC);
+			db_update_day_timeline_touch_description($db, $no_user_account, $no_description);
+		});
+	}
+
+	log_event("data.description_saved", ["dsc" => $no_description, "new" => $is_new]);
 	return $no_description;
 }
 
@@ -143,6 +172,8 @@ function data_delete_description($db, int $no_user_account, int $no_description)
 		db_update_day_timeline_touch_description($db, $no_user_account, $no_description);
 		db_delete_descriptions($db, $no_description, $no_user_account);
 	});
+
+	log_event("data.description_deleted", ["dsc" => $no_description]);
 }
 
 // ---------------------------------------------------------------------------

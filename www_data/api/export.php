@@ -10,9 +10,11 @@
 require_once "../config.php";
 require_once "../lib/doc_csv.php";
 require_once "../lib/doc_export.php";
+require_once "../lib/log.php";
 require_once "../lib/nfp_export.php";
 require_once "../lib/sec.php";
 
+log_start(sec_client_ip());
 $db = db_open();
 $user_account = sec_auth_token($db);
 sec_redirect_if_logged_out($user_account);
@@ -56,6 +58,9 @@ else {
 if (!$has_data) {
 	http_text_error("il n'y a pas d'observation pour la période demandée.");
 }
+
+// only the length of the period is logged, not the dates
+log_event("export.file", ["fmt" => $type, "anon" => $anonymous, "per" => (new DateTime($start_date))->diff(new DateTime($end_date))->days + 1]);
 
 $filename = 'moncycle_app_' . date_human(new DateTime($start_date), '_');
 

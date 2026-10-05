@@ -708,9 +708,13 @@ function nfp_import_narrowed_note(string $date, string $name, int $recorded_type
 ** it, true replaces it. A replaced day is replaced whole, including its linked descriptions --
 ** same semantics as a POST to /api/day, which also carries the full state of a day, and which
 ** writes through the same data_write_day().
+**
+** $written_days, when the caller passes one, receives the [no_day, date] of each day written, for the
+** log (nfp_import_log_fields()); the array returned, and so the API answer, does not change.
 */
-function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $overide, string $last_write_client_UTC): array {
-	return db_transaction($db, function () use ($db, $no_user_account, $plan, $overide, $last_write_client_UTC) {
+function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $overide, string $last_write_client_UTC, ?array &$written_days = null): array {
+	$written_days = [];
+	return db_transaction($db, function () use ($db, $no_user_account, $plan, $overide, $last_write_client_UTC, &$written_days) {
 		$created = [];
 		$overwritten = [];
 		$skipped = [];
@@ -741,7 +745,8 @@ function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $ove
 				}
 			}
 
-			data_write_day($db, $no_user_account, $date, $existing, $entry["fields"], $no_descriptions, $last_write_client_UTC);
+			$no_day = data_write_day($db, $no_user_account, $date, $existing, $entry["fields"], $no_descriptions, $last_write_client_UTC);
+			$written_days[] = ["no_day" => $no_day, "date" => $date];
 
 			if (is_null($existing)) $created[] = $date;
 			else $overwritten[] = $date;
@@ -760,4 +765,24 @@ function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $ove
 			"narrowed" => $narrowed,
 		];
 	});
+}
+
+// The fields of the `data.import` log line, from the report api/import.php answers with: the counts
+// and the options. For a real run, $written_days (see nfp_import_write_plan()) adds the bounds of
+// what it wrote -- earliest and latest date, smallest and largest day id, not a list. A dry run
+// writes nothing, and so has no bounds.
+function nfp_import_log_fields(array $report, array $written_days = []): array {
+	$fields = [
+		"dry" => $report["dryRun"],
+		"ovr" => $report["overide"],
+		"rd" => $report["daysRead"],
+		"cr" => count($report["daysCreated"]),
+		"ow" => count($report["daysOverwritten"]),
+		"nds" => $report["descriptionsCreated"],
+	];
+	if (empty($written_days)) return $fields;
+
+	$dates = array_column($written_days, "date");
+	$ids = array_column($written_days, "no_day");
+	return $fields + ["dt0" => min($dates), "dt1" => max($dates), "day0" => min($ids), "day1" => max($ids)];
 }

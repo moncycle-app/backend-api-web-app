@@ -2,7 +2,10 @@
 
 require_once "../config.php";
 require_once "../lib/db.php";
+require_once "../lib/log.php";
+require_once "../lib/sec.php";
 
+log_start(sec_client_ip());
 header('Content-Type: application/json');
 
 $db = db_open();

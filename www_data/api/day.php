@@ -50,6 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] == "GET") {
 		$result[$row["date_obs"]] = day_format_to_json(data_construct_day($db, $row["date_obs"], $no_user_account, $row, $cycle_date));
 	}
 
+	log_note(["n" => count($result), "full" => empty($dates) && !$range]);
 	http_data(200, $result);
 }
 

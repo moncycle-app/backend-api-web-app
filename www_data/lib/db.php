@@ -140,6 +140,16 @@ function db_update_password($db, $password_hash, $no_user_account) {
 	return db_exec($db, "UPDATE user_account SET password = :password, last_password_change = NOW() WHERE no_user_account = :no_user_account", ["password" => $password_hash, "no_user_account" => $no_user_account]);
 }
 
+// How many days an account holds (a cleared day is a row too): the unique (account, date) index answers alone.
+function db_count_days_of_account($db, $no_user_account): int {
+	return intval(db_value($db, "SELECT COUNT(dt.no_day) FROM day_timeline AS dt WHERE dt.no_user_account = :no_user_account", ["no_user_account" => $no_user_account]));
+}
+
+// How many descriptions an account holds, whether a day carries them or not.
+function db_count_descriptions_of_account($db, $no_user_account): int {
+	return intval(db_value($db, "SELECT COUNT(d.no_description) FROM description AS d WHERE d.no_user_account = :no_user_account", ["no_user_account" => $no_user_account]));
+}
+
 function db_delete_user_account($db, $no_user_account) {
 	return db_exec($db, "DELETE FROM user_account WHERE no_user_account = :no_user_account", ["no_user_account" => $no_user_account]);
 }

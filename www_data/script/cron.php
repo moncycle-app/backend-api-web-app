@@ -8,11 +8,14 @@
 */
 
 require_once "../config.php";
+require_once "../lib/data.php";
 require_once "../lib/doc_csv.php";
 require_once "../lib/doc_export.php";
+require_once "../lib/log.php";
 require_once "../lib/mail.php";
 require_once "../lib/nfp_export.php";
 
+log_cron_start();
 header("Content-Type: text/plain");
 
 echo "............................................................................." . PHP_EOL;
@@ -24,6 +27,7 @@ $db = db_open();
 // have not turned auto_mail_export off)
 
 foreach (db_select_cycles_finished($db) as $account) {
+	log_context(["uid" => intval($account["no_user_account"])]);
 
 	$cycle_start = db_select_cycle($db, $account["cycle_complet"], $account["no_user_account"]);
 	if (is_null($cycle_start)) continue;
@@ -45,6 +49,7 @@ foreach (db_select_cycles_finished($db) as $account) {
 		["$file_name.pdf" => doc_export_pdf($days, $nfp_method, $account["name"])->Output('S'), "$file_name.csv" => stream_get_contents($csv), "$file_name.nfp" => $nfp]
 	);
 	fclose($csv);
+	log_cron_count($sent ? "sent" : "ko");
 
 	echo ($sent ? "cycle of " . count($days) . " days sent to " : "COULD NOT send the cycle of " . count($days) . " days to ") . "{$account["email1"]} (and {$account["email2"]})." . PHP_EOL;
 }
@@ -52,7 +57,9 @@ foreach (db_select_cycles_finished($db) as $account) {
 // A REMINDER TO THE ACCOUNTS THAT HAVE GONE QUIET
 
 foreach (db_select_user_account_inactive($db) as $account) {
+	log_context(["uid" => intval($account["no_user_account"])]);
 	$sent = mail_send_reminder($account);
+	log_cron_count($sent ? "sent" : "ko");
 	if ($sent) db_update_is_inactive($db, $account["no_user_account"], 1);
 	echo ($sent ? "reminder sent to " : "COULD NOT send a reminder to ") . "{$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
 }
@@ -60,19 +67,28 @@ foreach (db_select_user_account_inactive($db) as $account) {
 // RGPD: WARN, THEN DELETE, THE ACCOUNTS INACTIVE FOR ACCOUNT_INACTIVITY_DELETE_YEARS
 
 foreach (db_select_user_account_to_warn_before_deletion($db, ACCOUNT_INACTIVITY_DELETE_YEARS, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE) as $account) {
+	log_context(["uid" => intval($account["no_user_account"])]);
 	$sent = mail_send_deletion_warning($account, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE);
+	log_cron_count($sent ? "sent" : "ko");
 	echo ($sent ? "deletion warning sent to " : "COULD NOT send a deletion warning to ") . "{$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
 }
 
 foreach (db_select_user_account_to_delete($db, ACCOUNT_INACTIVITY_DELETE_YEARS) as $account) {
-	db_delete_user_account($db, $account["no_user_account"]);
+	log_context(["uid" => intval($account["no_user_account"])]);
+	data_delete_account($db, $account, "inactivity");
+	log_cron_count("del");
 	echo "account {$account["email1"]} deleted (" . ACCOUNT_INACTIVITY_DELETE_YEARS . " years without activity, RGPD)" . PHP_EOL;
 }
 
 // EXPIRED TOKENS
 
-echo db_delete_old_auth_token($db) . " old tokens deleted" . PHP_EOL;
-echo db_delete_old_login_attempt_ip($db) . " old login attempts (IP) deleted" . PHP_EOL;
+log_context(["uid" => null]);
+$deleted = db_delete_old_auth_token($db);
+log_cron_count("tok", $deleted);
+echo $deleted . " old tokens deleted" . PHP_EOL;
+$deleted = db_delete_old_login_attempt_ip($db);
+log_cron_count("ipa", $deleted);
+echo $deleted . " old login attempts (IP) deleted" . PHP_EOL;
 
 // THE VISIT COUNTERS: every day, every Sunday, the first of the month
 
@@ -92,3 +108,5 @@ if ($today["mday"] == 1) {
 }
 
 echo PHP_EOL;
+
+log_cron_end();

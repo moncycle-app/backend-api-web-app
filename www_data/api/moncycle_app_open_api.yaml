@@ -72,6 +72,11 @@ info:
     **Rule 3 — the HTTP status code is real.** `200` means it worked. `401` means you are not
     logged in. `409` means a conflict. Check the status first, then the body.
 
+    **Every response carries an `X-Request-Id` header** (but `GET /version`, a static file, and `GET /health_check`). It is
+    the id the server's own log uses for that request: quote it when you report a problem. You
+    may send your own in an `X-Request-Id` request header (letters, digits and `._:-`, 64
+    characters at most) and it is used instead; anything else is ignored and the server makes one.
+
     ### Exceptions to rule 1 and 2
 
     Four endpoints are older or serve files. They do **not** use the `data` / `error` envelope.
@@ -316,6 +321,9 @@ info:
     - `DELETE /account` deletes the account for real. Rows in every other table are removed by
       database cascade. It needs the password as confirmation.
     - An account with no activity for 4 years is deleted automatically.
+    - The server's log says what happened, to which account and to which row, never the content:
+      no password, token, e-mail address, query string, observation or description text. The
+      log of the operator who hosts the app is theirs to rotate and to keep short.
 
     ## 11. Glossary
 
@@ -2345,7 +2353,8 @@ components:
             safely. Each endpoint lists the codes it can return.
 
             Codes you may meet anywhere: `unauthorized` (no valid token), `invalid_json` (the body
-            is not a JSON object), `unexpected_error` (a server fault — retry, then report it).
+            is not a JSON object), `unexpected_error` (a server fault — retry, then report it with
+            the `X-Request-Id` of the response).
           example: invalid_credentials
         message:
           type: string

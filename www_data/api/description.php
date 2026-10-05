@@ -79,5 +79,7 @@ elseif ($_SERVER['REQUEST_METHOD'] == "DELETE") {
 
 // LISTING ALL DESCRIPTIONS
 else {
-	http_data(200, array_map('data_description_to_json', db_select_description_with_count($db, $no_user_account)));
+	$descriptions = array_map('data_description_to_json', db_select_description_with_count($db, $no_user_account));
+	log_note(["n" => count($descriptions)]);
+	http_data(200, $descriptions);
 }

@@ -57,3 +57,19 @@ define("LOGIN_CAPTCHA_THRESHOLD", env_int("LOGIN_CAPTCHA_THRESHOLD", 3));
 define("LOGIN_LOCKOUT_THRESHOLD", env_int("LOGIN_LOCKOUT_THRESHOLD", 15));
 // Failed attempts from one IP, in the window of db_count_login_attempt_ip(), before HTTP 429 (0: no limit).
 define("LOGIN_IP_MAX_ATTEMPTS", env_int("LOGIN_IP_MAX_ATTEMPTS", 30));
+
+// Logs (lib/log.php, README "Logs"). A value that is not one of the allowed ones takes the default:
+// a typo never turns the log off.
+// The least severe level written: off, error, warning, info, debug.
+define("LOG_LEVEL", env_choice("LOG_LEVEL", LOG_LEVEL_VALUES, "info"));
+// Comma list of the categories written: auth, account, data, export, mail, system, http. Empty: all.
+define("LOG_CATEGORIES", env_list("LOG_CATEGORIES", LOG_CATEGORY_VALUES));
+// stdout, stderr, or the absolute path of a file (in Docker, inside /var/log/moncycle). Anything else is stdout.
+define("LOG_OUTPUT", env_string("LOG_OUTPUT", "stdout"));
+// json: one object per line. text: "<time> <level> <event> key=value ..." for a person reading a terminal.
+define("LOG_FORMAT", env_choice("LOG_FORMAT", LOG_FORMAT_VALUES, "json"));
+// The client address in the log: full, truncate (a.b.c.0, or the first 3 groups of an IPv6) or none.
+define("LOG_IP", env_choice("LOG_IP", LOG_IP_VALUES, "full"));
+// The request header whose value, when it is plain, is the request id of the log (else one is made).
+// Unlike the others an empty value is a value: no header is read, an id is always made.
+define("LOG_REQUEST_ID_HEADER", getenv("LOG_REQUEST_ID_HEADER") === false ? "X-Request-Id" : trim(getenv("LOG_REQUEST_ID_HEADER")));

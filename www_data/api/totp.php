@@ -21,7 +21,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 		http_error(409, "totp_already_enabled", "Two-factor authentication is already enabled.");
 	}
 
-	http_data(200, sec_totp_begin($db, $user_account));
+	$setup = sec_totp_begin($db, $user_account);
+	log_event("account.totp_setup_started");
+	http_data(200, $setup);
 }
 
 // CONFIRM IT WITH A FIRST CODE
@@ -38,10 +40,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 	}
 
 	if (!sec_totp_code_valid($user_account, $body["code"])) {
+		log_event("account.refused", ["act" => "totp_enable", "err" => "totp_invalid"]);
 		http_error(401, "totp_invalid", "Entered TOTP code is not valid.");
 	}
 
 	db_update_user_account_totp_state($db, TOTP_STATE_ACTIVE, $user_account["no_user_account"]);
+	log_event("account.totp_enabled");
 
 	http_data(200, ["totpState" => sec_totp_state_name(TOTP_STATE_ACTIVE)]);
 }
@@ -58,11 +62,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
 	}
 
 	if (!sec_totp_code_valid($user_account, $_GET["code"])) {
+		log_event("account.refused", ["act" => "totp_disable", "err" => "totp_invalid"]);
 		http_error(401, "totp_invalid", "Entered TOTP code is not valid.");
 	}
 
 	db_update_user_account_totp_state($db, TOTP_STATE_DISABLED, $user_account["no_user_account"]);
 	db_update_user_account_totp_secret($db, null, $user_account["no_user_account"]);
+	log_event("account.totp_disabled");
 
 	http_data(200, ["totpState" => sec_totp_state_name(TOTP_STATE_DISABLED)]);
 }

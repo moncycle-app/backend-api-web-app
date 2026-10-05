@@ -35,6 +35,7 @@ if (isset($user_account["password"]) && password_verify($body["newPassword"], $u
 }
 
 if (!isset($user_account["password"]) || !password_verify($body["oldPassword"], $user_account["password"])) {
+	log_event("account.refused", ["act" => "password_change", "err" => "invalid_password"]);
 	http_error(401, "invalid_password", "Old password is incorrect.");
 }
 
@@ -43,4 +44,5 @@ $logged_out_devices = db_transaction($db, function () use ($db, $body, $user_acc
 	return $logout_other_devices ? db_delete_auth_tokens_other($db, $user_account["no_user_account"], $no_auth_token) : 0;
 });
 
+log_event("account.password_changed", ["out" => $logged_out_devices]);
 http_data(200, ["changed" => true, "loggedOutDevices" => $logged_out_devices]);

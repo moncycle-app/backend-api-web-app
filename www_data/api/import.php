@@ -130,6 +130,7 @@ if ($dry_run) {
 	unset($previewed["narrowed"]);
 
 	$report = array_merge($report, $previewed);
+	log_event("data.import", nfp_import_log_fields($report));
 	http_data(200, $report);
 }
 
@@ -140,7 +141,7 @@ if ($dry_run) {
 // an import counts as activity, same as a POST to /api/day
 data_reactivate_account($db, $user_account);
 
-$written = nfp_import_write_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide, $last_write_client_UTC);
+$written = nfp_import_write_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide, $last_write_client_UTC, $written_days);
 
 // the writer finds one kind of narrowing of its own (a label already recorded under the other
 // type), so its list joins the ones found while checking
@@ -150,4 +151,5 @@ unset($written["narrowed"]);
 $report = array_merge($report, $written);
 $report["daysWritten"] = count($written["daysCreated"]) + count($written["daysOverwritten"]);
 
+log_event("data.import", nfp_import_log_fields($report, $written_days));
 http_data(200, $report);

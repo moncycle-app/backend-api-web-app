@@ -21,4 +21,6 @@ if (!date_validate_timestamp($from_timestamp ?? "")) {
 	http_error(400, "invalid_timestamp", "'fromTimestamp' is not a valid UTC timestamp (YYYY-MM-DD hh:mm:ss).");
 }
 
-http_data(200, data_sync($db, $user_account, $from_timestamp));
+$sync = data_sync($db, $user_account, $from_timestamp);
+log_note(["n" => count($sync["days"]), "full" => $from_timestamp === SYNC_FROM_START]);
+http_data(200, $sync);

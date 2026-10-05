@@ -9,14 +9,17 @@
 
 require_once "../config.php";
 require_once "../lib/db.php";
+require_once "../lib/log.php";
 require_once "../lib/sec.php";
 
+log_start(sec_client_ip());
 $db = db_open();
 
 $user_account = sec_auth_token($db);
 
 if (!is_null($user_account)) {
 	db_delete_auth_token($db, $user_account["no_auth_token"], $user_account["no_user_account"]);
+	log_event("auth.logout");
 }
 
 sec_clear_token_cookie();

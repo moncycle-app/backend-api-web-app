@@ -10,11 +10,15 @@
 use PHPMailer\PHPMailer\PHPMailer;
 
 require_once __DIR__ . "/../vendor/autoload.php";
+require_once __DIR__ . "/log.php";
 
-// Sends one mail from the app. $to lists the addresses (empty ones are skipped), $attachments is
-// [file name => content]. True when the SMTP server took it: the callers decide what a failure
-// means, so nothing is thrown.
-function mail_send(array $to, string $subject, string $html, string $text, array $attachments = []): bool {
+// Sends one mail from the app. $kind says which of the five it is (welcome, new_password, cycle,
+// reminder, deletion_warning); it is all the log keeps of it, with how many addresses and files:
+// never an address, a subject or a body (two of them hold a password). $to lists the addresses
+// (empty ones are skipped), $attachments is [file name => content]. True when the SMTP server took
+// it: the callers decide what a failure means, so nothing is thrown.
+function mail_send(string $kind, array $to, string $subject, string $html, string $text, array $attachments = []): bool {
+	$log = ["kind" => $kind, "to" => count(array_filter($to)), "fil" => count($attachments)];
 	try {
 		$mail = new PHPMailer();
 		$mail->isSMTP();
@@ -35,8 +39,14 @@ function mail_send(array $to, string $subject, string $html, string $text, array
 		$mail->AltBody = $text;
 		foreach ($attachments as $file_name => $content) $mail->addStringAttachment($content, $file_name);
 
-		return $mail->send();
+		if ($mail->send()) {
+			log_event("mail.sent", $log);
+			return true;
+		}
+		log_event("mail.failed", $log + ["msg" => log_scrub($mail->ErrorInfo)]);
+		return false;
 	} catch (\Throwable $e) {
+		log_event("mail.failed", $log + ["msg" => get_class($e)]);
 		return false;
 	}
 }
@@ -82,7 +92,7 @@ function mail_send_welcome(string $name, string $email, string $password): bool 
 	{$login}<br />
 	<br />
 	HTML;
-	return mail_send([$email], 'Bienvenue et mot de passe',
+	return mail_send('welcome', [$email], 'Bienvenue et mot de passe',
 		mail_html("Bonjour {$name},", $content, mail_why("vous avez créé un compte sur MONCYCLE.APP")),
 		'Bienvenue sur MONCYCLE.APP! Votre mot de passe: ' . $password);
 }
@@ -96,7 +106,7 @@ function mail_send_new_password(string $email, string $password): bool {
 	{$login}<br />
 	<br />
 	HTML;
-	return mail_send([$email], 'Nouveau mot de passe',
+	return mail_send('new_password', [$email], 'Nouveau mot de passe',
 		mail_html("Bonjour,", $content, mail_why("vous possédez un compte sur MONCYCLE.APP")),
 		'Nouveau mot de passe temporaire: ' . $password);
 }
@@ -228,7 +238,7 @@ function mail_cycle_text(string $name, string $first_day, string $last_day, int 
 // The export of a finished cycle (a row of db_select_cycles_finished()), with $files attached:
 // [file name => content], the PDF, the CSV and the NFP file.
 function mail_send_cycle(array $account, string $first_day, string $last_day, int $nb_days, array $files): bool {
-	return mail_send([$account["email1"], $account["email2"]], "Votre cycle du $first_day au $last_day ($nb_days jours)",
+	return mail_send('cycle', [$account["email1"], $account["email2"]], "Votre cycle du $first_day au $last_day ($nb_days jours)",
 		mail_cycle_html($account["name"], $first_day, $last_day, $nb_days),
 		mail_cycle_text($account["name"], $first_day, $last_day, $nb_days), $files);
 }
@@ -251,7 +261,7 @@ function mail_send_reminder(array $account): bool {
 	</ol>
 	HTML;
 	$why = "Vous le recevez car vous possédez un compte sur MONCYCLE.APP. La réception d'emails est nécessaire au bon fonctionnement de l'application. Si vous ne souhaitez plus recevoir d'emails de notre part, ignorez ce mail, vous n'en recevrez plus d'autre.";
-	return mail_send([$email, $account["email2"]], "Comment allez-vous?",
+	return mail_send('reminder', [$email, $account["email2"]], "Comment allez-vous?",
 		mail_html("Bonjour {$name},", $content, $why),
 		"Cela fait longtemps que l'on ne vous a pas vu sur moncycle.app, tout va bien?");
 }
@@ -275,7 +285,7 @@ function mail_send_deletion_warning(array $account, int $days): bool {
 	<br />
 	HTML;
 	$why = "Vous le recevez car vous possédez un compte inactif sur MONCYCLE.APP; ce mail est nécessaire pour vous informer, conformément au RGPD, de la suppression prochaine de vos données en l'absence d'activité.";
-	return mail_send([$email, $account["email2"]], "Votre compte moncycle.app va être supprimé dans $days jours",
+	return mail_send('deletion_warning', [$email, $account["email2"]], "Votre compte moncycle.app va être supprimé dans $days jours",
 		mail_html("Bonjour {$name},", $content, $why),
 		"Faute d'activité, votre compte moncycle.app sera supprimé dans $days jours. Connectez-vous pour le conserver.");
 }

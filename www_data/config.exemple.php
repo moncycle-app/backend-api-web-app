@@ -44,3 +44,18 @@ define("LOGIN_CAPTCHA_THRESHOLD", 3);
 define("LOGIN_LOCKOUT_THRESHOLD", 15);
 // Failed attempts from one IP, in the window of db_count_login_attempt_ip(), before HTTP 429 (0: no limit).
 define("LOGIN_IP_MAX_ATTEMPTS", 30);
+
+// Logs (lib/log.php, README "Logs").
+// The least severe level written: off, error, warning, info, debug.
+define("LOG_LEVEL", "info");
+// The categories written: auth, account, data, export, mail, system, http. Empty: all.
+define("LOG_CATEGORIES", []);
+// stdout, stderr, or the absolute path of a file the web server can append to. Anything else is stdout.
+define("LOG_OUTPUT", "stdout");
+// json: one object per line. text: "<time> <level> <event> key=value ..." for a person reading a terminal.
+define("LOG_FORMAT", "json");
+// The client address in the log: full, truncate (a.b.c.0, or the first 3 groups of an IPv6) or none.
+define("LOG_IP", "full");
+// The request header whose value, when it is plain, is the request id of the log (else one is made).
+// Empty: no header is read, an id is always made.
+define("LOG_REQUEST_ID_HEADER", "X-Request-Id");

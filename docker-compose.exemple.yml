@@ -22,10 +22,15 @@ services:
       SMTP_MAIL: smtp_email_and_mogin_id
       SMTP_PASSWORD_FILE: /run/secrets/smtp_password
       PHP_CACHE: 1
+      # the app log goes to `docker logs` (stdout) by default; to keep it in a file, mount a volume on
+      # /var/log/moncycle (below), name the file in it, and run the cron as www-data (README, "Logs")
+      # LOG_OUTPUT: /var/log/moncycle/app.log
+      # LOG_LEVEL: info
+      # LOG_IP: truncate
     secrets:
       - db_password
       - smtp_password
-    # the app never writes to its disk
+    # the app never writes to its disk (but for its log file, in the volume below, if you use one)
     read_only: true
     tmpfs:
       - /tmp
@@ -47,13 +52,18 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    # the default json-file driver never rotates, and the access log holds IP addresses
+    # the default json-file driver never rotates, and the app log holds IP addresses and account ids
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+    # volumes:
+    #   - moncycle_logs:/var/log/moncycle
     restart: unless-stopped
+
+# volumes:
+#   moncycle_logs:
 
 secrets:
     db_password:
