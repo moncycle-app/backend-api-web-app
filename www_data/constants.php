@@ -52,7 +52,10 @@ const PASSWORD_MIN_LENGTH = 8;
 // address that has no account is checked against it, so that it takes as long as a wrong password does.
 const AUTH_DUMMY_PASSWORD_HASH = '$2y$12$fFAyg7vWBJagg2QJOymLY.Ndi.VRQtAJhChoNUW7XiAxek8JDKUju';
 const ACCOUNT_DEFAULT_LANGUAGE = "FR";    // user_account.language of a new account, until the user can choose
-const ACCOUNT_DEMO_ID = 2;      // the public demo account: never warned, never erased (see lib/db.php)
+// The two public demo accounts (script/db/demo.sql): never reminded, never warned, never erased, left out of the statistics (lib/db.php).
+const ACCOUNT_DEMO_ID_BILLINGS = 2;
+const ACCOUNT_DEMO_ID_FERTILITYCARE = 3;
+const ACCOUNT_DEMO_IDS_SQL = ACCOUNT_DEMO_ID_BILLINGS . ", " . ACCOUNT_DEMO_ID_FERTILITYCARE;   // for NOT IN (...): a constant expression cannot implode()
 
 // What user_account and auth_token can hold: the widths of their columns, and the birth years a person can give.
 const ACCOUNT_LIMIT_NAME_CHARS = 255;               // user_account.name varchar(255)

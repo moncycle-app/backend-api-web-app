@@ -532,7 +532,7 @@ function db_select_user_account_inactive($db) {
 	return db_rows($db,
 		"SELECT c.no_user_account, c.name, MAX(o.last_write_db) AS last_day_written, c.email1, c.email2, c.inscription_date
 		FROM user_account AS c LEFT JOIN day_timeline AS o ON c.no_user_account = o.no_user_account
-		WHERE c.no_user_account != " . ACCOUNT_DEMO_ID . " AND c.is_inactive = 0
+		WHERE c.no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ") AND c.is_inactive = 0
 		GROUP BY c.no_user_account, c.name, c.email1, c.email2, c.inscription_date
 		HAVING (DATE(last_day_written) < DATE(NOW()) - INTERVAL 35 DAY OR last_day_written IS NULL) AND c.inscription_date < DATE(NOW()) - INTERVAL 35 DAY
 		ORDER BY last_day_written DESC LIMIT 20"
@@ -543,7 +543,7 @@ function db_select_user_account_inactive($db) {
 // day_timeline/description write, or any authenticated request (auth_token.date_use). Each of
 // those three tables is aggregated to one MAX(...) row per no_user_account in its own derived
 // table (dt/de/at below) and LEFT JOINed once, instead of a correlated subquery re-scanning the
-// table for every user_account row. The demo account is left out, as it is from the stats.
+// table for every user_account row. The demo accounts are left out, as they are from the stats.
 const DB_SQL_USER_ACCOUNT_LAST_ACTIVITY =
 	"SELECT u.no_user_account, u.name, u.email1, u.email2,
 	GREATEST(u.inscription_date, COALESCE(u.last_auth_date, u.inscription_date), COALESCE(dt.last_activity, u.inscription_date),
@@ -552,7 +552,7 @@ const DB_SQL_USER_ACCOUNT_LAST_ACTIVITY =
 	LEFT JOIN (SELECT no_user_account, MAX(last_write_db) AS last_activity FROM day_timeline GROUP BY no_user_account) dt ON dt.no_user_account = u.no_user_account
 	LEFT JOIN (SELECT no_user_account, MAX(last_write_db) AS last_activity FROM description GROUP BY no_user_account) de ON de.no_user_account = u.no_user_account
 	LEFT JOIN (SELECT no_user_account, MAX(date_use) AS last_activity FROM auth_token GROUP BY no_user_account) at ON at.no_user_account = u.no_user_account
-	WHERE u.no_user_account != " . ACCOUNT_DEMO_ID;
+	WHERE u.no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")";
 
 // the accounts that will be erased in $warning_days_before days: the ones to warn today
 function db_select_user_account_to_warn_before_deletion($db, $years, $warning_days_before) {
@@ -569,7 +569,7 @@ function db_select_user_account_to_delete($db, $years) {
 }
 
 // ---------------------------------------------------------------------------
-// Statistics (the demo account is left out of all of them), and the visit counters
+// Statistics (the demo accounts are left out of them), and the visit counters
 // ---------------------------------------------------------------------------
 
 function db_count_user_accounts($db) {
@@ -595,7 +595,7 @@ function db_count_user_accounts_recent($db) {
 }
 
 function db_count_user_accounts_with_totp($db) {
-	return db_value($db, "SELECT COUNT(no_user_account) FROM user_account WHERE totp_state = " . TOTP_STATE_ACTIVE . " AND no_user_account != " . ACCOUNT_DEMO_ID);
+	return db_value($db, "SELECT COUNT(no_user_account) FROM user_account WHERE totp_state = " . TOTP_STATE_ACTIVE . " AND no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")");
 }
 
 function db_count_auth_tokens($db) {
@@ -603,11 +603,11 @@ function db_count_auth_tokens($db) {
 }
 
 function db_count_cycles($db) {
-	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE cycle_1st_day = 1 AND no_user_account != " . ACCOUNT_DEMO_ID);
+	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE cycle_1st_day = 1 AND no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")");
 }
 
 function db_count_cycles_recent($db) {
-	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE cycle_1st_day = 1 AND date_obs >= DATE(NOW()) - INTERVAL 30 DAY AND no_user_account != " . ACCOUNT_DEMO_ID);
+	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE cycle_1st_day = 1 AND date_obs >= DATE(NOW()) - INTERVAL 30 DAY AND no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")");
 }
 
 // the average age: the DB holds a birth year, and 2.5 is half the 5 years the form groups
@@ -616,19 +616,19 @@ function db_select_average_age($db) {
 }
 
 function db_select_average_age_recent($db) {
-	return db_value($db, "SELECT YEAR(NOW()) - AVG(age) + 2.5 FROM user_account WHERE inscription_date >= DATE(NOW()) - INTERVAL 15 DAY AND last_auth_date IS NOT NULL AND no_user_account != " . ACCOUNT_DEMO_ID);
+	return db_value($db, "SELECT YEAR(NOW()) - AVG(age) + 2.5 FROM user_account WHERE inscription_date >= DATE(NOW()) - INTERVAL 15 DAY AND last_auth_date IS NOT NULL AND no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")");
 }
 
 function db_count_days($db) {
-	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE no_user_account != " . ACCOUNT_DEMO_ID);
+	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")");
 }
 
 function db_count_days_today($db) {
-	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE date_obs = CURDATE() AND no_user_account != " . ACCOUNT_DEMO_ID);
+	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE date_obs = CURDATE() AND no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")");
 }
 
 function db_count_days_since($db, $nb_days) {
-	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE date_obs >= DATE(NOW()) - INTERVAL :nb_days DAY AND no_user_account != " . ACCOUNT_DEMO_ID, ["nb_days" => $nb_days]);
+	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE date_obs >= DATE(NOW()) - INTERVAL :nb_days DAY AND no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")", ["nb_days" => $nb_days]);
 }
 
 function db_select_key_value($db, $key) {

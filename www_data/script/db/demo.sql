@@ -112,12 +112,12 @@ VALUES
 
 INSERT INTO `description` (`no_description`, `no_user_account`, `name`, `type`, `last_write_client_UTC`)
 VALUES
-	(1,2,'sec',0,NOW()+INTERVAL-2 DAY),
-	(2,2,'humide',0,NOW()+INTERVAL-4 DAY),
-	(3,2,'collant',0,NOW()+INTERVAL-6 DAY),
-	(4,2,'pâteux',0,NOW()+INTERVAL-8 DAY),
-	(5,2,'glissant',0,NOW()+INTERVAL-10 DAY),
-	(6,2,'blanc',0,NOW()+INTERVAL-12 DAY);
+	(1,2,'sec',2,NOW()+INTERVAL-2 DAY),
+	(2,2,'humide',2,NOW()+INTERVAL-4 DAY),
+	(3,2,'collant',1,NOW()+INTERVAL-6 DAY),
+	(4,2,'pâteux',1,NOW()+INTERVAL-8 DAY),
+	(5,2,'glissant',2,NOW()+INTERVAL-10 DAY),
+	(6,2,'blanc',1,NOW()+INTERVAL-12 DAY);
 
 INSERT INTO `link_day_timeline_description` (`no_day`, `no_description`)
 VALUES
