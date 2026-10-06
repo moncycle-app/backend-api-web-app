@@ -102,6 +102,60 @@ const moncycle_app_text = {
 	import_list_more : function (n) {
 		return `\u2026 et ${moncycle_app_text.count(n, "autre", "autres")}.`;
 	},
+
+	/* --- the description forms ------------------------------------------- */
+	desc_name_empty : " ❌\u00A0le nom ne peut pas être vide",
+	desc_type_name : {0: "Type à définir", 1: "Observation", 2: "Sensation"},
+
+	/* --- a description moved into the comments of its days ------------------ */
+	desc_comment_button_title : "Déplacer cette description dans le commentaire de tous les jours associés, puis la supprimer (action définitive)",
+	desc_comment_syncing : "⏳\u00A0mise à jour de vos données…",
+	desc_comment_sync_failed : "❌\u00A0action impossible : vos données n’ont pas pu être mises à jour (connexion ?).",
+	desc_comment_gone : "Cette description n’existe plus.",
+	desc_comment_unsaved : "Le nom affiché n’est pas (encore) enregistré : attendez « ✅ enregistré » ou corrigez-le, puis recommencez.",
+	desc_comment_nothing : function (name) {
+		return `Aucun jour n’est associé à « ${name} » : il n’y a rien à déplacer.\n\nPour supprimer cette description, utilisez le bouton ❌.`;
+	},
+	// refused before anything is written: the description would be deleted, and these days would lose it
+	desc_comment_too_long : function (name, dates, max) {
+		let n = dates.length;
+		let shown = dates.slice(0, 5).map(function (date) { return date.split("-").reverse().join("/"); }).join(", ") + (n > 5 ? ", …" : "");
+		return `Rien n’a été modifié : la description « ${name} » reste en place.\n\n${n > 1 ? `${n} jours ont` : "1 jour a"} un commentaire trop long pour y ajouter « ${name} » (${max} caractères au plus) : ${shown}.\n\nRaccourcissez ${n > 1 ? "ces commentaires" : "ce commentaire"} dans le tableau, puis recommencez.`;
+	},
+	// asked before the move: it cannot be taken back
+	desc_comment_confirm : function (name, plan) {
+		let n = plan.change.length;
+		let kept = plan.kept.length;
+		let text;
+		if (n > 0) {
+			text = `Déplacer « ${name} » dans le commentaire de ${moncycle_app_text.count(n, "jour", "jours")} ?\n\n`
+				+ `Sur ${n > 1 ? "chacun de ces jours" : "ce jour"}, « ${name} » sera ajouté à la fin du commentaire, après un « | » si le jour en a déjà un. Ensuite la description « ${name} » sera supprimée : elle ne sera plus associée à aucun jour.\n\n`
+				+ `⚠️ Action définitive, sans retour en arrière : le texte ajouté fait partie du commentaire et ne se distingue plus du vôtre, et la description ne pourra pas être rétablie.`;
+			if (kept == 1) text += `\n\n1 jour a déjà « ${name} » dans son commentaire : son commentaire ne sera pas modifié, il perdra seulement la description.`;
+			else if (kept > 1) text += `\n\n${kept} jours ont déjà « ${name} » dans leur commentaire : leurs commentaires ne seront pas modifiés, ils perdront seulement la description.`;
+		}
+		else {
+			text = `Supprimer la description « ${name} » ?\n\n`
+				+ `Elle figure déjà dans le commentaire de ${moncycle_app_text.count(kept, "jour", "jours")} auxquels elle est associée : les commentaires ne seront pas modifiés, la description sera seulement supprimée.\n\n`
+				+ `⚠️ Action définitive, sans retour en arrière.`;
+		}
+		return text;
+	},
+	desc_comment_progress : function (done, total) {
+		return `⏳\u00A0${done}/${total}`;
+	},
+	desc_comment_deleting : "⏳\u00A0suppression de la description…",
+	desc_comment_done : " ✅\u00A0déplacée",
+	// what the row says once the description is gone
+	desc_comment_moved : function (name, plan) {
+		if (plan.change.length == 0) return `✅ « ${name} » figurait déjà dans le commentaire de ${moncycle_app_text.count(plan.kept.length, "jour", "jours")} : la description a été supprimée.`;
+		return `✅ La description « ${name} » a été déplacée dans le commentaire de ${moncycle_app_text.count(plan.change.length, "jour", "jours")}, puis supprimée.`;
+	},
+	desc_comment_offline : " ⚠️\u00A0envoi interrompu : les changements sont gardés sur cet appareil et partiront dès que la connexion revient. La description n’est pas supprimée : relancez l’action ensuite. Gardez cette page ouverte.",
+	desc_comment_refused : function (done, refused) {
+		return ` ⚠️\u00A0${moncycle_app_text.count(done, "jour modifié", "jours modifiés")}, ${moncycle_app_text.count(refused, "refusé", "refusés")} par le serveur (modifié depuis un autre appareil ?). La description n’est pas supprimée : relancez l’action pour reprendre ${refused > 1 ? "ces jours" : "ce jour"}.`;
+	},
+	desc_comment_delete_failed : " ⚠️\u00A0les commentaires sont écrits, mais la description n’a pas pu être supprimée. Relancez l’action pour la supprimer.",
 };
 
 /* ===========================================================================
@@ -165,6 +219,8 @@ function moncycle_app_nfp_method_from_api(method, temperatureTracking) {
 
 const moncycle_app_desc_type_to_int = {"undefined": 0, "observation": 1, "sensation": 2};
 const moncycle_app_desc_type_from_int = {0: "undefined", 1: "observation", 2: "sensation"};
+// shown before a description's name, so that its type is known without opening it
+const moncycle_app_desc_type_icon = {0: "❓", 1: "👀", 2: "🧠"};
 function moncycle_app_description_from_api(d) {
 	return {no_description: d.id, name: d.name, type: moncycle_app_desc_type_to_int[d.type] || 0, use_count: d.useCount};
 }
@@ -211,12 +267,108 @@ $(document).ready(function(){
 
 
 	// TELECHARGEMENT/MODIFICATION/CRATION/SUPPRESSION DES DESCRIPTIONS BILLINGS
-	let check_if_desc_exist = function(desc, type) {
+	// another_than: the description being edited, which is not a duplicate of itself (its saved name can be the one typed
+	// back while the answer to the change that took it away is still on its way)
+	let check_if_desc_exist = function(desc, type, another_than) {
 		for (let i = 0; i < description_list.length; i+=1) {
+			if (description_list[i].no_description == another_than) continue;
 			if (description_list[i].name == desc && description_list[i].type == type) return true;
 		}
 		return false;
 	}
+	// A name is saved as it is typed, one request per key, and the answers come in any order: only the answer to
+	// the last edit says how it went.
+	let desc_last_edit = 0;
+
+	// What acts on a description (its type, the copy to its comments, the delete) shows under the one being edited, and
+	// stays while the focus or the pointer is in that row. Not :focus-within: a click on a button does not focus it
+	// in Safari and Firefox on macOS, and the row would close under the finger.
+	$(document).on("focusin mousedown", function (event) {
+		let row = $(event.target).closest(".desc_row");
+		$(".desc_row.desc_active").not(row).removeClass("desc_active");
+		row.addClass("desc_active");
+	});
+
+	// DEPLACEMENT D'UNE DESCRIPTION DANS LE COMMENTAIRE DE SES JOURS
+	// All in the browser: the days come from the local copy (js/store.js), brought up to date first, and go back
+	// through its queue like any write of a day. Once the server has every one of them, the description is deleted.
+	// The server sees ordinary writes of days and one delete of a description.
+	let move_run = null;   // while one runs: {dates: {date: true}, done, refused: [dates]}
+	moncycle_store.on("sent", function (detail) {
+		if (!move_run || !move_run.dates[detail.date]) return;
+		move_run.done += 1;
+		$("#desc_net_stat").text(moncycle_app_text.desc_comment_progress(move_run.done, Object.keys(move_run.dates).length));
+	});
+	moncycle_store.on("failed", function (detail) {
+		if (move_run && move_run.dates[detail.date]) move_run.refused.push(detail.date);
+	});
+	let move_description_to_comments = async function (form) {
+		if (move_run) return;
+		move_run = {dates: {}, done: 0, refused: []};
+		let button = form.find(".i_desc_comment");
+		let row = form.closest(".desc_row");
+		let id = parseInt(form.find('input[name="no_description"]').val());
+		let button_after = "💬";
+		button.prop("disabled", true).val("⏳");
+		$("#desc_net_stat").text(moncycle_app_text.desc_comment_syncing);
+		try {
+			// the days to change are the ones the server holds now
+			try { await moncycle_store.sync(); }
+			catch (e) {
+				$("#desc_net_stat").text(moncycle_app_text.desc_comment_sync_failed);
+				return;
+			}
+			$("#desc_net_stat").text("");
+			let description = moncycle_store.descriptions.find(function (known) { return known.id === id; });
+			if (!description) return alert(moncycle_app_text.desc_comment_gone);
+			// the name that will be written is the one saved, which must be the one the user sees
+			if (description.name !== $(`#f_edit_description_${id} .i_desc_name`).val()) return alert(moncycle_app_text.desc_comment_unsaved);
+			let plan = moncycle_store.plan_description_to_comments(description);
+			// all or nothing: a day that cannot take the name would lose the description with the others
+			if (plan.too_long.length) return alert(moncycle_app_text.desc_comment_too_long(description.name, plan.too_long, moncycle_store.comment_max_chars));
+			if (plan.change.length + plan.kept.length == 0) return alert(moncycle_app_text.desc_comment_nothing(description.name));
+			if (!confirm(moncycle_app_text.desc_comment_confirm(description.name, plan))) return;
+
+			if (plan.change.length) {
+				plan.change.forEach(function (one) { move_run.dates[one.date] = true; });
+				$("#desc_net_stat").text(moncycle_app_text.desc_comment_progress(0, plan.change.length));
+				moncycle_store.queue_comments(plan.change, new Date().toISOString().replace(/\.\d+Z$/, "Z"));
+				try { await moncycle_store.flush(); }
+				catch (e) { /* what the server could not take stays in the queue, and is sent again */ }
+				// the description is deleted only when every day has the name in its comment
+				let waiting = plan.change.filter(function (one) { return moncycle_store.pending[one.date]; }).length;
+				let refused = move_run.refused.length;
+				if (waiting || refused) {
+					$("#desc_net_stat").text(waiting ? moncycle_app_text.desc_comment_offline : moncycle_app_text.desc_comment_refused(plan.change.length - refused, refused));
+					button_after = "⚠️";
+					return;
+				}
+			}
+
+			$("#desc_net_stat").text(moncycle_app_text.desc_comment_deleting);
+			try { await moncycle_store.request("DELETE", "api/description?id=" + encodeURIComponent(id)); }
+			catch (jqXHR) {
+				console.error(jqXHR);
+				$("#desc_net_stat").text(moncycle_app_text.desc_comment_delete_failed);
+				button_after = "⚠️";
+				return;
+			}
+			// the copy follows what the server did (the descriptions, the days that carried this one)
+			try { await moncycle_store.sync(); }
+			catch (e) { /* at the next sync */ }
+			let at = description_list.findIndex(function (known) { return known.no_description == id; });
+			if (at >= 0) description_list.splice(at, 1);
+			// the row is a message now: what it said is in the comments
+			row.attr("class", "desc_moved").removeAttr("id").removeData("id").empty().append(document.createTextNode(moncycle_app_text.desc_comment_moved(description.name, plan)));
+			$("#desc_net_stat").text(moncycle_app_text.desc_comment_done);
+		}
+		finally {
+			move_run = null;
+			button.prop("disabled", false).val(button_after);
+			if (button_after != "💬") setTimeout(function () { button.val("💬"); }, 3000);
+		}
+	};
+
 	let load_description = function(ret) {
 		let data = ret.data.map(moncycle_app_description_from_api);
 		description_list = data;
@@ -229,42 +381,78 @@ $(document).ready(function(){
 			// built with the DOM, never as HTML: a name is free text and would break out of value="..."
 			let input_form = $("<form>", {class: "f_edit_description", id: "f_edit_description_" + description.no_description}).append(
 				$("<input>", {type: "hidden", name: "no_description"}).val(description.no_description),
-				$("<input>", {class: "i_desc_name", type: "text", name: "name", maxlength: 256}).val(description.name),
-				$("<select>", {class: "i_desc_type", name: "type"}).append(
-					$("<option>", {value: "2", selected: description.type == 2}).text("🧠 Sensations"),
-					$("<option>", {value: "1", selected: description.type == 1}).text("👀 Observation"),
-					$("<option>", {value: "0", selected: description.type == 0, disabled: true}).text("❓ à définir")),
+				$("<span>", {class: "i_desc_icon", title: moncycle_app_text.desc_type_name[description.type]}).text(moncycle_app_desc_type_icon[description.type]),
+				$("<input>", {class: "i_desc_name", type: "text", name: "name", maxlength: 256, title: description.name}).val(description.name),
 				$("<span>", {class: "i_desc_count", title: "Nombre de jours associés à cette description"}).text(description.use_count));
+			let input_type = $("<select>", {class: "i_desc_type", name: "type"}).append(
+				$("<option>", {value: "2", selected: description.type == 2}).text("🧠 Sensations"),
+				$("<option>", {value: "1", selected: description.type == 1}).text("👀 Observation"),
+				$("<option>", {value: "0", selected: description.type == 0, disabled: true}).text("❓ à définir"));
+			let input_comment = $("<form>", {class: "f_comment_description", id: "f_comment_description_" + description.no_description}).append(
+				$("<input>", {type: "hidden", name: "no_description"}).val(description.no_description),
+				$("<input>", {class: "i_desc_comment", type: "submit", title: moncycle_app_text.desc_comment_button_title, "aria-label": moncycle_app_text.desc_comment_button_title}).val("💬"));
 			let input_del = $("<form>", {class: "f_delete_description", id: "f_delete_description_" + description.no_description}).append(
 				$("<input>", {type: "hidden", name: "no_description"}).val(description.no_description),
 				$("<input>", {type: "hidden", class: "del_data_name"}).val(description.name),
 				$("<input>", {type: "hidden", class: "del_data_count"}).val(description.use_count),
 				$("<input>", {class: "i_desc_del", type: "submit"}).val("❌"));
-			$("#desc_froms_container").append(input_form);
-			$("#desc_froms_container").append(input_del);
+			// a description is a line (its type's emoji, its name, its count); what acts on it shows under it while it is the one being edited
+			let row = $("<div>", {class: "desc_row", id: "desc_row_" + description.no_description}).data("id", description.no_description).append(
+				input_form,
+				$("<div>", {class: "desc_actions"}).append(input_type, input_comment, input_del));
+			$("#desc_froms_container").append(row);
 		}
 		let update_desc = function (e) {
 			e.stopPropagation();
-			$("#desc_net_stat").html('⏳');
-			let form = $(this).closest('form');
-			let name = form.find(".i_desc_name").val();
-			let type_int = parseInt(form.find(".i_desc_type").val());
-			if (check_if_desc_exist(name, type_int)) {
+			let row = $(this).closest(".desc_row");
+			let id = row.data("id");
+			let name = row.find(".i_desc_name").val();
+			// the whole name is in the tooltip: the field shows what fits
+			row.find(".i_desc_name").attr("title", name);
+			// the option selected, not the value of the select: the "à définir" option is disabled, and the select answers nothing for it
+			let type_int = parseInt(row.find(".i_desc_type option:selected").val());
+			let saved = description_list.find(function (known) { return known.no_description == id; });
+			// Only a difference is sent (focus, Tab and arrows make key and change events with none): the name and the type are
+			// compared with what was sent last, or else what is saved.
+			let last = saved.sent || saved;
+			if (last.name == name && last.type == type_int) return;
+			let edit = ++desc_last_edit;
+			if (name.trim() == "") {
+				$("#desc_net_stat").text(moncycle_app_text.desc_name_empty);
+				return;
+			}
+			if (check_if_desc_exist(name, type_int, id)) {
 				$("#desc_net_stat").html(' ❌&nbsp;description doublon');
 				return;
 			}
-			let id = parseInt(form.find('input[name="no_description"]').val());
+			$("#desc_net_stat").html('⏳');
+			saved.sent = {name: name, type: type_int};
 			let payload = {name: name, type: moncycle_app_desc_type_from_int[type_int], id: id};
 			$.ajax({type: "POST", url: "api/description", contentType: "application/json", data: JSON.stringify(payload)}).done(function(ret){
-				$("#desc_net_stat").html(' ✅&nbsp;enregistré');
+				if (edit == desc_last_edit) $("#desc_net_stat").html(' ✅&nbsp;enregistré');
+				// what the page holds of the description follows what was saved (the duplicate check, the delete dialog, the emoji)
+				saved.name = name;
+				saved.type = type_int;
+				row.find(".i_desc_icon").text(moncycle_app_desc_type_icon[type_int]).attr("title", moncycle_app_text.desc_type_name[type_int]);
+				$(`#f_delete_description_${id} .del_data_name`).val(name);
 				moncycle_app_sync_later();
 			}).fail(function(jqXHR){
-				$("#desc_net_stat").html('');
+				if (edit == desc_last_edit) {
+					$("#desc_net_stat").html('');
+					// refused or lost: the next key sends it again
+					saved.sent = null;
+				}
 				console.error(jqXHR);
 			});
 		}
-		$(".f_edit_description .i_desc_type").on("change", update_desc);
-		$(".f_edit_description .i_desc_name").on("keyup", update_desc);
+		$(".desc_row .i_desc_type").on("change", update_desc);
+		$(".desc_row .i_desc_name").on("keyup", update_desc);
+		// Enter in the name is not a page to load: the name is saved as it is typed
+		$(".f_edit_description").on("submit", function(event){ event.preventDefault(); });
+		$(".f_comment_description").on("submit", function(event){
+			event.preventDefault();
+			move_description_to_comments($(this));
+		});
 		$(".f_delete_description").on("submit", function(event){
 			event.preventDefault();
 			let html_form = $(this).closest('form');
@@ -276,8 +464,7 @@ $(document).ready(function(){
 			$("#desc_net_stat").html('⏳');
 			$.ajax({type : 'DELETE', "url" : "api/description?id=" + encodeURIComponent(id)}).done(function(){
 				$("#desc_net_stat").html('');
-				$(`#f_edit_description_${id}`).remove();
-				$(`#f_delete_description_${id}`).remove();
+				$(`#desc_row_${id}`).remove();
 				$("#desc_net_stat").html(' ✅&nbsp;supprimé');
 				moncycle_app_sync_later();
 			}).fail(function(jqXHR){

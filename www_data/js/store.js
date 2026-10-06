@@ -403,6 +403,59 @@ const moncycle_store = {
 		moncycle_store.flush().catch(function () { });
 	},
 
+	/* -----------------------------------------------------------------------
+	** A DESCRIPTION COPIED INTO THE COMMENTS OF ITS DAYS
+	** ====================================================================== */
+	// the list of a Day that carries a description, by the type the API gives it
+	description_field : {sensation : "freeMucusSensation", observation : "freeMucusObservation", "undefined" : "freeOther"},
+	// the longest comment the day form takes (index.html, maxlength of #from_com); the server's own limit is 256
+	comment_max_chars : 255,
+
+	// The POST /api/day body that makes the server hold a day of the copy as it is, so that a write can change one
+	// field of it: a day is posted whole. Where it stands in its cycle is left out, the server works it out.
+	body_of_day : function (day, last_write_client_utc) {
+		let body = {};
+		Object.keys(day).forEach(function (key) {
+			if (!moncycle_store.day_meta.includes(key)) body[key] = Array.isArray(day[key]) ? day[key].slice() : day[key];
+		});
+		body.date = day.date;
+		body.lastWriteClientUtc = last_write_client_utc;
+		return body;
+	},
+	// what goes between a comment and a description copied after it
+	comment_joiner : " | ",
+
+	// What copying a description ({name, type: "observation" | "sensation" | "undefined"}) into the comment of every
+	// day that carries it would do, as {change: [{date, comment}], kept: [dates], too_long: [dates]}. The name goes
+	// at the end of the comment, after the joiner when there is a comment. A day that already has it as an item of
+	// its comment (a line, or between joiners) is kept as it is (so the action can be run again), and so is one whose
+	// comment would pass the limit. Nothing is written.
+	plan_description_to_comments : function (description) {
+		let field = moncycle_store.description_field[description.type];
+		let joiner = moncycle_store.comment_joiner;
+		let plan = {change : [], kept : [], too_long : []};
+		Object.keys(moncycle_store.days).sort().forEach(function (date) {
+			let day = moncycle_store.days[date];
+			if (!(day[field] || []).includes(description.name)) return;
+			let comment = day.comment || "";
+			let items = joiner + comment.split("\n").map(function (line) { return line.trim(); }).join(joiner) + joiner;
+			if (items.includes(joiner + description.name + joiner)) plan.kept.push(date);
+			else {
+				let joined = comment === "" ? description.name : comment + joiner + description.name;
+				if ([...joined].length > moncycle_store.comment_max_chars) plan.too_long.push(date);
+				else plan.change.push({date : date, comment : joined});
+			}
+		});
+		return plan;
+	},
+	// The `change` of a plan, written: each day goes in the copy at once and in the queue, like any write of a day.
+	queue_comments : function (change, last_write_client_utc) {
+		change.forEach(function (one) {
+			let day = Object.assign({}, moncycle_store.days[one.date], {comment : one.comment});
+			moncycle_store.queue_day(moncycle_store.body_of_day(day, last_write_client_utc));
+		});
+	},
+
 	// Sends the queue, oldest first, one request at a time. Resolves when it is empty. Rejects when something
 	// is left that a later try can mend, and a retry is planned: no answer at all stops the pass (the network
 	// is down), but a server that fails on one day (an error page, a 5xx) does not hold back the others.

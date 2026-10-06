@@ -62,33 +62,101 @@ form {
 	font-weight: bold;
 }
 
-.f_edit_description .i_desc_name,
 #i_desc_name_new {
 	display: inline-block;
 	width: 38%;
 	height: 1.2em;
 }
 
-.f_edit_description .i_desc_type,
-#i_desc_type_new {
+#i_desc_type_new,
+.desc_actions .i_desc_type {
 	display: inline-block;
 	width: 32%;
 	box-sizing: content-box;
 	height: 1.2em;
 }
 
-.f_edit_description .i_desc_count {
-	display: inline-block;
-	width: 8%;
-	min-width: 1.5em;
-	box-sizing: content-box;
+/* --- A description: a line, and what acts on it under it -----------------
+** The line is the emoji of its type, its name (all the room there is: they can be long, the old ones
+** especially) and the number of days. The type, the copy to the comments and the delete show under the
+** description being edited only (.desc_active, set by js/account.js).
+*/
+
+.desc_row {
+	margin-bottom: 4px;
+	padding: 2px;
+	border-radius: 7px;
+}
+
+/* the description being edited: green, which no button is (they are grey); and the message that replaces a description once it is moved */
+.desc_row.desc_active,
+.desc_moved {
+	background-color: #d9f0e1;
+}
+
+@media (prefers-color-scheme: dark) {
+	.desc_row.desc_active,
+	.desc_moved {
+		background-color: #0a2014;
+	}
+}
+
+.desc_moved {
+	margin-bottom: 4px;
+	padding: 8px 10px;
+	border-radius: 7px;
+}
+
+.desc_row .f_edit_description {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.desc_row .i_desc_icon {
+	flex: 0 0 1.6em;
+	text-align: center;
+	cursor: default;
+}
+
+.desc_row .i_desc_name {
+	flex: 1 1 0;
+	min-width: 0;
 	height: 1.2em;
-	padding: 5px 0;
+}
+
+/* a name that does not fit shows it, and the whole of it is the tooltip */
+.desc_row .i_desc_name:not(:focus) {
+	text-overflow: ellipsis;
+}
+
+.desc_row .i_desc_count {
+	flex: 0 0 auto;
+	min-width: 1.5em;
 	text-align: center;
 	font-weight: bold;
 	color: gray;
 }
 
+.desc_actions {
+	display: none;
+	margin: 4px 0 2px calc(1.6em + 4px);
+}
+
+.desc_row.desc_active .desc_actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.desc_actions .i_desc_type {
+	width: auto;
+	max-width: 60%;
+	margin-right: 8px;
+}
+
+.f_comment_description .i_desc_comment,
 .f_delete_description .i_desc_del,
 #i_desc_validate_new {
 	box-sizing: content-box;
