@@ -21,6 +21,6 @@ $stats["moncycle_app_nb_total_observation"] = round(db_count_days($db), -2);
 
 echo json_encode($stats, JSON_PRETTY_PRINT);
 
-db_update_increment_key_value($db, "pub_visite_mensuel");
-db_update_increment_key_value($db, "pub_visite_hebdo");
-db_update_increment_key_value($db, "pub_visite_jour");
+db_update_increment_key_value($db, "pub_visit_monthly");
+db_update_increment_key_value($db, "pub_visit_weekly");
+db_update_increment_key_value($db, "pub_visit_daily");

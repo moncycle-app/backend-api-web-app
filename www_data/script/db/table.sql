@@ -110,6 +110,6 @@ CREATE TABLE `key_value` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 INSERT INTO `key_value` (`key`, `value`) VALUES
-('pub_visite_mensuel',	0),
-('pub_visite_hebdo',	0),
-('pub_visite_jour',	0);
+('pub_visit_monthly',	0),
+('pub_visit_weekly',	0),
+('pub_visit_daily',	0);

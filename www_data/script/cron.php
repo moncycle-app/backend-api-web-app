@@ -92,18 +92,18 @@ echo $deleted . " old login attempts (IP) deleted" . PHP_EOL;
 
 // THE VISIT COUNTERS: every day, every Sunday, the first of the month
 
-db_update_reset_key_value($db, "pub_visite_jour");
+db_update_reset_key_value($db, "pub_visit_daily");
 echo "daily stats reset";
 
 $today = getdate();
 
 if ($today["wday"] == 0) {
-	db_update_reset_key_value($db, "pub_visite_hebdo");
+	db_update_reset_key_value($db, "pub_visit_weekly");
 	echo ", weekly stats reset";
 }
 
 if ($today["mday"] == 1) {
-	db_update_reset_key_value($db, "pub_visite_mensuel");
+	db_update_reset_key_value($db, "pub_visit_monthly");
 	echo ", monthly stats reset";
 }
 

@@ -107,6 +107,11 @@ CHANGE `cle` `key` varchar(255) COLLATE 'utf8mb4_bin' NOT NULL FIRST,
 CHANGE `valeur` `value` bigint(20) unsigned NULL AFTER `key`,
 RENAME TO `key_value`;
 
+-- the visit counters of /api/pub_stat, with English names
+UPDATE `key_value` SET `key` = 'pub_visit_monthly' WHERE `key` = 'pub_visite_mensuel';
+UPDATE `key_value` SET `key` = 'pub_visit_weekly' WHERE `key` = 'pub_visite_hebdo';
+UPDATE `key_value` SET `key` = 'pub_visit_daily' WHERE `key` = 'pub_visite_jour';
+
 ALTER TABLE `user_account` CHANGE `decouvert` `register_comment` VARCHAR(255)  CHARACTER SET utf8mb4  BINARY  NULL  DEFAULT NULL;
 ALTER TABLE `day_timeline` CHANGE `gommette` `stamp` VARCHAR(3)  CHARACTER SET utf8mb4  BINARY  NOT NULL;
 ALTER TABLE `day_timeline` CHANGE `last_write_db` `last_write_db` TIMESTAMP NULL  DEFAULT CURRENT_TIMESTAMP  ON UPDATE CURRENT_TIMESTAMP;
