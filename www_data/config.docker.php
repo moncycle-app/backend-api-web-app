@@ -38,6 +38,12 @@ else define("SMTP_PASSWORD", env_string("SMTP_PASSWORD"));
 define("REGISTRATION_ENABLED", env_bool("REGISTRATION_ENABLED", env_bool("CREATION_COMPTE", true)));
 define("LOGIN_ENABLED", env_bool("LOGIN_ENABLED", env_bool("CONNEXION_COMPTE", true)));
 
+// Maintenance: every endpoint of the API answers 503 "maintenance" before it reads or writes anything (the
+// health check excepted: a container stuck "unhealthy" would be restarted), and script/cron.php refuses to run
+// (exit status 1, `system.cron_ended` with ok:false and msg "maintenance"). The migration scripts do not look at it:
+// they are run in maintenance.
+define("MAINTENANCE_MODE", env_bool("MAINTENANCE_MODE", false));
+
 define("CSV_SEP", env_string("CSV_SEP", ";"));
 
 // Lines of the Billings PDF chart: the grid of its table, the outline of a white stamp.

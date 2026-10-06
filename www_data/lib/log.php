@@ -318,12 +318,13 @@ function log_write(string $line): void {
 
 // Starts the log of a cron run, first thing: one request id for the run, `system.cron_started`, and
 // a shutdown function that writes `system.cron_ended` with ok:false if the run dies before
-// log_cron_end() (an uncaught exception, a fatal error, a timeout).
-function log_cron_start(): void {
+// log_cron_end() (an uncaught exception, a fatal error, a timeout). A dry run says so (`dry`) on both
+// lines; a normal run has no such key.
+function log_cron_start(bool $dry_run = false): void {
 	$state = &log_state();
-	$state["cron"] = ["started" => microtime(true), "done" => false, "count" => array_fill_keys(["sent", "ko", "del", "tok", "ipa"], 0)];
+	$state["cron"] = ["started" => microtime(true), "done" => false, "dry" => $dry_run ?: null, "count" => array_fill_keys(["sent", "ko", "del", "tok", "ipa"], 0)];
 	register_shutdown_function('log_cron_shutdown');
-	log_event("system.cron_started");
+	log_event("system.cron_started", ["dry" => $state["cron"]["dry"]]);
 }
 
 // Counts what the run did: sent and ko (mails), del (accounts deleted), tok (tokens purged), ipa
@@ -349,7 +350,7 @@ function log_cron_finish(bool $ok, ?string $message): void {
 	$state = &log_state();
 	if (($state["cron"]["done"] ?? true) === true) return;
 	$state["cron"]["done"] = true;
-	$fields = ["ok" => $ok, "ms" => (int) round((microtime(true) - $state["cron"]["started"]) * 1000)] + $state["cron"]["count"] + ["msg" => $message];
+	$fields = ["ok" => $ok, "dry" => $state["cron"]["dry"], "ms" => (int) round((microtime(true) - $state["cron"]["started"]) * 1000)] + $state["cron"]["count"] + ["msg" => $message];
 	log_event("system.cron_ended", $fields, $ok ? null : "error");
 }
 

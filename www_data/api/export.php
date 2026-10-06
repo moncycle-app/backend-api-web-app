@@ -15,6 +15,7 @@ require_once "../lib/nfp_export.php";
 require_once "../lib/sec.php";
 
 log_start(sec_client_ip());
+http_exit_if_maintenance();
 $db = db_open();
 $user_account = sec_auth_token($db);
 sec_redirect_if_logged_out($user_account);

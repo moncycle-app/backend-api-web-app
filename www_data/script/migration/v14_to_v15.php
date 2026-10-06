@@ -30,8 +30,8 @@ $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 // NOTE: MariaDB commits at every ALTER TABLE / CREATE TABLE / RENAME, so the transaction below protects the
 // data steps only, not the schema ones. A run that stops half way leaves a half migrated database: restore the
-// dump taken before (README, "Upgrading"), do not run the script again on it. The accounts deleted below are
-// final from the first ALTER on: the dump is the only way back.
+// dump taken before (README, "Upgrading"), do not run the script again on it. The accounts merged or deleted
+// below are final from the first ALTER on: the dump is the only way back.
 try {
 
     $db->exec("START TRANSACTION");
@@ -50,12 +50,16 @@ try {
 
     // Addresses are stored in lower case from v15 on (the file lowers the stored ones). v14 compared them exactly
     // (utf8mb4_bin), so `Alice@X.test` and `alice@x.test` could be two accounts: they would become one address and
-    // the unique key would refuse. For each such address one account is kept and the others are deleted (their days
-    // and tokens go with them, ON DELETE CASCADE): the one most likely to be the right one, and the report says why.
-    // This reads the v14 tables, before anything is changed.
+    // the unique key would refuse. For each such address one account is kept, the one most likely to be the right
+    // one, and each of the others is either merged into it or deleted:
+    //   - merged when the two hold no day on the same date: its days move to the kept account (nothing is lost but
+    //     its own settings, password and sessions, which the kept account's replace);
+    //   - deleted, with its days and tokens (ON DELETE CASCADE), when they hold a day on the same date: which of two
+    //     days of one date is the right one is not for a script to say.
+    // The report says why of every choice. This reads the v14 tables, before anything is changed.
 
     // What tells two accounts apart, strongest first: the column of the query below, and what the report says when
-    // the kept account wins on it (%1$s: its value, %2$s: the deleted account's). The query ranks on these columns,
+    // the kept account wins on it (%1$s: its value, %2$s: the other account's). The query ranks on these columns,
     // in this order, and the oldest account wins what is left: so the first column that differs is the reason.
     $criteria = [
         "enabled"       => 'the kept account is enabled, the other one is disabled and cannot log in',
@@ -67,7 +71,7 @@ try {
     // last_activity: the latest of the last login, the last use of a token and the last change of a day. GREATEST
     // answers NULL when one of its arguments is NULL, hence the oldest possible timestamp for "never".
     $accounts = $db->query(
-        "SELECT d.email, c.no_compte, c.email1, c.actif AS enabled, c.inscription_date, c.derniere_co_date,
+        "SELECT d.email, c.no_compte, c.email1, c.methode AS nfp_method, c.actif AS enabled, c.inscription_date, c.derniere_co_date,
                 (c.derniere_co_date IS NOT NULL OR COALESCE(j.tokens, 0) > 0) AS authenticated,
                 COALESCE(j.tokens, 0) AS tokens, COALESCE(o.day_count, 0) AS day_count, o.first_day, o.last_day,
                 NULLIF(GREATEST(COALESCE(c.derniere_co_date, '1970-01-01 00:00:01'),
@@ -87,8 +91,18 @@ try {
         $groups[$account["email"]][] = $account;
     }
 
+    // The dates both accounts hold a day on. Asked of the database each time, not worked out once: the days an account
+    // already took from another count (a third account may hold a date the second one brought).
+    $statement_count_shared_days = $db->prepare(
+        "SELECT COUNT(*) FROM observation AS k
+         INNER JOIN observation AS o ON o.date_obs = k.date_obs
+         WHERE k.no_compte = :kept AND o.no_compte = :other"
+    );
+    $statement_move_days = $db->prepare("UPDATE observation SET no_compte = :kept WHERE no_compte = :other");
     $statement_delete_account = $db->prepare("DELETE FROM compte WHERE no_compte = :no_compte");
 
+    $merged_accounts = 0;
+    $moved_days = 0;
     $deleted_accounts = 0;
     $deleted_days = 0;
     $deleted_tokens = 0;
@@ -101,8 +115,8 @@ try {
 
         foreach ($members as $member) {
             print(sprintf(
-                "    account %s \"%s\": %s, registered %s, last login %s, last activity %s, tokens %s, days %s%s",
-                $member["no_compte"], $member["email1"], $member["enabled"] ? "enabled" : "DISABLED", $member["inscription_date"],
+                "    account %s \"%s\": %s, method %s, registered %s, last login %s, last activity %s, tokens %s, days %s%s",
+                $member["no_compte"], $member["email1"], $member["enabled"] ? "enabled" : "DISABLED", $member["nfp_method"], $member["inscription_date"],
                 $member["derniere_co_date"] ?? "never", $member["last_activity"] ?? "never", $member["tokens"], $member["day_count"],
                 $member["day_count"] > 0 ? " (" . $member["first_day"] . " to " . $member["last_day"] . ")" : ""
             ));
@@ -114,25 +128,70 @@ try {
 
         foreach ($members as $loser) {
 
-            $reason = "nothing tells the two apart (same state, same data, same last use), the oldest account is kept";
-            foreach ($criteria as $column => $message) {
-                if ((string) $keeper[$column] !== (string) $loser[$column]) {
-                    $reason = sprintf($message, $keeper[$column] ?? "never", $loser[$column] ?? "never");
-                    break;
-                }
-            }
+            $statement_count_shared_days->bindValue(":kept", $keeper["no_compte"], PDO::PARAM_INT);
+            $statement_count_shared_days->bindValue(":other", $loser["no_compte"], PDO::PARAM_INT);
+            $statement_count_shared_days->execute();
+            $shared_days = (int) $statement_count_shared_days->fetchColumn();
 
-            print("  keeping account " . $keeper["no_compte"] . ", deleting account " . $loser["no_compte"] . ": " . $reason);
-            print(PHP_EOL);
-
-            // a choice to look at again: what goes held days, or was used more recently than what stays
+            // a choice to look at again: the one that was used more recently than what stays
             $used_more_recently = ($loser["last_activity"] ?? "") > ($keeper["last_activity"] ?? "");
-            if ($loser["day_count"] > 0 || $used_more_recently) {
-                print("  REVIEW account " . $loser["no_compte"] . " goes with its data (days " . $loser["day_count"] . ", tokens " . $loser["tokens"] . ")");
-                print($used_more_recently ? " and was used more recently than the kept account" : "");
+
+            if ($shared_days === 0) {
+
+                print("  keeping account " . $keeper["no_compte"] . ", merging account " . $loser["no_compte"] . " into it: no day on the same date, its days move to account "
+                    . $keeper["no_compte"] . " (days " . $loser["day_count"] . ")");
                 print(PHP_EOL);
-                $to_review++;
+
+                // what the merge drops is the settings of the merged account, so look at it again if it was the one in use
+                // (its method, name, password and sessions are gone)
+                if ($used_more_recently || $loser["nfp_method"] != $keeper["nfp_method"]) {
+                    print("  REVIEW account " . $loser["no_compte"] . " merged: its settings are lost");
+                    print($used_more_recently ? ", it was used more recently than the kept account" : "");
+                    print($loser["nfp_method"] != $keeper["nfp_method"] ? ", its method " . $loser["nfp_method"] . " differs from the kept account's " . $keeper["nfp_method"] : "");
+                    print(PHP_EOL);
+                    $to_review++;
+                }
+
+                // the days first: the account's own deletion takes with it whatever still belongs to it
+                $statement_move_days->bindValue(":kept", $keeper["no_compte"], PDO::PARAM_INT);
+                $statement_move_days->bindValue(":other", $loser["no_compte"], PDO::PARAM_INT);
+                $statement_move_days->execute();
+
+                if ($statement_move_days->rowCount() != $loser["day_count"]) {
+                    throw new RuntimeException("account " . $loser["no_compte"] . ": " . $statement_move_days->rowCount() . " days moved, " . $loser["day_count"] . " expected");
+                }
+
+                $merged_accounts++;
+                $moved_days += $loser["day_count"];
             }
+            else {
+
+                $reason = "nothing tells the two apart (same state, same data, same last use), the oldest account is kept";
+                foreach ($criteria as $column => $message) {
+                    if ((string) $keeper[$column] !== (string) $loser[$column]) {
+                        $reason = sprintf($message, $keeper[$column] ?? "never", $loser[$column] ?? "never");
+                        break;
+                    }
+                }
+
+                print("  keeping account " . $keeper["no_compte"] . ", deleting account " . $loser["no_compte"] . ": days on the same dates as the kept account ("
+                    . $shared_days . "), no merge; " . $reason);
+                print(PHP_EOL);
+
+                // a choice to look at again: what goes held days, or was used more recently than what stays
+                if ($loser["day_count"] > 0 || $used_more_recently) {
+                    print("  REVIEW account " . $loser["no_compte"] . " goes with its data (days " . $loser["day_count"] . ", tokens " . $loser["tokens"] . ")");
+                    print($used_more_recently ? " and was used more recently than the kept account" : "");
+                    print(PHP_EOL);
+                    $to_review++;
+                }
+
+                $deleted_accounts++;
+                $deleted_days += $loser["day_count"];
+            }
+
+            // its sessions go with it, in both cases
+            $deleted_tokens += $loser["tokens"];
 
             $statement_delete_account->bindValue(":no_compte", $loser["no_compte"], PDO::PARAM_INT);
             $statement_delete_account->execute();
@@ -140,10 +199,6 @@ try {
             if ($statement_delete_account->rowCount() != 1) {
                 throw new RuntimeException("account " . $loser["no_compte"] . " was not deleted");
             }
-
-            $deleted_accounts++;
-            $deleted_days += $loser["day_count"];
-            $deleted_tokens += $loser["tokens"];
         }
     }
 
@@ -152,10 +207,11 @@ try {
         throw new RuntimeException("some addresses are still held by several accounts");
     }
 
-    print(count($groups) . " addresses held by several accounts, " . $deleted_accounts . " accounts deleted with " . $deleted_days . " days and " . $deleted_tokens . " tokens");
+    print(count($groups) . " addresses held by several accounts: " . $merged_accounts . " accounts merged into another (" . $moved_days . " days moved), "
+        . $deleted_accounts . " deleted with " . $deleted_days . " days; " . $deleted_tokens . " tokens deleted with those accounts");
     print(PHP_EOL);
     if ($to_review > 0) {
-        print("!! " . $to_review . " deleted accounts to review (lines REVIEW above): if a choice is wrong, restore the dump taken before and decide by hand");
+        print("!! " . $to_review . " accounts to review (lines REVIEW above): if a choice is wrong, restore the dump taken before and decide by hand");
         print(PHP_EOL);
     }
 
@@ -182,7 +238,6 @@ try {
     $statement_select_desc = $db->prepare("SELECT no_description FROM description WHERE name = :desc_name AND no_user_account=:account_no LIMIT 1");
     $statement_insert_desc = $db->prepare("INSERT INTO `description` (`no_user_account`, `name`, `type`) VALUES (:no_user_account, :name, 0)");
     $statement_insert_link = $db->prepare("INSERT INTO `link_day_timeline_description` (`no_day`, `no_description`) VALUES (:observation_no, :description_no)");
-    $statement_remove_old_desc = $db->prepare("UPDATE `day_timeline` SET `sensation` = NULL WHERE `no_day` = :no_day");
     $statement_migrate_stamp = $db->prepare("UPDATE `day_timeline` SET `stamp` = :new_stamp WHERE `no_day` = :no_day");
 
 	$statement_select_obs->execute();
@@ -222,9 +277,6 @@ try {
                     $statement_migrate_stamp->bindValue(":no_day", $obs["no_day"], PDO::PARAM_INT);
                     $statement_migrate_stamp->bindValue(":new_stamp", $new_stamp, PDO::PARAM_STR);
                     $statement_migrate_stamp->execute();
-
-                    $statement_remove_old_desc->bindValue(":no_day", $obs["no_day"], PDO::PARAM_INT);
-                    $statement_remove_old_desc->execute();
                 } catch (PDOException $th) {
                     print($th->getMessage());
                 }
@@ -331,10 +383,10 @@ try {
     print("-----");
     print(PHP_EOL);
     print(PHP_EOL);
-    print("deleting old shema ...");
+    print("deleting old shema: the sensation column of day_timeline (its text is in description now) ...");
     print(PHP_EOL);
 
-    $db->exec("ALTER TABLE `day_timeline` DROP `sensation`");
+    $db->exec("ALTER TABLE `day_timeline` DROP `sensation`, ALGORITHM=INSTANT, LOCK=NONE");
 
     print("commiting DB changes ...");
     print(PHP_EOL);  

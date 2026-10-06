@@ -26,6 +26,12 @@ define("SMTP_PASSWORD", "");
 define("REGISTRATION_ENABLED", false);
 define("LOGIN_ENABLED", false);
 
+// Maintenance: every endpoint of the API answers 503 "maintenance" before it reads or writes anything (the
+// health check excepted: a container stuck "unhealthy" would be restarted), and script/cron.php refuses to run
+// (exit status 1, `system.cron_ended` with ok:false and msg "maintenance"). The migration scripts do not look at it:
+// they are run in maintenance.
+define("MAINTENANCE_MODE", false);
+
 define("CSV_SEP", ";");
 
 // Lines of the Billings PDF chart: the grid of its table, the outline of a white stamp. Set to

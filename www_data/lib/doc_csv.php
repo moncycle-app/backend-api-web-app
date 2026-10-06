@@ -65,8 +65,9 @@ function doc_csv_dump($out, array $rows): void {
 	fputs($out, PHP_EOL);
 }
 
-// Every day of the account as stored, for the raw data export. The legacy "sensation" column is
-// unused: its place is taken by the sensation and observation descriptions of the day.
+// Every day of the account as stored, for the raw data export. The days have no "sensation" column any
+// more (v15 moved its text into descriptions): the sensation and observation descriptions of the day
+// are two columns after the stamp, where it used to be.
 function doc_csv_raw_days($db, int $no_user_account): array {
 	$names_by_day = [];
 	foreach (db_select_descriptions_for_day_timeline_frame($db, "0000-00-00", "9999-12-31", $no_user_account) as $description) {
@@ -77,10 +78,8 @@ function doc_csv_raw_days($db, int $no_user_account): array {
 	foreach (db_select_all_day_timeline($db, $no_user_account) as $day) {
 		$row = [];
 		foreach ($day as $column => $value) {
-			if ($column !== "sensation") {
-				$row[$column] = $value;
-				continue;
-			}
+			$row[$column] = $value;
+			if ($column !== "stamp") continue;
 			$row["sensation"] = implode(DOC_CSV_LIST_JOINER, $names_by_day[$day["no_day"]][DESCRIPTION_TYPE_SENSATION] ?? []);
 			$row["observation"] = implode(DOC_CSV_LIST_JOINER, $names_by_day[$day["no_day"]][DESCRIPTION_TYPE_OBSERVATION] ?? []);
 		}

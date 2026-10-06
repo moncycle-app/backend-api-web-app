@@ -78,7 +78,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d
 ### Security
 
 - `script/` (cron, stats, migrations) answers only to the container itself: `APP_SCRIPT_ALLOW` (default `127.0.0.1 ::1`) is the list of IPs allowed in, everyone else gets a 403. Behind a reverse proxy Apache sees the proxy's address, not the caller's, so do not open it to an IP unless Apache gets the real client address.  
-- Run `script/cron.php` **once per day**, from the host, through the container, **as the web user**: `docker exec -u www-data <container> php /var/www/html/script/cron.php`. It purges expired session tokens, the captchas nobody used and old login attempts, stores the numbers `/api/pub_stat` answers, sends the cycle mails, the reminders to accounts that went quiet and the deletion warnings, and **deletes the accounts that have been inactive for `ACCOUNT_INACTIVITY_DELETE_YEARS` years** (4, in [constants.php](www_data/constants.php); RGPD retention). Do not run it on a database you have not backed up. As `www-data`, because `docker exec` runs as root otherwise, and a log file that root created first cannot be appended to by the web server (see [Logs](#logs)):  
+- Run `script/cron.php` **once per day**, from the host, through the container, **as the web user**: `docker exec -u www-data <container> php /var/www/html/script/cron.php`. It purges expired session tokens, the captchas nobody used and old login attempts, stores the numbers `/api/pub_stat` answers, sends the cycle mails, the reminders to accounts that went quiet and the deletion warnings, and **deletes the accounts that have been inactive for `ACCOUNT_INACTIVITY_DELETE_YEARS` years** (4, in [constants.php](www_data/constants.php); RGPD retention). Do not run it on a database you have not backed up (**`php /var/www/html/script/cron.php --dry-run`** reads and prints what a run would do, who would be mailed, which accounts and how many tokens would be deleted, and sends, deletes and writes nothing; any other argument is refused with exit status 2; it is off over HTTP). It fails in [maintenance mode](#maintenance-mode). As `www-data`, because `docker exec` runs as root otherwise, and a log file that root created first cannot be appended to by the web server (see [Logs](#logs)):  
   - More than once per day → may send duplicate emails.  
   - Less than once per day → expired tokens may not be deleted on time, causing missed emails.  
   - Through the CLI it has no time limit (`max_execution_time` is 30 s over HTTP, which can cut it short with many accounts).  
@@ -123,12 +123,22 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d
 Migrations are `www_data/script/migration/vN-1_to_vN.sql`, with a `.php` runner when the data has to move too; run them in order, one version at a time.
 
 1. **Dump the database first** (`mariadb-dump`), and try the migration on a copy of it: time it, and read its output. MariaDB commits at every `ALTER TABLE`, `CREATE TABLE` and `RENAME`, so the transaction of the script protects the data steps only, not the schema ones. A run that fails half way is undone by restoring the dump, never by running the script again.
-2. Stop the old container, or point the proxy away from it.
+2. Stop the old container, or point the proxy away from it, or start the new one with `MAINTENANCE_MODE=true` (see [Maintenance mode](#maintenance-mode)).
 3. Run the migration **inside a container of the new image** (it already has the database settings): `docker exec -w /var/www/html/script/migration <container> php v14_to_v15.php`. The script reads `./v14_to_v15.sql` from its working directory, hence `-w`; `script/` answers only to `127.0.0.1` over HTTP, so run it through the CLI as above.
-4. Outside Docker, a `config.php` written by hand needs the settings the new version adds: copy them from `config.exemple.php` (v15: `COOKIE_SAMESITE`, `WEB_APP_ORIGINS`, `TRUSTED_PROXIES`, `NEWS_URL`; the login ones before them). A missing one is a fatal "Undefined constant". The Docker image reads them from its environment and needs nothing.
+4. Outside Docker, a `config.php` written by hand needs the settings the new version adds: copy them from `config.exemple.php` (v15: `MAINTENANCE_MODE`, `COOKIE_SAMESITE`, `WEB_APP_ORIGINS`, `TRUSTED_PROXIES`, `NEWS_URL`; the login ones before them). A missing one is a fatal "Undefined constant". The Docker image reads them from its environment and needs nothing.
 5. Start the new image, log in, write a day, export it, log out, and read `docker logs` for `system.exception`.
 
-**v14 to v15** is a large one: it renames the tables and columns to English, moves the `sensation` text of each day into `description` rows linked to it, hashes the session tokens, and stores login addresses in lower case (`account_email_normalise`: `Alice@X.test` and `alice@x.test` become one account). v14 compared addresses exactly, so two accounts could already differ only by the case of theirs: for each such address the script keeps one account and deletes the others, with their days and tokens. It prefers an enabled account, then one that has authenticated, then the one holding more days, then the one used more recently, then the oldest, and its output gives the reason of every choice. A line `REVIEW` marks a deletion that takes days with it or an account used more recently than the one kept: read those on the copy of step 1, and decide by hand (from the dump) if one is wrong. It also gives `key_value` a primary key.
+**v14 to v15** is a large one: it renames the tables and columns to English, moves the `sensation` text of each day into `description` rows linked to it (and drops the `sensation` column at the end of the script), hashes the session tokens, and stores login addresses in lower case (`account_email_normalise`: `Alice@X.test` and `alice@x.test` become one account). v14 compared addresses exactly, so two accounts could already differ only by the case of theirs. For each such address the script keeps one account, preferring an enabled account, then one that has authenticated, then the one holding more days, then the one used more recently, then the oldest; and for each of the others: **if the two hold no day on the same date, it is merged** (its days move to the kept account, which keeps its own settings, password and sessions; the other's go), **otherwise it is deleted** with its days and tokens. Its output gives the reason of every choice. A line `REVIEW` marks a merge that drops the settings of an account used more recently than the one kept (or of another method), and a deletion that takes days with it or an account used more recently than the one kept: read those on the copy of step 1, and decide by hand (from the dump) if one is wrong. It also gives `key_value` a primary key.
+
+### Maintenance mode
+
+`MAINTENANCE_MODE=true` (an environment variable in Docker, `define("MAINTENANCE_MODE", true);` in a hand-written `config.php`; restart the container to change it) puts the back end in maintenance:
+
+- **The API.** Every endpoint answers `503` and `{"error": {"code": "maintenance", "message": ...}}` before it opens the database: nothing can be read or written, whoever is logged in, login, registration and the downloads (`/export`, `/all_of_my_data_plz`) included, and the visit counters do not move. The answer is the JSON envelope on every endpoint, a file or a redirect included. Two things stay up: `GET /api/health_check`, which still answers `200` when the database is reachable, so that a container in maintenance is not restarted as dead, and the static files (the pages, `GET /api/version`).
+- **The cron.** `script/cron.php` refuses to run, dry run included: it does not open the database and sends nothing, writes `system.cron_ended` with `ok:false` and `msg:"maintenance"` (level `error`), exits with status 1 (503 when called over HTTP) and prints `MAINTENANCE_MODE is on`.
+- **Not affected:** the migrations (`script/migration/`), which are what you run in maintenance, and `script/stat.php`.
+
+The web app does not know the code yet: its calls fail like any 5xx.
 
 ---
 
@@ -152,6 +162,7 @@ An unset or empty variable takes its default; **required** ones have none and th
 | `APP_URL` | `https://tableau.moncycle.app/` | Public URL of your instance, **with a trailing `/`**: it builds the links in mails and the TOTP QR code. Set it, or the links point to the official instance. |
 | `REGISTRATION_ENABLED` | `true` | Allow account creation. Formerly `CREATION_COMPTE`, still read. |
 | `LOGIN_ENABLED` | `true` | Allow login. Formerly `CONNEXION_COMPTE`, still read. |
+| `MAINTENANCE_MODE` | `false` | Maintenance: every endpoint of the API answers `503` with the error code `maintenance`, before it reads or writes anything (the health check excepted), and `script/cron.php` fails. See [Maintenance mode](#maintenance-mode). |
 | `CSV_SEP` | `;` | Separator of the CSV exports (with `;` temperatures use a decimal comma, otherwise a point). |
 | `PDF_BILLINGS_BORDERS` | `true` | Draw the lines of the Billings PDF chart; `false` gives a chart with no line at all. |
 | `LOGIN_ATTEMPTS_DECAY_MINUTES` | `60` | Failed logins on an account older than this restart the count; `0` counts nothing, so no captcha and no lockout. |
@@ -241,7 +252,7 @@ Every key the code can write. The first block is on every line.
 | `dt` | The `date_obs` of a day. |
 | `new` | The row was created by this write. |
 | `dsc` | Description id (`no_description`), or the ids of the descriptions a day save created. |
-| `dry` | The import was a dry run. |
+| `dry` | The import, or the cron run, was a dry run (the cron's lines carry it only when it is). |
 | `ovr` | The import was allowed to overwrite days (`override`). |
 | `rd` | Days the import file holds. |
 | `cr` | Days the import created (or would). |
@@ -303,8 +314,8 @@ Every key the code can write. The first block is on every line.
 | `mail.sent` | info | `kind`, `to`, `fil` | |
 | `mail.failed` | error | `kind`, `to`, `msg` | |
 | `system.exception` | error | `cls`, `sql`, `at`, `msg` | An uncaught exception (the client gets a 500 `unexpected_error`). A database exception has `sql` and no `msg`. |
-| `system.cron_started` | info | | |
-| `system.cron_ended` | info, **error** if it failed | `ok`, `ms`, `sent`, `ko`, `del`, `tok`, `ipa`, `msg` | `ok:false` when the run died before its end (uncaught exception, fatal error, timeout); the counters are what had been done by then. A mail that could not be sent is `ko` and a `mail.failed` line, and the run is still `ok:true`. |
+| `system.cron_started` | info | `dry` | |
+| `system.cron_ended` | info, **error** if it failed | `ok`, `dry`, `ms`, `sent`, `ko`, `del`, `tok`, `ipa`, `msg` | `ok:false` when the run died before its end (uncaught exception, fatal error, timeout), or was refused: `msg` is `maintenance` when `MAINTENANCE_MODE` is on and nothing was done. The counters are what had been done by then, so all 0 for a dry run. A mail that could not be sent is `ko` and a `mail.failed` line, and the run is still `ok:true`. |
 | `system.log_sink_failed` | error | `f`, `why` | The log file could not be opened or written; the lines go to `stdout`. At most once per request. |
 | `http.request` | info | `m`, `p`, `st`, `ms`, `err`, `n`, `full` | The end of every request that reached the app. A read is this line with a `GET`, the `uid`, the path and `n` / `full`: `full` is true for `GET /api/day` with no filter and `GET /api/sync` from the start. |
 

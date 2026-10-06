@@ -73,7 +73,10 @@ info:
     logged in. `409` means a conflict. `413` means the request body is over 256 KB, whichever
     endpoint it was sent to. `415` means a write was not sent as JSON, and `403` with the code
     `cross_origin_refused` means a browser page of another origin tried to write (both in
-    section 3). Check the status first, then the body.
+    section 3). `503` with the code `maintenance` means the operator put the server in
+    maintenance: every endpoint answers it, whatever the method, before it reads or writes
+    anything, and nothing was done; try again later. The only ones that do not are `GET /version`
+    (a static file) and `GET /health_check`. Check the status first, then the body.
 
     **Every response carries an `X-Request-Id` header** (but `GET /version`, a static file, and `GET /health_check`). It is
     the id the server's own log uses for that request: quote it when you report a problem. You
@@ -94,6 +97,10 @@ info:
     | `GET /all_of_my_data_plz` | a CSV file; `401` has no body |
 
     `GET /logout` is also special: it answers with an HTTP redirect, not a body.
+
+    The one answer that does not follow these exceptions is the maintenance `503` of rule 3: it
+    is an `error` envelope on every endpoint that gives it, `GET /pub_stat`, `GET /captcha`,
+    `GET /export`, `GET /all_of_my_data_plz` and `GET /logout` included.
 
     ## 3. Authentication
 
@@ -467,7 +474,9 @@ paths:
         For monitoring. The server answers `200` only if it can reach the database **and** get
         the expected result from a real query. Any other case is `503`.
 
-        Nothing is written and nothing personal is read, so you can poll this often.
+        Nothing is written and nothing personal is read, so you can poll this often. It keeps
+        answering while the server is in maintenance (see rule 3 of the introduction), so that a
+        container in maintenance is not taken for a dead one.
       security: []
       responses:
         "200":
@@ -2530,7 +2539,8 @@ components:
 
             Codes you may meet anywhere: `unauthorized` (no valid token), `invalid_json` (the body
             is not a JSON object), `unexpected_error` (a server fault — retry, then report it with
-            the `X-Request-Id` of the response).
+            the `X-Request-Id` of the response), `maintenance` (the server is in maintenance, status
+            `503`: nothing was read or done, try again later).
           example: invalid_credentials
         message:
           type: string

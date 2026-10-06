@@ -16,6 +16,7 @@ require_once "../lib/log.php";
 require_once "../lib/sec.php";
 
 log_start(sec_client_ip());
+http_exit_if_maintenance();
 $captcha = new CaptchaBuilder;
 $captcha->build();
 

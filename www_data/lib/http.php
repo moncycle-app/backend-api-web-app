@@ -35,6 +35,16 @@ function http_json_body(): array {
 	return $body;
 }
 
+// Ends the request with a 503 "maintenance" when MAINTENANCE_MODE is on, whoever calls and whatever the method:
+// every endpoint calls it first, before it opens the database (api_start() does for the JSON ones), so nothing
+// is read or written. The health check is the one that does not, or a container in maintenance would be
+// restarted as dead. The answer is the JSON envelope even for the endpoints that answer a file, an image or a redirect.
+function http_exit_if_maintenance(): void {
+	if (!MAINTENANCE_MODE) return;
+	header('Content-Type: application/json');
+	http_error(503, "maintenance", "The server is under maintenance. Try again later.");
+}
+
 function http_respond(int $status, array $body): never {
 	http_response_code($status);
 	echo json_encode($body);

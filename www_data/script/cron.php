@@ -15,11 +15,29 @@ require_once "../lib/log.php";
 require_once "../lib/mail.php";
 require_once "../lib/nfp_export.php";
 
-log_cron_start();
+// php cron.php [--dry-run]. --dry-run reads and says what a run would do, and sends, deletes and writes nothing.
+// Only the command line takes it, and anything else on it is refused: a typo must not turn a dry run into a real one.
+$arguments = PHP_SAPI === "cli" ? array_slice($_SERVER["argv"], 1) : [];
+$dry_run = in_array("--dry-run", $arguments, true);
+if (array_diff($arguments, ["--dry-run"])) {
+	fwrite(STDERR, "usage: php cron.php [--dry-run]" . PHP_EOL);
+	exit(2);
+}
+
+log_cron_start($dry_run);
 header("Content-Type: text/plain");
 
 echo "............................................................................." . PHP_EOL;
-echo "moncycle.app cron worker" . PHP_EOL;
+echo "moncycle.app cron worker" . ($dry_run ? " (DRY RUN: nothing is sent, deleted or written)" : "") . PHP_EOL;
+
+// MAINTENANCE: the run fails before it touches the database or sends anything (a dry run too: the database may be
+// in the middle of a migration or a restore). A failed run, for the cron of the host: exit status 1, and 503 over HTTP.
+if (MAINTENANCE_MODE) {
+	echo "MAINTENANCE_MODE is on: the cron did nothing." . PHP_EOL;
+	log_cron_finish(false, "maintenance");
+	if (PHP_SAPI !== "cli") http_response_code(503);
+	exit(1);
+}
 
 $db = db_open();
 
@@ -34,6 +52,11 @@ foreach (db_select_cycles_finished($db) as $account) {
 
 	$days = doc_export_days($db, $cycle_start, $account["cycle_complet"], $account);
 	if (count($days) < 5) continue;
+
+	if ($dry_run) {
+		echo "[dry run] would send the cycle of " . count($days) . " days to {$account["email1"]} (and {$account["email2"]})." . PHP_EOL;
+		continue;
+	}
 
 	$nfp_method = intval($account["nfp_method"]);
 	$csv = fopen('php://memory', 'rw');
@@ -58,6 +81,10 @@ foreach (db_select_cycles_finished($db) as $account) {
 
 foreach (db_select_user_account_inactive($db) as $account) {
 	log_context(["uid" => intval($account["no_user_account"])]);
+	if ($dry_run) {
+		echo "[dry run] would send a reminder to {$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
+		continue;
+	}
 	$sent = mail_send_reminder($account);
 	log_cron_count($sent ? "sent" : "ko");
 	if ($sent) db_update_is_inactive($db, $account["no_user_account"], 1);
@@ -68,6 +95,10 @@ foreach (db_select_user_account_inactive($db) as $account) {
 
 foreach (db_select_user_account_to_warn_before_deletion($db, ACCOUNT_INACTIVITY_DELETE_YEARS, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE) as $account) {
 	log_context(["uid" => intval($account["no_user_account"])]);
+	if ($dry_run) {
+		echo "[dry run] would send a deletion warning to {$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
+		continue;
+	}
 	$sent = mail_send_deletion_warning($account, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE);
 	log_cron_count($sent ? "sent" : "ko");
 	echo ($sent ? "deletion warning sent to " : "COULD NOT send a deletion warning to ") . "{$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
@@ -75,6 +106,10 @@ foreach (db_select_user_account_to_warn_before_deletion($db, ACCOUNT_INACTIVITY_
 
 foreach (db_select_user_account_to_delete($db, ACCOUNT_INACTIVITY_DELETE_YEARS) as $account) {
 	log_context(["uid" => intval($account["no_user_account"])]);
+	if ($dry_run) {
+		echo "[dry run] would delete account {$account["email1"]} (" . ACCOUNT_INACTIVITY_DELETE_YEARS . " years without activity, RGPD)" . PHP_EOL;
+		continue;
+	}
 	data_delete_account($db, $account, "inactivity");
 	log_cron_count("del");
 	echo "account {$account["email1"]} deleted (" . ACCOUNT_INACTIVITY_DELETE_YEARS . " years without activity, RGPD)" . PHP_EOL;
@@ -83,33 +118,40 @@ foreach (db_select_user_account_to_delete($db, ACCOUNT_INACTIVITY_DELETE_YEARS) 
 // EXPIRED TOKENS
 
 log_context(["uid" => null]);
-$deleted = db_delete_old_auth_token($db);
-log_cron_count("tok", $deleted);
-echo $deleted . " old tokens deleted" . PHP_EOL;
-$deleted = db_delete_old_login_attempt_ip($db);
-log_cron_count("ipa", $deleted);
-echo $deleted . " old login attempts (IP) deleted" . PHP_EOL;
+if ($dry_run) {
+	echo "[dry run] " . db_count_old_auth_token($db) . " old tokens would be deleted" . PHP_EOL;
+	echo "[dry run] " . db_count_old_login_attempt_ip($db) . " old login attempts (IP) would be deleted" . PHP_EOL;
+}
+else {
+	$deleted = db_delete_old_auth_token($db);
+	log_cron_count("tok", $deleted);
+	echo $deleted . " old tokens deleted" . PHP_EOL;
+	$deleted = db_delete_old_login_attempt_ip($db);
+	log_cron_count("ipa", $deleted);
+	echo $deleted . " old login attempts (IP) deleted" . PHP_EOL;
+}
 
 // THE PUBLIC NUMBERS OF /api/pub_stat: counted here, once a day, and not on every visit
 
-data_public_stats_store($db);
-echo "public stats stored" . PHP_EOL;
+if (!$dry_run) data_public_stats_store($db);
+echo ($dry_run ? "[dry run] public stats would be stored" : "public stats stored") . PHP_EOL;
 
 // THE VISIT COUNTERS: every day, every Sunday, the first of the month
 
-db_update_reset_key_value($db, "pub_visit_daily");
-echo "daily stats reset";
-
+$reset = $dry_run ? "would be reset" : "reset";
 $today = getdate();
 
+if (!$dry_run) db_update_reset_key_value($db, "pub_visit_daily");
+echo ($dry_run ? "[dry run] " : "") . "daily stats " . $reset;
+
 if ($today["wday"] == 0) {
-	db_update_reset_key_value($db, "pub_visit_weekly");
-	echo ", weekly stats reset";
+	if (!$dry_run) db_update_reset_key_value($db, "pub_visit_weekly");
+	echo ", weekly stats " . $reset;
 }
 
 if ($today["mday"] == 1) {
-	db_update_reset_key_value($db, "pub_visit_monthly");
-	echo ", monthly stats reset";
+	if (!$dry_run) db_update_reset_key_value($db, "pub_visit_monthly");
+	echo ", monthly stats " . $reset;
 }
 
 echo PHP_EOL;

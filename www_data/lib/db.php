@@ -230,13 +230,19 @@ function db_delete_auth_tokens_other($db, $no_user_account, $no_auth_token_kept)
 }
 
 // sessions not used for 40 days, or older than a year (those that expire: a captcha's does), and the
-// captchas of visitors who never logged in (no account), whose cookie lasts 2 days
+// captchas of visitors who never logged in (no account), whose cookie lasts 2 days. One condition for
+// the purge and for the count of the cron's dry run, which must agree.
+function db_sql_old_auth_token(): string {
+	return "((date_creation < CURDATE() - INTERVAL 365 DAY OR date_use < CURDATE() - INTERVAL 40 DAY) AND expire > 0)
+		OR (no_user_account IS NULL AND date_creation < NOW() - INTERVAL 2 DAY)";
+}
+
 function db_delete_old_auth_token($db) {
-	return db_exec($db,
-		"DELETE FROM auth_token
-		WHERE ((date_creation < CURDATE() - INTERVAL 365 DAY OR date_use < CURDATE() - INTERVAL 40 DAY) AND expire > 0)
-		OR (no_user_account IS NULL AND date_creation < NOW() - INTERVAL 2 DAY)"
-	);
+	return db_exec($db, "DELETE FROM auth_token WHERE " . db_sql_old_auth_token());
+}
+
+function db_count_old_auth_token($db): int {
+	return intval(db_value($db, "SELECT COUNT(*) FROM auth_token WHERE " . db_sql_old_auth_token()));
 }
 
 function db_select_auth_token_captcha($db, $auth_token_str): ?array {
@@ -277,8 +283,17 @@ function db_count_login_attempt_ip($db, $ip_address): int {
 	return intval(db_value($db, "SELECT COUNT(*) FROM login_attempt_ip WHERE ip_address = :ip_address AND date_attempt > NOW() - INTERVAL 15 MINUTE", ["ip_address" => $ip_address]));
 }
 
+// the attempts the cron purges, and the count of its dry run
+function db_sql_old_login_attempt_ip(): string {
+	return "date_attempt < NOW() - INTERVAL 1 DAY";
+}
+
 function db_delete_old_login_attempt_ip($db) {
-	return db_exec($db, "DELETE FROM login_attempt_ip WHERE date_attempt < NOW() - INTERVAL 1 DAY");
+	return db_exec($db, "DELETE FROM login_attempt_ip WHERE " . db_sql_old_login_attempt_ip());
+}
+
+function db_count_old_login_attempt_ip($db): int {
+	return intval(db_value($db, "SELECT COUNT(*) FROM login_attempt_ip WHERE " . db_sql_old_login_attempt_ip()));
 }
 
 // ---------------------------------------------------------------------------

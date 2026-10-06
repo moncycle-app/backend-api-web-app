@@ -37,7 +37,6 @@ CREATE TABLE `day_timeline` (
   `fc_score` varchar(32) COLLATE utf8mb4_bin DEFAULT NULL,
   `fc_arrow` varchar(1) COLLATE utf8mb4_bin DEFAULT NULL,
   `stamp` varchar(3) COLLATE utf8mb4_bin NOT NULL,
-  `sensation` varchar(256) COLLATE utf8mb4_bin DEFAULT NULL,
   `temperature` decimal(4,2) unsigned DEFAULT NULL,
   `time_temp_taken` time DEFAULT NULL,
   `is_peak` tinyint(1) unsigned DEFAULT NULL,
