@@ -19,7 +19,7 @@ $body = http_json_body();
 // DELETION OF THE ACCOUNT
 if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
 
-	if (empty($body["password"])) {
+	if (!is_string($body["password"] ?? null) || empty($body["password"])) {
 		http_error(400, "missing_password", "'password' is required to confirm account deletion.");
 	}
 

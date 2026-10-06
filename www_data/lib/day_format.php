@@ -163,10 +163,22 @@ function day_format_time(string $time): ?string {
 	return intval($m[1]) <= 23 && intval($m[2]) <= 59 && $seconds <= 59 ? sprintf("%s:%s:%02d", $m[1], $m[2], $seconds) : null;
 }
 
+// Free text a client sends for a varchar($max_chars) column (a label, a name): [the text cleaned as
+// day_format_clean_text() does, null], or [null, why it cannot be stored]. $field names it for the client.
+function day_format_text(mixed $value, string $field, int $max_chars): array {
+	if (!is_string($value)) return [null, "'$field' must be a string."];
+
+	$text = day_format_clean_text($value);
+	$length = mb_strlen($text);
+	if ($length > $max_chars) return [null, "'$field' is $length characters; the limit is $max_chars."];
+	return [$text, null];
+}
+
 // true when a field carries a value: "0" is a real FertilityCare code (dryness) and falsy in PHP,
-// so empty() cannot tell
+// so empty() cannot tell. A list is a value too (a wrong one: the validation says so), and is not
+// cast to a string.
 function day_format_filled(array $day, string $field): bool {
-	return isset($day[$field]) && (string) $day[$field] !== '';
+	return isset($day[$field]) && (!is_scalar($day[$field]) || (string) $day[$field] !== '');
 }
 
 // ---------------------------------------------------------------------------

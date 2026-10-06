@@ -147,7 +147,9 @@
 								invalid_email: "L'adresse email renseignée n'est pas valide.",
 								captcha_invalid: "Erreur dans la saisie du captcha.",
 								account_exists: "Un compte existe déjà pour cette adresse email.",
-								invalid_birth_year: "La date de naissance n'est pas réaliste."
+								invalid_birth_year: "La date de naissance n'est pas réaliste.",
+								invalid_first_name: "Le prénom est invalide ou trop long.",
+								invalid_discovered_comment: "Le commentaire est invalide ou trop long."
 							};
 							$("#register_error_msg").html(return_codes[err.code] || err.message || "Erreur inconnue.");
 							reactivate_form();

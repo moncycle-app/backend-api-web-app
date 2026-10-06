@@ -48,6 +48,12 @@ const PASSWORD_MIN_LENGTH = 8;
 const ACCOUNT_DEFAULT_LANGUAGE = "FR";    // user_account.language of a new account, until the user can choose
 const ACCOUNT_DEMO_ID = 2;      // the public demo account: never warned, never erased (see lib/db.php)
 
+// What user_account and auth_token can hold: the widths of their columns, and the birth years a person can give.
+const ACCOUNT_LIMIT_NAME_CHARS = 255;               // user_account.name varchar(255)
+const ACCOUNT_LIMIT_REGISTER_COMMENT_CHARS = 255;   // user_account.register_comment varchar(255)
+const ACCOUNT_BIRTH_YEAR_MAX_AGE = 100;             // this year, or up to this many years back (user_account.age is a smallint)
+const AUTH_TOKEN_USER_AGENT_BYTES = 200;            // auth_token.name varchar(256): "AUTH | " then the user agent, cut to this
+
 // RGPD retention, re-evaluated on every cron run (so no "warning sent" flag exists): an account
 // with no activity (login, or any write tied to it) for this many years is erased...
 const ACCOUNT_INACTIVITY_DELETE_YEARS = 4;

@@ -43,9 +43,11 @@ function sec_hash_token($token) {
 	return hash("sha256", $token);
 }
 
-// the session token cookie of the request, "" when there is none
+// the session token cookie of the request, "" when there is none (or when it is a list: a client can
+// send "MONCYCLEAPP_TOKEN[]=x", and PHP reads it as one)
 function sec_cookie_token(): string {
-	return $_COOKIE[COOKIE_AUTH_TOKEN] ?? "";
+	$token = $_COOKIE[COOKIE_AUTH_TOKEN] ?? "";
+	return is_string($token) ? $token : "";
 }
 
 function sec_set_token_cookie(string $token, string $lifetime): void {
@@ -74,6 +76,7 @@ function sec_clear_token_cookie(): void {
 // account and the session it finds are the ones every line of the request's log carries.
 function sec_auth_token($db) {
 	$auth_token = $_COOKIE[COOKIE_AUTH_TOKEN_LEGACY] ?? ""; // legacy, to be removed in a few release
+	if (!is_string($auth_token)) $auth_token = "";
 	if (sec_cookie_token() !== "") $auth_token = sec_cookie_token();
 	$head = getallheaders();
 	if (isset($head["Authorization"]) && str_contains($head["Authorization"], "Bearer ")) $auth_token = explode(' ', trim($head["Authorization"]), 2)[1];
@@ -106,12 +109,21 @@ function sec_redirect_if_logged_out($user_account) {
 	}
 }
 
+// The name a session is stored under: what it is for, then the browser's user agent. A header can
+// be 8 KB and is not always UTF-8, a column is 256 characters of it: the agent is made valid and
+// cut to fit, on a character boundary.
+function sec_device_name(string $kind): string {
+	$user_agent = mb_scrub($_SERVER['HTTP_USER_AGENT'] ?? '');
+	if (strlen($user_agent) > AUTH_TOKEN_USER_AGENT_BYTES) $user_agent = mb_strcut($user_agent, 0, AUTH_TOKEN_USER_AGENT_BYTES) . " ...";
+	return "$kind | $user_agent";
+}
+
 // Opens a session: stores a new token for the account, sets its cookie, and returns it. The new
 // session is the one the rest of the request's log names.
 function sec_auth_success($db, $user_account, $device=null) {
 	$auth_token = sec_random_password(256);
 
-	$no_auth_token = db_insert_auth_token($db, $user_account["no_user_account"], $device ?? ("AUTH | " . $_SERVER['HTTP_USER_AGENT']), "FR", sec_hash_token($auth_token));
+	$no_auth_token = db_insert_auth_token($db, $user_account["no_user_account"], $device ?? sec_device_name("AUTH"), "FR", sec_hash_token($auth_token));
 	log_context(["uid" => intval($user_account["no_user_account"]), "sid" => intval($no_auth_token)]);
 	db_update_user_account_logged_in($db, $user_account["no_user_account"]);
 	sec_set_token_cookie($auth_token, '+5 years');
@@ -163,6 +175,7 @@ function sec_totp_begin($db, array $user_account): array {
 
 // does the one-time code (spaces allowed) match the account's secret?
 function sec_totp_code_valid(array $user_account, $code): bool {
+	if (!is_string($code) && !is_int($code)) return false;
 	$code = intval(preg_replace('/\s+/', '', (string) $code));
 	return $code > 0 && TOTP::createFromSecret($user_account["totp_secret"])->verify($code);
 }
@@ -179,9 +192,7 @@ function sec_captcha_issue($db, string $phrase): void {
 
 	if (!$known) {
 		$cookie_token = sec_random_password(64);
-		$user_agent = $_SERVER['HTTP_USER_AGENT'];
-		if (strlen($user_agent) > 200) $user_agent = substr($user_agent, 0, 200) . " ...";
-		db_insert_auth_token($db, NULL, "CAPTCHA | " . $user_agent, "FR", $cookie_token, 3);
+		db_insert_auth_token($db, NULL, sec_device_name("CAPTCHA"), "FR", $cookie_token, 3);
 		sec_set_token_cookie($cookie_token, '+2 days');
 	}
 
@@ -198,12 +209,13 @@ function sec_captcha_take($db): ?string {
 	if (is_null($stored)) return null;
 
 	db_update_auth_token_use($db, $stored["no_auth_token"]);
-	// SECURITY: this prevents captcha re-use
-	db_update_auth_token_captcha($db, sec_cookie_token(), null);
-	return $stored["captcha"];
+	// SECURITY: this prevents captcha re-use. Reading the answer is not enough: requests sent together
+	// with one captcha all read it above, and the burn is what says which of them has it.
+	return db_update_auth_token_captcha_burn($db, sec_cookie_token()) ? $stored["captcha"] : null;
 }
 
 function sec_captcha_matches(?string $expected, $answer): bool {
+	if (!is_string($answer) && !is_int($answer)) return false;
 	return !is_null($expected) && strlen(trim((string) $answer)) > 0 && trim((string) $answer) === $expected;
 }
 
@@ -265,7 +277,7 @@ function sec_login($db, array $body): array {
 		return ["status" => $status, "code" => $code, "message" => $message, "meta" => $meta];
 	};
 
-	if (!isset($body["email"]) || !isset($body["password"]) || !filter_var($body["email"], FILTER_VALIDATE_EMAIL)) {
+	if (!isset($body["email"]) || !isset($body["password"]) || !is_string($body["password"]) || !filter_var($body["email"], FILTER_VALIDATE_EMAIL)) {
 		return $refuse(400, "missing_credentials", "'email' and 'password' are required.");
 	}
 
@@ -310,6 +322,7 @@ function sec_login($db, array $body): array {
 
 	$totp_active = $user_account["totp_state"] == TOTP_STATE_ACTIVE;
 	$code = $body["code"] ?? "";
+	if (!is_string($code) && !is_int($code)) $code = "";
 	if ($totp_active && !sec_totp_code_valid($user_account, $code)) {
 		// wrong or missing code: one outcome either way
 		$given = strlen((string) $code) > 0 && intval(preg_replace('/\s+/', '', (string) $code)) > 0;

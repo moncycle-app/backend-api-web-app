@@ -106,6 +106,14 @@ function db_select_user_account($db, $no_user_account): ?array {
 	return db_row($db, "SELECT * FROM user_account WHERE no_user_account = :no_user_account", ["no_user_account" => $no_user_account]);
 }
 
+// Takes the row of the account until the end of the transaction, so that the writes of one account go
+// one after the other. They read what exists and insert what is missing (a day, a label, a link):
+// two at once both find it missing, and the unique key refuses the second with an exception.
+// Answers whether the account exists.
+function db_select_user_account_for_update($db, $no_user_account): bool {
+	return db_value($db, "SELECT no_user_account FROM user_account WHERE no_user_account = :no_user_account FOR UPDATE", ["no_user_account" => $no_user_account]) !== false;
+}
+
 function db_select_user_account_by_email($db, $email): ?array {
 	return db_row($db, "SELECT * FROM user_account WHERE email1 = :email1", ["email1" => $email]);
 }
@@ -114,12 +122,20 @@ function db_select_user_account_exists($db, $email): bool {
 	return boolval(db_value($db, "SELECT COUNT(no_user_account) > 0 FROM user_account WHERE email1 = :email1", ["email1" => $email]));
 }
 
-function db_insert_user_account($db, $name, $nfp_method, $age, $email, $password_hash, $register_comment, $research) {
-	return db_insert($db,
-		"INSERT INTO user_account (name, nfp_method, age, email1, password, language, register_comment, research)
-		VALUES (:name, :nfp_method, :age, :email1, :password, :language, :register_comment, :research)",
-		["name" => $name, "nfp_method" => $nfp_method, "age" => $age, "email1" => $email, "password" => $password_hash, "language" => ACCOUNT_DEFAULT_LANGUAGE, "register_comment" => $register_comment, "research" => $research]
-	);
+// The new id, or null when the email already has an account: the unique key on email1 is what
+// decides, so of two registrations racing for one address only one gets an id.
+function db_insert_user_account($db, $name, $nfp_method, $age, $email, $password_hash, $register_comment, $research): ?string {
+	try {
+		return db_insert($db,
+			"INSERT INTO user_account (name, nfp_method, age, email1, password, language, register_comment, research)
+			VALUES (:name, :nfp_method, :age, :email1, :password, :language, :register_comment, :research)",
+			["name" => $name, "nfp_method" => $nfp_method, "age" => $age, "email1" => $email, "password" => $password_hash, "language" => ACCOUNT_DEFAULT_LANGUAGE, "register_comment" => $register_comment, "research" => $research]
+		);
+	}
+	catch (\PDOException $error) {
+		if (intval($error->errorInfo[1] ?? 0) === 1062) return null;   // MariaDB 1062: duplicate entry for a unique key
+		throw $error;
+	}
 }
 
 // $fields: name, email2, nfp_method, age, sponsor, timeline_asc, research, auto_mail_export (see account_apply_json())
@@ -219,6 +235,12 @@ function db_select_auth_token_captcha($db, $auth_token_str): ?array {
 
 function db_update_auth_token_captcha($db, $auth_token_str, $captcha) {
 	return db_exec($db, "UPDATE auth_token SET date_use = NOW(), captcha = :captcha WHERE auth_token_str = :auth_token_str", ["captcha" => $captcha, "auth_token_str" => $auth_token_str]);
+}
+
+// Burns the captcha answer of a token. True for one caller only: requests racing for the same answer
+// all read it, and the row lock makes every one but the first find it already gone.
+function db_update_auth_token_captcha_burn($db, $auth_token_str): bool {
+	return db_exec($db, "UPDATE auth_token SET captcha = NULL WHERE auth_token_str = :auth_token_str AND captcha IS NOT NULL", ["auth_token_str" => $auth_token_str]) > 0;
 }
 
 function db_update_user_account_logged_in($db, $no_user_account) {

@@ -715,6 +715,7 @@ function nfp_import_narrowed_note(string $date, string $name, int $recorded_type
 function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $overide, string $last_write_client_UTC, ?array &$written_days = null): array {
 	$written_days = [];
 	return db_transaction($db, function () use ($db, $no_user_account, $plan, $overide, $last_write_client_UTC, &$written_days) {
+		db_select_user_account_for_update($db, $no_user_account);
 		$created = [];
 		$overwritten = [];
 		$skipped = [];

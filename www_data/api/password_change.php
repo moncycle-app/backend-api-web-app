@@ -19,6 +19,10 @@ if (empty($body["oldPassword"]) || empty($body["newPassword"])) {
 	http_error(400, "missing_fields", "'oldPassword' and 'newPassword' are required.");
 }
 
+if (!is_string($body["oldPassword"]) || !is_string($body["newPassword"])) {
+	http_error(400, "invalid_parameter", "'oldPassword' and 'newPassword' must be strings.");
+}
+
 if (isset($body["logoutOtherDevices"]) && !is_bool($body["logoutOtherDevices"])) {
 	http_error(400, "invalid_parameter", "'logoutOtherDevices' must be true or false.");
 }
@@ -28,6 +32,11 @@ $user_account = db_select_user_account_by_email($db, $user_account["email1"]) ??
 
 if (strlen($body["newPassword"]) < PASSWORD_MIN_LENGTH) {
 	http_error(422, "password_too_short", "New password is too short (minimum " . PASSWORD_MIN_LENGTH . " characters).");
+}
+
+// bcrypt cannot hash a password holding a null byte (PHP throws)
+if (str_contains($body["newPassword"], "\0")) {
+	http_error(422, "password_invalid", "New password must not contain a null character.");
 }
 
 if (isset($user_account["password"]) && password_verify($body["newPassword"], $user_account["password"])) {

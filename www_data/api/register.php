@@ -10,6 +10,7 @@
 require_once "../config.php";
 require_once "../lib/api.php";
 require_once "../lib/account.php";
+require_once "../lib/day_format.php";
 require_once "../lib/mail.php";
 
 [$db, $user_account] = api_start(false);
@@ -46,23 +47,44 @@ if (db_select_user_account_exists($db, $body["email"])) {
 	http_error(409, "account_exists", "Account already exist.");
 }
 
-if (intval($body["birthYear"]) < (intval(date("Y")) - 100) || intval($body["birthYear"]) > intval(date("Y"))) {
+if (!account_birth_year_valid(intval($body["birthYear"]))) {
 	http_error(400, "invalid_birth_year", "Birth year is not realistic.");
+}
+
+[$first_name, $problem] = day_format_text($body["firstName"], "firstName", ACCOUNT_LIMIT_NAME_CHARS);
+if (!is_null($problem)) {
+	http_error(400, "invalid_first_name", $problem);
+}
+
+$discovered_comment = null;
+if (isset($body["discoveredComment"])) {
+	[$discovered_comment, $problem] = day_format_text($body["discoveredComment"], "discoveredComment", ACCOUNT_LIMIT_REGISTER_COMMENT_CHARS);
+	if (!is_null($problem)) {
+		http_error(400, "invalid_discovered_comment", $problem);
+	}
 }
 
 // the password is generated, and only sent by mail
 $password = sec_random_password();
 $nfp_method = account_method_id_from_json($body);
 $new_account_no = db_insert_user_account(
-	$db, $body["firstName"], $nfp_method, intval($body["birthYear"]), $body["email"], sec_hash($password),
-	$body["discoveredComment"] ?? null, boolval($body["okForResearch"] ?? false)
+	$db, $first_name, $nfp_method, intval($body["birthYear"]), $body["email"], sec_hash($password),
+	$discovered_comment, boolval($body["okForResearch"] ?? false)
 );
+
+// the address was taken between the check above and the insert: a second registration of the same
+// address sent at the same time
+if (is_null($new_account_no)) {
+	log_event("account.refused", ["act" => "register", "err" => "account_exists"]);
+	http_error(409, "account_exists", "Account already exist.");
+}
+
 log_context(["uid" => intval($new_account_no)]);
 log_event("account.registered", ["nfp" => $nfp_method]);
 
 http_data(201, [
 	"userId" => $new_account_no,
 	"email" => $body["email"],
-	"name" => $body["firstName"],
-	"welcomeEmailSent" => mail_send_welcome($body["firstName"], $body["email"], $password),
+	"name" => $first_name,
+	"welcomeEmailSent" => mail_send_welcome($first_name, $body["email"], $password),
 ]);

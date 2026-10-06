@@ -16,7 +16,7 @@ header('Content-Type: application/json');
 $db = db_open();
 
 $body = http_json_body();
-$email = trim((string) ($body["email"] ?? ""));
+$email = is_string($body["email"] ?? null) ? trim($body["email"]) : "";
 
 if (empty($email)) {
 	http_error(400, "missing_email", "'email' is required.");

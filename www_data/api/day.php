@@ -19,7 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] == "GET") {
 
 	$dates = [];
 	if (isset($_GET["date"])) {
-		$dates = array_map('date_parse_ymd', explode(",", $_GET["date"]));
+		$dates = is_string($_GET["date"]) ? array_map('date_parse_ymd', explode(",", $_GET["date"])) : [null];
 		if (in_array(null, $dates, true)) {
 			http_error(400, "invalid_date", "'date' must be one or more YYYY-MM-DD values separated by commas.");
 		}

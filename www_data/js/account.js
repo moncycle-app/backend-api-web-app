@@ -219,7 +219,7 @@ $(document).ready(function(){
 			let input_form = $(`<form
 				class="f_edit_description" id="f_edit_description_${description.no_description}">
 				<input type="hidden" name="no_description" value="${description.no_description}" />
-				<input class="i_desc_name" type="text" name="name" value="${description.name}" />
+				<input class="i_desc_name" type="text" name="name" value="${description.name}" maxlength="256" />
 				<select class="i_desc_type" name="type">
 					<option ${description.type==2 ? 'selected' : '' } value="2">🧠 Sensations</option>
 					<option ${description.type==1 ? 'selected' : '' } value="1">👀 Observation</option>

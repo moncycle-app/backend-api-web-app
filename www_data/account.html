@@ -50,7 +50,7 @@
 				<span id="desc_froms_container"><center>⏳</center></span><br />
 				<p>Créez une description:</p>
 				<form method="post" action="api/description" id="f_new_description">
-					<input id="i_desc_name_new" type="text" name="name" />
+					<input id="i_desc_name_new" type="text" name="name" maxlength="256" />
 					<select id="i_desc_type_new" name="type">
 						<option value="2">🧠 Sensations</option>
 						<option value="1">👀 Observation</option>
@@ -125,7 +125,7 @@
 			<h2>Modifier mes informations & préférences<span class="net_stat" id="net_stat"></span></h2>
 			<form action="../api/param" method="post" id="f_info_pref"><br />
 			<label for="i_name">Prénom(s):</label><br />
-			<input class="auto_save" type="text" id="i_name" required name="name" value="" /><br />
+			<input class="auto_save" type="text" id="i_name" required name="name" value="" maxlength="255" /><br />
 			<br />
 			<input class="auto_save" value="1" type="checkbox" id="i_timeline_asc" name="timeline_asc"/> <label for="i_timeline_asc">Afficher les date en ordre croissant (aujourd'hui en premier et les dates les plus anciennes en bas).</label><br />
 			<br />

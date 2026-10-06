@@ -88,6 +88,7 @@ function data_write_day($db, int $no_user_account, string $date, ?array $existin
 // Logged once the transaction has committed: which day, whether it is new, the descriptions it made.
 function data_save_day($db, int $no_user_account, string $date, array $day, string $last_write_client_UTC): bool {
 	[$no_day, $is_new, $created] = db_transaction($db, function () use ($db, $no_user_account, $date, $day, $last_write_client_UTC) {
+		db_select_user_account_for_update($db, $no_user_account);
 		$existing = db_select_day_timeline($db, $date, $no_user_account);
 
 		$known = [];
@@ -138,6 +139,7 @@ function data_delete_account($db, array $account, string $why): void {
 // never written has nothing to clear, and logs nothing.
 function data_clear_day($db, int $no_user_account, string $date, string $last_write_client_UTC): void {
 	$no_day = db_transaction($db, function () use ($db, $no_user_account, $date, $last_write_client_UTC) {
+		db_select_user_account_for_update($db, $no_user_account);
 		$existing = db_select_day_timeline($db, $date, $no_user_account);
 		return is_null($existing) ? null : data_write_day($db, $no_user_account, $date, $existing, [], [], $last_write_client_UTC);
 	});
@@ -147,19 +149,21 @@ function data_clear_day($db, int $no_user_account, string $date, string $last_wr
 
 // Creates a description ($no_description null), or renames and retypes one. A day shows its
 // descriptions by name and type, so the days carrying it are stamped written: the sync reports them.
-// Returns the id.
-function data_save_description($db, int $no_user_account, ?int $no_description, string $name, int $type, string $last_write_client_UTC): int {
+// Returns the id, or null when another description of the account already has that name.
+function data_save_description($db, int $no_user_account, ?int $no_description, string $name, int $type, string $last_write_client_UTC): ?int {
 	$is_new = is_null($no_description);
 
-	if ($is_new) {
-		$no_description = intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
-	}
-	else {
-		db_transaction($db, function () use ($db, $no_user_account, $no_description, $name, $type, $last_write_client_UTC) {
-			db_update_description_name_type($db, $no_user_account, $no_description, $name, $type, $last_write_client_UTC);
-			db_update_day_timeline_touch_description($db, $no_user_account, $no_description);
-		});
-	}
+	$no_description = db_transaction($db, function () use ($db, $no_user_account, $no_description, $name, $type, $last_write_client_UTC) {
+		db_select_user_account_for_update($db, $no_user_account);
+		if (db_select_description_name_exists($db, $name, $no_user_account, $no_description ?? 0)) return null;
+
+		if (is_null($no_description)) return intval(db_insert_description($db, $no_user_account, $name, $type, $last_write_client_UTC));
+
+		db_update_description_name_type($db, $no_user_account, $no_description, $name, $type, $last_write_client_UTC);
+		db_update_day_timeline_touch_description($db, $no_user_account, $no_description);
+		return $no_description;
+	});
+	if (is_null($no_description)) return null;
 
 	log_event("data.description_saved", ["dsc" => $no_description, "new" => $is_new]);
 	return $no_description;

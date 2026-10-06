@@ -537,7 +537,8 @@ paths:
               properties:
                 firstName:
                   type: string
-                  description: First name of the user, or both first names when a couple shares the account.
+                  maxLength: 255
+                  description: First name of the user, or both first names when a couple shares the account. Control characters are removed, and leading and trailing spaces.
                   example: Marie
                 email:
                   type: string
@@ -565,6 +566,7 @@ paths:
                   description: Does the user also record basal body temperature?
                 discoveredComment:
                   type: string
+                  maxLength: 255
                   description: Free-text answer to "how did you find this app?". Optional.
                   example: recommended by my midwife
                 okForResearch:
@@ -595,7 +597,7 @@ paths:
                         type: boolean
                         description: "`false` means the account exists but the password email could not be sent."
         "400":
-          description: "`missing_fields` | `invalid_email` | `invalid_birth_year`"
+          description: "`missing_fields` | `invalid_email` | `invalid_birth_year` | `invalid_first_name` | `invalid_discovered_comment` (not a string, or over 255 characters)"
           content:
             application/json:
               schema:
@@ -611,7 +613,8 @@ paths:
         "409":
           description: |-
             `already_authenticated` — you sent a valid token; log out first.
-            `account_exists` — this email already has an account.
+            `account_exists` — this email already has an account. Also the answer to a registration that
+            lost a race: two requests for the same address sent at the same time, only one creates it.
           content:
             application/json:
               schema:
@@ -732,7 +735,7 @@ paths:
                         description: Present and `true` when the **next** attempt on this account will need a captcha.
         "400":
           description: |-
-            `missing_credentials` — `email` or `password` is absent, empty, or the email is malformed.
+            `missing_credentials` — `email` or `password` is absent, empty, not a string, or the email is malformed.
           content:
             application/json:
               schema:
@@ -848,7 +851,7 @@ paths:
         "400":
           description: |-
             `missing_fields` — `oldPassword` or `newPassword` is absent or empty.
-            `invalid_parameter` — `logoutOtherDevices` is present but is not a JSON boolean.
+            `invalid_parameter` — `oldPassword` or `newPassword` is not a string, or `logoutOtherDevices` is present but is not a JSON boolean.
           content:
             application/json:
               schema:
@@ -864,6 +867,7 @@ paths:
         "422":
           description: |-
             `password_too_short` — fewer than 8 characters.
+            `password_invalid` — the new password holds a null character (`\u0000`).
             `password_unchanged` — the new password is the same as the current one.
           content:
             application/json:
@@ -1127,9 +1131,9 @@ paths:
 
         Things that surprise people:
 
-        - `name` is ignored when it is an empty string.
+        - `name` is ignored when it is not a string, is empty, or is longer than 255 characters.
         - `secondaryEmail` is ignored when it is not a valid address. Send `""` to remove it.
-        - `birthYear` is ignored when it is `0` or negative.
+        - `birthYear` is ignored when it is not the current year or one of the 100 years before.
         - `method` and `temperatureTracking` are stored together as one value. If you send only
           one of the two, **the other falls back to its default** (`billings`, and `false`).
           Always send both together. Both appear in `fieldsUpdated` under the single
@@ -1146,7 +1150,8 @@ paths:
               properties:
                 name:
                   type: string
-                  description: First name, or both first names when a couple shares the account. An empty string is ignored.
+                  maxLength: 255
+                  description: First name, or both first names when a couple shares the account. Ignored when empty or over 255 characters.
                   example: Marie
                 secondaryEmail:
                   type: string
@@ -1161,7 +1166,7 @@ paths:
                   description: Does the user also record basal temperature? **Always send `method` with it.**
                 birthYear:
                   type: integer
-                  description: Year of birth, for anonymous statistics. Ignored when `0` or negative.
+                  description: Year of birth, for anonymous statistics. Ignored unless it is the current year or up to 100 years earlier.
                   example: 1994
                 timelineAscending:
                   type: boolean
@@ -1249,7 +1254,7 @@ paths:
         "204":
           description: Account deleted. No body. Your token is now invalid.
         "400":
-          description: "`missing_password` | `invalid_json`"
+          description: "`missing_password` (absent, empty or not a string) | `invalid_json`"
           content:
             application/json:
               schema:
@@ -1667,7 +1672,7 @@ paths:
                 name:
                   type: string
                   maxLength: 256
-                  description: The label text. Unique per account, case-sensitive. Leading and trailing spaces are removed.
+                  description: The label text. Unique per account, case-sensitive. Leading and trailing spaces and control characters are removed, and the cleaned text is the one checked for a duplicate and for the length.
                   example: clear and stretchy
                 type:
                   type: string
@@ -1703,7 +1708,8 @@ paths:
                     $ref: '#/components/schemas/DescriptionWritten'
         "400":
           description: |-
-            `missing_fields` — `name` or `type` is absent or empty.
+            `missing_fields` — `name` or `type` is absent or empty (a name of spaces only is empty).
+            `invalid_name` — `name` is not a string, or is over 256 characters once cleaned.
             `invalid_id` — `id` is not an integer.
             `invalid_type` — `type` is not one of the three allowed values.
             `invalid_json` — the body is not a JSON object.

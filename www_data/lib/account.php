@@ -10,6 +10,7 @@
 // The user_account row as the code and the JSON API see it: its method, and what a
 // POST /api/account body changes.
 
+require_once __DIR__ . "/day_format.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/http.php";
 require_once __DIR__ . "/sec.php";
@@ -37,12 +38,20 @@ function account_method_id(string $method, bool $temperature_tracking): int {
 
 // The id a body's "method" and "temperatureTracking" ask for; Billings without temperature when absent.
 function account_method_id_from_json(array $body): int {
-	return account_method_id((string) ($body["method"] ?? NFP_METHOD_BILLINGS), boolval($body["temperatureTracking"] ?? false));
+	$method = $body["method"] ?? NFP_METHOD_BILLINGS;
+	return account_method_id(is_string($method) ? $method : NFP_METHOD_BILLINGS, boolval($body["temperatureTracking"] ?? false));
 }
 
 // ---------------------------------------------------------------------------
 // POST /api/account
 // ---------------------------------------------------------------------------
+
+// A birth year a person can give: this year, or up to ACCOUNT_BIRTH_YEAR_MAX_AGE years back. The
+// statistics average it, and user_account.age is a smallint.
+function account_birth_year_valid(int $year): bool {
+	$this_year = intval(date("Y"));
+	return $year >= $this_year - ACCOUNT_BIRTH_YEAR_MAX_AGE && $year <= $this_year;
+}
 
 // What a body changes of the account row: [the values db_update_user_account_settings() takes, the
 // JSON names of the fields it changes]. An absent or unusable field leaves the account as it is.
@@ -54,11 +63,13 @@ function account_apply_json(array $account, array $body): array {
 	];
 	$changed = [];
 
-	if (isset($body["name"]) && strlen((string) $body["name"]) > 0) {
-		$new["name"] = $body["name"];
+	// a name that is not a string, is empty or is longer than its column is unusable
+	[$name] = isset($body["name"]) ? day_format_text($body["name"], "name", ACCOUNT_LIMIT_NAME_CHARS) : [null];
+	if (!is_null($name) && $name !== '') {
+		$new["name"] = $name;
 		$changed[] = "name";
 	}
-	if (isset($body["secondaryEmail"]) && (empty($body["secondaryEmail"]) || filter_var($body["secondaryEmail"], FILTER_VALIDATE_EMAIL))) {
+	if (isset($body["secondaryEmail"]) && is_string($body["secondaryEmail"]) && ($body["secondaryEmail"] === '' || filter_var($body["secondaryEmail"], FILTER_VALIDATE_EMAIL))) {
 		$new["email2"] = $body["secondaryEmail"];
 		$changed[] = "secondaryEmail";
 	}
@@ -66,7 +77,7 @@ function account_apply_json(array $account, array $body): array {
 		$new["nfp_method"] = account_method_id_from_json($body);
 		$changed[] = "method";
 	}
-	if (!empty($body["birthYear"]) && intval($body["birthYear"]) >= 1) {
+	if (!empty($body["birthYear"]) && account_birth_year_valid(intval($body["birthYear"]))) {
 		$new["age"] = intval($body["birthYear"]);
 		$changed[] = "birthYear";
 	}
