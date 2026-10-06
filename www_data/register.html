@@ -29,6 +29,7 @@
 		<link rel="stylesheet" href="css/commun.css" />
 		<link rel="stylesheet" href="css/account.css" />
 		<script type="text/javascript" src="vendor/components/jquery/jquery.min.js"></script> 
+		<script type="text/javascript" src="js/store.js"></script>
 	</head>
 	<body>
 		<center>
@@ -95,7 +96,7 @@
 				window.location.replace('..');
 			}
 			else {
-				window.localStorage.clear();
+				moncycle_store.clear_storage();
 				$(document).ready(function(){
 					let year = new Date().getFullYear();
 					yera = year - (year%5);

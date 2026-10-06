@@ -51,14 +51,14 @@ Tested with:
 - Logs: the app writes its own (see [Logs](#logs)), to `docker logs` by default, next to Apache's and PHP's errors. There is no Apache access log in the image: it recorded query strings (a TOTP code, the dates of a read). The logs hold IP addresses and account ids: rotate them (see `docker-compose.exemple.yml`).  
 
 **Limits** (`server_conf/`):  
-- Apache: request body 32 MB (`LimitRequestBody`: a larger one gets a 413 before PHP reads anything), 30 s `Timeout`, 30 workers of ~21 MB each. Below that wall PHP reads a JSON body into memory: measured, a 20 MB body is read in full and one of 33 MB ends in a `memory_limit` fatal error (500), so keep the proxy's limit far lower (see below).  
+- Apache: request body 256 KB (a request to `/api/` whose `Content-Length` is larger gets a 413 `file_too_large` in the API's JSON envelope before any handler runs, so PHP never starts and logs nothing; `LimitRequestBody` is the same wall for a body sent in chunks, which has no `Content-Length`), 30 s `Timeout`, 30 workers of ~21 MB each. Without that early refusal PHP starts, logs "POST Content-Length of N bytes exceeds the limit" and reads a JSON body into memory: measured, a 20 MB body is read in full and one of 33 MB ends in a `memory_limit` fatal error (500).  
 - PHP: `memory_limit` 32M (do not lower it without measuring the peak memory of a multi-year export), `max_execution_time` 30, `file_uploads` Off.  
-- `post_max_size` (256K) is coupled with `NFP_LIMIT_BODY_BYTES` in [constants.php](www_data/constants.php): change both or neither. It does **not** cap a raw JSON body (read from `php://input`): the caps are Apache's 32 MB and, for `/api/import`, the app's own 256K check.  
+- `post_max_size` (256K) is coupled with `NFP_LIMIT_BODY_BYTES` in [constants.php](www_data/constants.php) and with Apache's `LimitRequestBody` and `Content-Length` test in [zz-moncycleapp.conf](server_conf/zz-moncycleapp.conf): change the three or none. It does **not** cap a raw JSON body (read from `php://input`): the cap is Apache's 256K and, for `/api/import`, the app's own check of the same size.  
 
 **What the reverse proxy in front must do** (the image serves plain HTTP and is made to sit behind one):  
 - TLS and an http → https redirect. The image sends `Strict-Transport-Security` itself when the request carries `X-Forwarded-Proto: https`: make the proxy set that header. If the proxy already sends HSTS, remove that line from `server_conf/zz-moncycleapp.conf` to avoid a duplicate.  
 - Rate-limit `/api/login`, `/api/register` and `/api/recover_password`. The last one sleeps 1 to 5 s on purpose and holds one of the 30 workers meanwhile.  
-- A body limit of 256 KB (`client_max_body_size 256k` with nginx), far stricter than Apache's.  
+- A body limit of 256 KB (`client_max_body_size 256k` with nginx): the same as Apache's, so a request that is too large is refused at the edge before it costs a worker.  
 - Block `/script/` too (defence in depth).  
 
 ---
@@ -169,7 +169,7 @@ Every key the code can write. The first block is on every line.
 | `new` | The row was created by this write. |
 | `dsc` | Description id (`no_description`), or the ids of the descriptions a day save created. |
 | `dry` | The import was a dry run. |
-| `ovr` | The import was allowed to overwrite days (`overide`). |
+| `ovr` | The import was allowed to overwrite days (`override`). |
 | `rd` | Days the import file holds. |
 | `cr` | Days the import created (or would). |
 | `ow` | Days the import overwrote (or would). |

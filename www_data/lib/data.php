@@ -83,13 +83,31 @@ function data_write_day($db, int $no_user_account, string $date, ?array $existin
 	return $no_day;
 }
 
+// When the row of a day was last written, by the clock of the client that wrote it -- but never
+// later than the database's own clock for that write: a client whose clock runs ahead must not be
+// able to keep the others out of the day. Null for a day never written.
+function data_day_last_write(?array $existing): ?string {
+	if (is_null($existing) || empty($existing["last_write_client_UTC"])) return null;
+	return empty($existing["last_write_db"]) ? $existing["last_write_client_UTC"] : min($existing["last_write_client_UTC"], $existing["last_write_db"]);
+}
+
+// A write is out of date when the day it targets was written, by the clock of its client, after the
+// moment it carries: a device that was offline replays what it did before another one wrote.
+// The same moment is not newer: a write sent twice goes through twice.
+function data_day_is_newer(?array $existing, string $last_write_client_UTC): bool {
+	$last_write = data_day_last_write($existing);
+	return !is_null($last_write) && $last_write > $last_write_client_UTC;
+}
+
 // Saves a day the API received, checked and cleaned by day_format_validate(): in one transaction, its
-// fields and its free-text descriptions (created when a name is new). True when the day is new.
+// fields and its free-text descriptions (created when a name is new). True when the day is new, null
+// when it is not saved because the stored day is newer than the write (data_day_is_newer()).
 // Logged once the transaction has committed: which day, whether it is new, the descriptions it made.
-function data_save_day($db, int $no_user_account, string $date, array $day, string $last_write_client_UTC): bool {
-	[$no_day, $is_new, $created] = db_transaction($db, function () use ($db, $no_user_account, $date, $day, $last_write_client_UTC) {
+function data_save_day($db, int $no_user_account, string $date, array $day, string $last_write_client_UTC): ?bool {
+	$saved = db_transaction($db, function () use ($db, $no_user_account, $date, $day, $last_write_client_UTC) {
 		db_select_user_account_for_update($db, $no_user_account);
 		$existing = db_select_day_timeline($db, $date, $no_user_account);
+		if (data_day_is_newer($existing, $last_write_client_UTC)) return null;
 
 		$known = [];
 		$no_descriptions = [];
@@ -105,8 +123,10 @@ function data_save_day($db, int $no_user_account, string $date, array $day, stri
 		$no_day = data_write_day($db, $no_user_account, $date, $existing, day_format_from_json($day), $no_descriptions, $last_write_client_UTC);
 		return [$no_day, is_null($existing), $created];
 	});
+	if (is_null($saved)) return null;
 
-	log_event("data.day_saved", ["day" => $no_day, "dt" => $date, "new" => $is_new, "dsc" => $created ?: null]);
+	[$no_day, $is_new, $created] = $saved;
+	log_event("data.day_saved",["day" => $no_day, "dt" => $date, "new" => $is_new, "dsc" => $created ?: null]);
 	return $is_new;
 }
 
@@ -136,15 +156,18 @@ function data_delete_account($db, array $account, string $why): void {
 
 // Clears a day: its fields, and its descriptions with them. The row stays, empty, stamped with when
 // it was cleared: that is how GET /api/sync tells the other clients the day is gone. A date that was
-// never written has nothing to clear, and logs nothing.
-function data_clear_day($db, int $no_user_account, string $date, string $last_write_client_UTC): void {
-	$no_day = db_transaction($db, function () use ($db, $no_user_account, $date, $last_write_client_UTC) {
+// never written has nothing to clear, and logs nothing. False when the day is not cleared because it
+// is newer than the clear (data_day_is_newer()).
+function data_clear_day($db, int $no_user_account, string $date, string $last_write_client_UTC): bool {
+	[$no_day, $cleared] = db_transaction($db, function () use ($db, $no_user_account, $date, $last_write_client_UTC) {
 		db_select_user_account_for_update($db, $no_user_account);
 		$existing = db_select_day_timeline($db, $date, $no_user_account);
-		return is_null($existing) ? null : data_write_day($db, $no_user_account, $date, $existing, [], [], $last_write_client_UTC);
+		if (data_day_is_newer($existing, $last_write_client_UTC)) return [null, false];
+		return [is_null($existing) ? null : data_write_day($db, $no_user_account, $date, $existing, [], [], $last_write_client_UTC), true];
 	});
 
 	if (!is_null($no_day)) log_event("data.day_cleared", ["day" => $no_day, "dt" => $date]);
+	return $cleared;
 }
 
 // Creates a description ($no_description null), or renames and retypes one. A day shows its

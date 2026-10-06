@@ -16,7 +16,8 @@
 **    data_account;
 **  - a change of a day is applied to the copy first, then sent. Until the server has taken it, it
 **    waits in a queue (data_pending, in localStorage too, so closing the page loses nothing) and the
-**    page is told whenever it could not be sent;
+**    page is told whenever it could not be sent. A description made here waits the same way
+**    (data_pending_descriptions) and is shown with the others meanwhile;
 **  - GET /api/sync brings what was changed elsewhere, and the cursor it gives is kept
 **    (data_last_sync);
 **  - when the session ends, all of localStorage goes. When the app is updated (api/version changes),
@@ -28,7 +29,7 @@ const moncycle_store = {
 
 	// Bump it when what is kept in localStorage changes shape: the copy of the versions before is dropped.
 	schema : 2,
-	keys : {version : "data_version", last_sync : "data_last_sync", account : "data_account", descriptions : "data_descriptions", pending : "data_pending", stale : "data_stale", day : "data_day_"},
+	keys : {version : "data_version", last_sync : "data_last_sync", account : "data_account", descriptions : "data_descriptions", pending : "data_pending", pending_descriptions : "data_pending_descriptions", stale : "data_stale", day : "data_day_"},
 	// what the versions before this one kept in localStorage, and nobody reads any more
 	legacy_keys : ["description", "constante", "day_timeline", "timeline_asc"],
 
@@ -38,10 +39,12 @@ const moncycle_store = {
 	account : null,     // KeyInfos
 	last_sync : null,   // the syncTimestamp of the last merged answer
 	pending : {},       // date -> {op: "post", body: the POST /api/day body} | {op: "delete", lastWriteClientUtc}
+	pending_descriptions : [],  // [{name, type: "observation" | "sensation", lastWriteClientUtc}]: made here, not yet created by the server
 	stale : [],         // dates of days whose copy is wrong (a write of them was refused): to download again
 
 	// short-lived state
 	touched : {},       // date -> true: written here since the running sync started (its answer is older)
+	created : [],       // [Description] the server created since the running sync started (its answer is older)
 	syncing : null,     // the promise of the running sync
 	flushing : null,    // the promise of the running flush
 	checked_version : false,
@@ -82,7 +85,7 @@ const moncycle_store = {
 		moncycle_store.emit("status", {syncing : !!(moncycle_store.syncing || moncycle_store.flushing), pending : moncycle_store.pending_count(), error : moncycle_store.error});
 	},
 	pending_count : function () {
-		return Object.keys(moncycle_store.pending).length;
+		return Object.keys(moncycle_store.pending).length + moncycle_store.pending_descriptions.length;
 	},
 
 	/* -----------------------------------------------------------------------
@@ -119,25 +122,34 @@ const moncycle_store = {
 		}
 		return found;
 	},
-	// Forgets the copy. The queue of unsent changes stays when asked: an update of the app is no
+	// Forgets the copy. The queues of unsent changes stay when asked: an update of the app is no
 	// reason to lose what the user did offline.
 	wipe_data : function (keep_pending) {
 		let queue = keep_pending ? moncycle_store.read(moncycle_store.keys.pending) : null;
+		let queue_descriptions = keep_pending ? moncycle_store.read(moncycle_store.keys.pending_descriptions) : null;
 		moncycle_store.data_keys().forEach(function (key) { localStorage.removeItem(key); });
 		moncycle_store.days = {};
 		moncycle_store.descriptions = [];
 		moncycle_store.account = null;
 		moncycle_store.last_sync = null;
 		moncycle_store.pending = queue || {};
+		moncycle_store.pending_descriptions = queue_descriptions || [];
 		moncycle_store.stale = [];
 		if (queue) moncycle_store.write(moncycle_store.keys.pending, queue);
+		if (queue_descriptions) moncycle_store.write(moncycle_store.keys.pending_descriptions, queue_descriptions);
+	},
+	// Everything the browser holds for the account goes: the copy, the queue of unsent changes, the user id, the
+	// view chosen. The one place that empties localStorage: the pages that sign in, sign out or delete the account
+	// call it too, they do not clear it themselves.
+	clear_storage : function () {
+		try { localStorage.clear(); } catch (e) { }
 	},
 	// The session is over: the copy is personal health data, so nothing of it stays in the browser.
 	expire_session : function () {
 		if (moncycle_store.expired) return;
 		moncycle_store.expired = true;
 		clearTimeout(moncycle_store.retry_timer);
-		try { localStorage.clear(); } catch (e) { }
+		moncycle_store.clear_storage();
 		window.location.replace("/auth");
 	},
 	// 401 "unauthorized" is a session that is over. Another 401 is an answer of an endpoint to a
@@ -170,6 +182,7 @@ const moncycle_store = {
 		moncycle_store.account = moncycle_store.read(moncycle_store.keys.account);
 		moncycle_store.last_sync = moncycle_store.read(moncycle_store.keys.last_sync);
 		moncycle_store.pending = moncycle_store.read(moncycle_store.keys.pending) || {};
+		moncycle_store.pending_descriptions = moncycle_store.read(moncycle_store.keys.pending_descriptions) || [];
 		moncycle_store.stale = moncycle_store.read(moncycle_store.keys.stale) || [];
 		// a copy without a cursor, or without the account, is not one to trust
 		if (!moncycle_store.account || !moncycle_store.last_sync) {
@@ -370,10 +383,24 @@ const moncycle_store = {
 		moncycle_store.flush().catch(function () { });
 		return followed.days;
 	},
-	// A description the server has just created.
-	add_description : function (description) {
-		moncycle_store.descriptions.push({id : description.id, name : description.name, type : description.type, useCount : 0});
-		moncycle_store.write(moncycle_store.keys.descriptions, moncycle_store.descriptions);
+	// The descriptions of the account as the page shows them: the server's, and the ones made here that the
+	// server has not created yet (no id: the name is what a day carries a description by).
+	all_descriptions : function () {
+		let known = {};
+		moncycle_store.descriptions.forEach(function (description) { known[description.name] = true; });
+		let unsent = moncycle_store.pending_descriptions.filter(function (entry) { return !known[entry.name]; }).map(function (entry) {
+			return {id : null, name : entry.name, type : entry.type, useCount : 0};
+		});
+		return moncycle_store.descriptions.concat(unsent);
+	},
+	// A new description (type: "observation" or "sensation"; the page has checked the name is not taken). It is
+	// shown at once and sent when the server can be reached: a day that carries it by name creates it too, so
+	// whichever arrives first, the other finds it there.
+	queue_description : function (name, type, last_write_client_utc) {
+		moncycle_store.pending_descriptions.push({name : name, type : type, lastWriteClientUtc : last_write_client_utc || null});
+		moncycle_store.write(moncycle_store.keys.pending_descriptions, moncycle_store.pending_descriptions);
+		moncycle_store.emit("changed", {days : [], descriptions : true, account : false, source : "local"});
+		moncycle_store.flush().catch(function () { });
 	},
 
 	// Sends the queue, oldest first, one request at a time. Resolves when it is empty. Rejects when something
@@ -391,27 +418,32 @@ const moncycle_store = {
 		return moncycle_store.flushing;
 	},
 	flush_queue : async function () {
-		let failed = {};   // dates the server could not take in this pass
+		let failed = {};   // what the server could not take in this pass: a date, or "description:" and a name
 		let failure = null;
 		while (true) {
-			let date = Object.keys(moncycle_store.pending).find(function (queued) { return !(queued in failed); });
-			if (date === undefined) break;
-			let entry = moncycle_store.pending[date];
+			// the descriptions first: a day sent after them finds them there
+			let description = moncycle_store.pending_descriptions.find(function (queued) { return !(("description:" + queued.name) in failed); });
+			let date = description ? undefined : Object.keys(moncycle_store.pending).find(function (queued) { return !(queued in failed); });
+			if (description === undefined && date === undefined) break;
+			let entry = description || moncycle_store.pending[date];
+			let key = description ? "description:" + description.name : date;
 			try {
-				let answer = await moncycle_store.send(date, entry);
-				moncycle_store.sent(date, entry, answer);
+				let answer = await (description ? moncycle_store.send_description(description) : moncycle_store.send(date, entry));
+				if (description) moncycle_store.description_sent(description, answer);
+				else moncycle_store.sent(date, entry, answer);
 			}
 			catch (jqXHR) {
 				if (moncycle_store.expired || moncycle_store.is_unauthorized(jqXHR)) throw jqXHR;
 				let error = moncycle_store.error_of(jqXHR);
 				if (error.kind == "rejected") {
-					moncycle_store.rejected(date, entry, error);
+					if (description) await moncycle_store.description_rejected(description, error);
+					else moncycle_store.rejected(date, entry, error);
 					await moncycle_store.reload_stale().catch(function () { });
 					continue;
 				}
 				moncycle_store.error = error;
 				failure = jqXHR;
-				failed[date] = true;
+				failed[key] = true;
 				if (error.kind == "network") break;
 			}
 		}
@@ -429,6 +461,9 @@ const moncycle_store = {
 		}
 		return moncycle_store.request("POST", "api/day", entry.body);
 	},
+	send_description : function (entry) {
+		return moncycle_store.request("POST", "api/description", {name : entry.name, type : entry.type, lastWriteClientUtc : entry.lastWriteClientUtc});
+	},
 	// The server took a write. Unless the user wrote that day again meanwhile (then the queue holds a
 	// newer entry, and the copy is newer than this answer), the copy gets the day as the server holds it.
 	sent : function (date, entry, answer) {
@@ -445,6 +480,45 @@ const moncycle_store = {
 		}
 		moncycle_store.emit("sent", {date : date});
 		moncycle_store.emit_status();
+	},
+	// The server created a description made here: it is in its list from now on, not in the queue.
+	description_sent : function (entry, answer) {
+		moncycle_store.retry_count = 0;
+		moncycle_store.error = null;
+		moncycle_store.unqueue_description(entry);
+		if (answer && answer.data && !moncycle_store.descriptions.some(function (known) { return known.name === answer.data.name; })) {
+			let description = {id : answer.data.id, name : answer.data.name, type : answer.data.type, useCount : 0};
+			moncycle_store.descriptions.push(description);
+			moncycle_store.created.push(description);
+			moncycle_store.write(moncycle_store.keys.descriptions, moncycle_store.descriptions);
+		}
+		moncycle_store.emit("changed", {days : [], descriptions : true, account : false, source : "server"});
+		moncycle_store.emit_status();
+	},
+	unqueue_description : function (entry) {
+		let at = moncycle_store.pending_descriptions.indexOf(entry);
+		if (at >= 0) moncycle_store.pending_descriptions.splice(at, 1);
+		moncycle_store.write(moncycle_store.keys.pending_descriptions, moncycle_store.pending_descriptions);
+	},
+	// The server refused a description made here. A name that is taken is not a failure: the server has it (another
+	// device made it, or a day carried it by name), its list is read again. Anything else is dropped, and said.
+	description_rejected : async function (entry, error) {
+		moncycle_store.unqueue_description(entry);
+		if (error.code == "duplicate_name") {
+			await moncycle_store.reload_descriptions().catch(function () { });
+			moncycle_store.emit("changed", {days : [], descriptions : true, account : false, source : "server"});
+			moncycle_store.emit_status();
+			return;
+		}
+		moncycle_store.error = {kind : "rejected", code : error.code, message : error.message, date : null};
+		moncycle_store.emit("changed", {days : [], descriptions : true, account : false, source : "server"});
+		moncycle_store.emit("failed", {date : null, message : error.message, issues : []});
+		moncycle_store.emit_status();
+	},
+	reload_descriptions : async function () {
+		let answer = await moncycle_store.request("GET", "api/description");
+		moncycle_store.descriptions = answer.data || [];
+		moncycle_store.write(moncycle_store.keys.descriptions, moncycle_store.descriptions);
 	},
 	// The server refused a write for good (the day it was given cannot be stored): the change is dropped,
 	// the page is told why, and the day is downloaded again: the server holds something else than the copy.
@@ -536,6 +610,7 @@ const moncycle_store = {
 
 	pull : function () {
 		moncycle_store.touched = {};
+		moncycle_store.created = [];
 		// the first sync has no cursor: the server then reads from the start
 		let query = moncycle_store.last_sync ? "?fromTimestamp=" + encodeURIComponent(moncycle_store.last_sync) : "";
 		return moncycle_store.request("GET", "api/sync" + query).then(function (ret) {
@@ -562,10 +637,16 @@ const moncycle_store = {
 			if (before !== JSON.stringify(moncycle_store.days[day.date])) changes.days.push(day.date);
 		});
 
-		if (data.descriptions && JSON.stringify(data.descriptions) !== JSON.stringify(moncycle_store.descriptions)) {
-			moncycle_store.descriptions = data.descriptions;
-			moncycle_store.write(moncycle_store.keys.descriptions, data.descriptions);
-			changes.descriptions = true;
+		if (data.descriptions) {
+			// the answer does not know the descriptions the server created since the request left
+			let received = data.descriptions.concat(moncycle_store.created.filter(function (made) {
+				return !data.descriptions.some(function (known) { return known.name === made.name; });
+			}));
+			if (JSON.stringify(received) !== JSON.stringify(moncycle_store.descriptions)) {
+				moncycle_store.descriptions = received;
+				moncycle_store.write(moncycle_store.keys.descriptions, received);
+				changes.descriptions = true;
+			}
 		}
 
 		if (data.keyInfos) {

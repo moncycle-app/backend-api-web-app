@@ -7,8 +7,9 @@ RUN apt-get update \
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
 	&& docker-php-ext-install -j$(nproc) gd pdo pdo_mysql opcache
 
-# headers: security and cache headers. The others serve nothing here (/server-status shows request URLs)
-RUN a2enmod headers \
+# headers: security and cache headers. rewrite: the 413 on the Content-Length of a request (zz-moncycleapp.conf).
+# The others serve nothing here (/server-status shows request URLs)
+RUN a2enmod headers rewrite \
 	&& a2dismod -f status autoindex auth_basic authn_file authz_user access_compat env setenvif
 
 # no Apache access log: the app writes its own (lib/log.php, README "Logs"), whose `http.request` line

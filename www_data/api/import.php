@@ -22,11 +22,11 @@
 ** ?dryRun=1 answers for stage 4 without running it: nfp_import_preview_plan() reads the account
 ** and reports what the write would have done -- which days of the file the account already
 ** holds, and which free-text labels are new -- so the user can see what is at stake, and in
-** particular decide on 'overide', before anything is written. A dry run that is refused also
+** particular decide on 'override', before anything is written. A dry run that is refused also
 ** answers with everything the checks found, not only the first thing that rejects the file,
 ** because a diagnosis is the whole point of asking for one.
 **
-** ?overide=<0|1> decides what happens to a date the account already has data on: 0 (the
+** ?override=<0|1> decides what happens to a date the account already has data on: 0 (the
 ** default) leaves it alone and reports it, 1 replaces it.
 */
 
@@ -44,11 +44,13 @@ if ($_SERVER['REQUEST_METHOD'] !== "POST") {
 // Parameters
 // ---------------------------------------------------------------------------
 
-// "overide" keeps its original spelling: it is already published in the API.
-if (isset($_GET['overide']) && !in_array($_GET['overide'], ["0", "1"], true)) {
-	http_error(400, "invalid_parameter", "'overide' must be 0 or 1.");
+// The parameter is "override". Its first spelling, "overide", was published: it is still read (and
+// still echoed in the report) so that a client written for it keeps working; "override" wins.
+$override_name = isset($_GET['override']) ? 'override' : 'overide';
+if (isset($_GET[$override_name]) && !in_array($_GET[$override_name], ["0", "1"], true)) {
+	http_error(400, "invalid_parameter", "'$override_name' must be 0 or 1.");
 }
-$overide = isset($_GET['overide']) && $_GET['overide'] === "1";
+$override = isset($_GET[$override_name]) && $_GET[$override_name] === "1";
 
 if (isset($_GET['dryRun']) && !in_array($_GET['dryRun'], ["0", "1"], true)) {
 	http_error(400, "invalid_parameter", "'dryRun' must be 0 or 1.");
@@ -108,7 +110,8 @@ if (!empty($checked["issues"])) {
 
 $report = [
 	"dryRun" => $dry_run,
-	"overide" => $overide,
+	"override" => $override,
+	"overide" => $override,
 	"schemaVersion" => nfp_format_get($nfp_file, "schemaVersion"),
 	"sourceApp" => nfp_format_get(nfp_format_get($nfp_file, "fileInformation"), "sourceApp"),
 	"cyclesRead" => $checked["cyclesRead"],
@@ -123,7 +126,7 @@ $report = [
 ];
 
 if ($dry_run) {
-	$previewed = nfp_import_preview_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide);
+	$previewed = nfp_import_preview_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $override);
 
 	// same merge as the real run below, because the preview answers in the writer's shape
 	$report["mappedFields"] = array_merge($report["mappedFields"], $previewed["narrowed"]);
@@ -141,7 +144,7 @@ if ($dry_run) {
 // an import counts as activity, same as a POST to /api/day
 data_reactivate_account($db, $user_account);
 
-$written = nfp_import_write_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $overide, $last_write_client_UTC, $written_days);
+$written = nfp_import_write_plan($db, intval($user_account["no_user_account"]), $checked["plan"], $override, $last_write_client_UTC, $written_days);
 
 // the writer finds one kind of narrowing of its own (a label already recorded under the other
 // type), so its list joins the ones found while checking

@@ -70,7 +70,8 @@ info:
     carry extra context.
 
     **Rule 3 — the HTTP status code is real.** `200` means it worked. `401` means you are not
-    logged in. `409` means a conflict. Check the status first, then the body.
+    logged in. `409` means a conflict. `413` means the request body is over 256 KB, whichever
+    endpoint it was sent to. Check the status first, then the body.
 
     **Every response carries an `X-Request-Id` header** (but `GET /version`, a static file, and `GET /health_check`). It is
     the id the server's own log uses for that request: quote it when you report a problem. You
@@ -195,7 +196,9 @@ info:
     Two timestamps appear on days, descriptions and the account:
 
     - **`lastWriteClientUtc`** — *your* clock. You send it. If you omit it, or it is not valid,
-      the server writes its own clock instead. It is stored and returned as you gave it.
+      the server writes its own clock instead. It is stored and returned as you gave it. On a
+      day, it also decides which write is the latest: see "A write that arrives late" on
+      `POST /day`.
     - **`lastWriteDb`** — the server clock. Read-only. The server always sets it. This is the
       field `GET /sync` is based on, so a wrong clock on your side cannot make you miss anything.
 
@@ -260,6 +263,7 @@ info:
 
     ```
     1. POST your own unsent changes to /day and /description        (your changes first)
+         - a day answered 409 stale_write was written after you made your change: drop yours
     2. GET /sync?fromTimestamp=<lastSync>     (the first time: GET /sync, with no parameter)
     3. merge into your copy:
          - each returned day replaces yours; an empty day means "forget this day";
@@ -1452,6 +1456,21 @@ paths:
         So check your spelling: a typo in `stampColor` loses the stamp without telling you.
         Compare the response body with what you sent if you are unsure.
 
+        ### A write that arrives late
+
+        Two devices can write the same day, and one of them may have been offline: its change
+        reaches the server after the other's. The write that was **made** last wins, whichever
+        reaches the server last, and *made* is told by `lastWriteClientUtc`. A write whose
+        `lastWriteClientUtc` is **older** than the one the stored day carries is refused with
+        `409 stale_write`; nothing is stored. The same moment is accepted, so sending a write
+        twice is harmless. When you get this answer, drop the change, `GET` the day again and show
+        it to the user.
+
+        A write that carries no `lastWriteClientUtc` is stamped with the server's clock, so it is
+        never late. A stamp later than the server's clock does not shut other writers out: for
+        this comparison a stored day is never taken to be later than the server's clock when it
+        was written.
+
         ### Side effect
 
         Writing a day marks the account as active again. This matters because accounts with no
@@ -1541,6 +1560,14 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         "401":
           $ref: '#/components/responses/Unauthorized'
+        "409":
+          description: |-
+            `stale_write` — the stored day was written after this change was made (its
+            `lastWriteClientUtc` is older). Nothing was stored. See "A write that arrives late".
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         "405":
           description: "`method_not_allowed` — only `GET`, `POST` and `DELETE` are supported on `/day`."
           content:
@@ -1593,7 +1620,8 @@ paths:
           description: |-
             Your clock when the user cleared the day, ISO 8601 UTC, kept as the time of the
             deletion. Defaults to the server's time. A client that sends its changes later (it
-            was offline) gives the time they were made.
+            was offline) gives the time they were made. A day written after that moment is not
+            cleared: `409 stale_write`, as for `POST /day`.
           schema:
             type: string
             format: date-time
@@ -1609,6 +1637,14 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         "401":
           $ref: '#/components/responses/Unauthorized'
+        "409":
+          description: |-
+            `stale_write` — the stored day was written after the moment given in
+            `lastWriteClientUtc`. It was not cleared: `GET` it again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
   /description:
     # NOTE: the path stays singular (not /descriptions) because the JS frontend calls this URL.
@@ -2063,7 +2099,7 @@ paths:
         > **Changed in 15.** This endpoint used to validate only, answer `{"import": "ok"}` and
         > report failures in its own `err_code` / `err_message` / `err_list` shape. It now
         > writes, answers an `ImportReport` inside the standard `data` envelope, and reports
-        > failures with the standard `error` envelope. `overide` now does something, and
+        > failures with the standard `error` envelope. `override` now does something, and
         > `dryRun=1` replaces the old check-only behaviour with a full preview: it reports what
         > the write would do, down to which days the account already holds.
 
@@ -2084,8 +2120,8 @@ paths:
 
         ### Days that already have data
 
-        `overide=0` (the default) leaves those dates untouched and lists them in `daysSkipped`.
-        `overide=1` replaces them whole — including their free-text labels — exactly like a
+        `override=0` (the default) leaves those dates untouched and lists them in `daysSkipped`.
+        `override=1` replaces them whole — including their free-text labels — exactly like a
         `POST /day`, which also carries the full state of a day. Either way they are counted in
         `daysAlreadyInAccount`, and `dryRun=1` fills all three without writing, so the choice
         can be made with the dates in hand.
@@ -2122,7 +2158,7 @@ paths:
         Whatever this app writes, it reads back. That is a property the endpoint is built to
         hold, not a coincidence: anything `/export` can emit and the import would rather not
         see is reported in `warnings` and imported anyway, never refused. Re-importing an
-        export over its own account with `overide=1` leaves that account byte-identical, except
+        export over its own account with `override=1` leaves that account byte-identical, except
         for its labels with no type yet (`freeOther`): the file has no field for them, so an
         export writes them as the last entry of the day's `comments`, and they come back as
         part of the day's comment, no longer linked as labels.
@@ -2147,9 +2183,11 @@ paths:
         These refuse the file, because the value cannot be stored at all. Rejected with `400`,
         or `413` for the first:
 
-        - **256 KB** per request (the server's `post_max_size`; raising it means raising
-          `memory_limit` too). This is the one limit that bounds the work: stages 1 and 2
-          decode and validate the whole body before any count above is looked at.
+        - **256 KB** per request (262144 bytes, the `Content-Length`: a larger body is refused
+          before the application starts, with this same `413 file_too_large`; the server's
+          `post_max_size`, and raising it means raising `memory_limit` too). This is the one limit
+          that bounds the work: stages 1 and 2 decode and validate the whole body before any
+          count above is looked at. It holds for every endpoint of the API, not only this one.
         - 256 characters per label and per joined comment — `varchar(256)` either way.
         - 32 characters for the packed FertilityCare notes of a day — `varchar(32)`. The
           widest note set the app can write packs to 18, so `/export` cannot reach this.
@@ -2160,13 +2198,24 @@ paths:
         the same date reject the file, since the day would belong to both — `/export` never
         writes overlapping cycles.
       parameters:
-        - name: overide
+        - name: override
           in: query
           required: false
           description: |-
             `0` leaves dates that already have data alone and reports them in `daysSkipped`.
-            `1` replaces them. (The spelling is kept for compatibility.) It is read on a dry
-            run too, which answers the lists the way the value given would have them.
+            `1` replaces them. It is read on a dry run too, which answers the lists the way the
+            value given would have them.
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
+        - name: overide
+          in: query
+          required: false
+          deprecated: true
+          description: |-
+            The first, misspelled name of `override`, still read so that a client written for it
+            keeps working. When both are sent, `override` is the one used. Use `override`.
           schema:
             type: integer
             enum: [0, 1]
@@ -2180,7 +2229,7 @@ paths:
             Every check runs, and the account is read to resolve what stage 4 would otherwise
             only discover as it writes, so the report is the one the real run would answer —
             same `daysCreated` / `daysOverwritten` / `daysSkipped` / `descriptionsCreated`,
-            for the `overide` that was sent, plus `daysAlreadyInAccount` which does not depend
+            for the `override` that was sent, plus `daysAlreadyInAccount` which does not depend
             on it. Only `daysWritten` is absent, because nothing was.
 
             A dry run that is **refused** also answers with everything the checks found and not
@@ -2190,7 +2239,7 @@ paths:
             `400` response.
 
             So: send `dryRun=1` to show the user what is at stake and let them decide on
-            `overide`, then send the same file again without it.
+            `override`, then send the same file again without it.
           schema:
             type: integer
             enum: [0, 1]
@@ -2231,7 +2280,7 @@ paths:
 
             | `code` | Meaning |
             |---|---|
-            | `invalid_parameter` | `overide` or `dryRun` is not `0`/`1` |
+            | `invalid_parameter` | `override` or `dryRun` is not `0`/`1` |
             | `empty_body` | no request body |
             | `invalid_encoding` | the body is not valid UTF-8 |
             | `invalid_json` | not JSON, too deeply nested, or the top level is not an object |
@@ -3159,9 +3208,14 @@ components:
           type: boolean
           description: True when `dryRun=1` was sent, so nothing was written.
           example: false
+        override:
+          type: boolean
+          description: The `override` value that was applied.
+          example: false
         overide:
           type: boolean
-          description: The `overide` value that was applied.
+          deprecated: true
+          description: The same value as `override`, under its first, misspelled name. Read `override`.
           example: false
         schemaVersion:
           type: string
@@ -3198,7 +3252,7 @@ components:
           example: ["2026-03-10", "2026-03-11"]
         daysOverwritten:
           type: array
-          description: Dates that already had data and were replaced (`overide=1` only).
+          description: Dates that already had data and were replaced (`override=1` only).
           items:
             type: string
             format: date
@@ -3206,8 +3260,8 @@ components:
         daysSkipped:
           type: array
           description: |-
-            Dates left untouched because they already had data and `overide` was `0`. Re-send
-            with `overide=1` to replace them.
+            Dates left untouched because they already had data and `override` was `0`. Re-send
+            with `override=1` to replace them.
           items:
             type: string
             format: date
@@ -3216,7 +3270,7 @@ components:
           type: array
           description: |-
             Dates of the file the account already held a day on: `daysOverwritten` and
-            `daysSkipped` together. It is the one list that does not depend on `overide`, which
+            `daysSkipped` together. It is the one list that does not depend on `override`, which
             is what makes it the one to show next to that choice — `dryRun=1` fills it without
             writing anything.
           items:

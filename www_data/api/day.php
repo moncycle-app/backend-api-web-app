@@ -69,6 +69,9 @@ elseif ($_SERVER['REQUEST_METHOD'] == "POST") {
 	data_reactivate_account($db, $user_account);
 
 	$is_new = data_save_day($db, $no_user_account, $date, $day, http_client_timestamp($body['lastWriteClientUtc'] ?? null));
+	if (is_null($is_new)) {
+		http_error(409, "stale_write", "This day was written more recently than this change: it was not saved.");
+	}
 
 	http_data($is_new ? 201 : 200, day_format_to_json(data_construct_day($db, $date, $no_user_account)));
 }
@@ -78,7 +81,9 @@ elseif ($_SERVER['REQUEST_METHOD'] == "DELETE") {
 
 	$date = date_parse_ymd($_GET['date'] ?? null) ?? http_error(400, "invalid_date", "'date' query parameter is required and must be in YYYY-MM-DD format.");
 
-	data_clear_day($db, $no_user_account, $date, http_client_timestamp($_GET['lastWriteClientUtc'] ?? null));
+	if (!data_clear_day($db, $no_user_account, $date, http_client_timestamp($_GET['lastWriteClientUtc'] ?? null))) {
+		http_error(409, "stale_write", "This day was written more recently than this deletion: it was not cleared.");
+	}
 
 	http_no_content();
 }

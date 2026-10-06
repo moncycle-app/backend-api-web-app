@@ -37,7 +37,7 @@ const moncycle_app_text = {
 	import_but_submit_busy : "\uD83D\uDCE5 Import\u2026",
 	// asked before a real import that is allowed to replace what is already there, since that
 	// is the only thing this form can destroy
-	import_confirm_overide : function (filename) {
+	import_confirm_override : function (filename) {
 		return `Importer « ${filename} » en écrasant les jours déjà renseignés ?\n\nLes journées de votre tableau dont la date figure dans le fichier seront entièrement remplacées, et leur contenu actuel sera définitivement perdu.\n\nPour savoir lesquelles sont concernées avant de vous décider, annulez et utilisez « Vérifier le fichier » : la simulation n\u2019écrit rien.`;
 	},
 
@@ -117,7 +117,7 @@ const moncycle_app_text = {
 
 function moncycle_app_redirect_if_unauthenticated(jqXHR) {
 	if (jqXHR.status == 401) {
-		window.localStorage.clear();
+		moncycle_store.clear_storage();
 		window.location.replace('/auth');
 	}
 }
@@ -523,8 +523,8 @@ $(document).ready(function(){
 			return;
 		}
 
-		let overide = $("#i_import_overide").prop("checked");
-		if (!dry_run && overide && !confirm(moncycle_app_text.import_confirm_overide(file.name))) return;
+		let override = $("#i_import_override").prop("checked");
+		if (!dry_run && override && !confirm(moncycle_app_text.import_confirm_override(file.name))) return;
 
 		import_running = true;
 		$("#import_report").empty();
@@ -544,7 +544,7 @@ $(document).ready(function(){
 		file.text().then(function (body) {
 			let query = $.param({
 				dryRun: dry_run ? 1 : 0,
-				overide: overide ? 1 : 0,
+				override: override ? 1 : 0,
 				lastWriteClientUtc: (new Date()).toISOString(),
 			});
 			$.ajax({
@@ -588,7 +588,7 @@ $(document).ready(function(){
 		var password = $('#f_suppr_user_account input[name="pw_before_deletion"]').val();
 		if (!confirm(moncycle_app_usr.name + ', êtes-vous sur de vouloir supprimer votre compte ainsi que toutes vos données? Cette action est irréversible. 😟')) return;
 		$.ajax({type : 'DELETE', "url" : "../api/account", contentType: "application/json", data: JSON.stringify({password: password})}).done(function(){
-			window.localStorage.clear();
+			moncycle_store.clear_storage();
 			alert(moncycle_app_usr.name + ", votre compte a bien été supprimé. 😢💔");
 			window.location.replace('auth');
 		}).fail(function(jqXHR) {

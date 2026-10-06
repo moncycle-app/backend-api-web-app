@@ -36,7 +36,7 @@
 		<center>
 			<h1>mon<span class="gradiant_logo">cycle</span>.app</h1>
 			<div id="name">Mon compte</div>
-			<a href="/"><button type="button" class="nav_button">👈 Revenir aux cycles</button></a> <a href="api/logout" onclick='window.localStorage.clear()'><button type="button" id="mon_user_account" class="nav_button rouge">🔑 Déconnexion</button></a>
+			<a href="/"><button type="button" class="nav_button">👈 Revenir aux cycles</button></a> <a href="api/logout" onclick='moncycle_store.clear_storage()'><button type="button" id="mon_user_account" class="nav_button rouge">🔑 Déconnexion</button></a>
 			<p id="merci_don" style="display:none">🎖️ Merci pour votre don sur <a href="https://fr.tipeee.com/moncycleapp" target="_blank">Tipeee</a>.</p>
 			<p id="warning_demo" style="font-weight:bold; display:none">&#x1F6A8; Vous visualisez actuellement le compte de démonstration.<br /><br /><a style="color:#fbca0b" href='/register'><button type='button'>&#x1F680; créer votre compte</button></a></p>
 		</center>
@@ -101,7 +101,7 @@
 			</p>
 			<form method="post" action="api/import" id="f_import">
 				<input type="file" id="i_import_file" name="file" accept=".nfp,.json,application/json" /><br /><br />
-				<input type="checkbox" id="i_import_overide" name="overide" value="1" /> <label for="i_import_overide"><b>Écraser les jours déjà renseignés.</b></label><br />
+				<input type="checkbox" id="i_import_override" name="override" value="1" /> <label for="i_import_override"><b>Écraser les jours déjà renseignés.</b></label><br />
 				<span class="label_info">
 					Quand une date du fichier est déjà renseignée dans votre tableau: case <b>décochée</b> (par
 					défaut), votre journée est conservée telle quelle et celle du fichier est ignorée; case

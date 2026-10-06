@@ -42,7 +42,8 @@ function nfp_import_parse(string $raw, ?int $content_length = null): array {
 		["ok" => false, "code" => $code, "message" => $message, "details" => $details];
 
 	if ($raw === '') {
-		// PHP discards a body larger than post_max_size and leaves php://input empty, so an
+		// Apache refuses such a body before PHP starts (server_conf/zz-moncycleapp.conf); behind another
+		// server, PHP discards a body larger than post_max_size and may leave php://input empty, so an
 		// empty body with a Content-Length is almost always a file over the limit.
 		if (!is_null($content_length) && $content_length > 0) {
 			return $refuse("file_too_large", sprintf(
@@ -614,8 +615,8 @@ function nfp_import_day_unmapped(object $nfp_day, string $date, array &$report):
 ** "what does this file touch that I already have?", and the answer only exists in the account.
 ** So this resolves, by reading, the two things stage 4 would otherwise discover as it writes:
 **
-**   - the dates the account already holds a day on. A real run skips them (overide=0) or
-**     replaces them whole (overide=1); both lists are filled the way the passed $overide
+**   - the dates the account already holds a day on. A real run skips them (override=0) or
+**     replaces them whole (override=1); both lists are filled the way the passed $override
 **     would have it, and daysAlreadyInAccount carries them regardless of it, since that is the
 **     set the user needs in order to choose.
 **   - the free-text labels the file uses: the ones the account does not have yet would be
@@ -624,7 +625,7 @@ function nfp_import_day_unmapped(object $nfp_day, string $date, array &$report):
 **
 ** Read-only: two SELECTs, no transaction, nothing here can write.
 */
-function nfp_import_preview_plan($db, int $no_user_account, array $plan, bool $overide): array {
+function nfp_import_preview_plan($db, int $no_user_account, array $plan, bool $override): array {
 	$already = [];
 	$created = [];
 	$overwritten = [];
@@ -642,7 +643,7 @@ function nfp_import_preview_plan($db, int $no_user_account, array $plan, bool $o
 				continue;
 			}
 			$already[] = $date;
-			if ($overide) $overwritten[] = $date;
+			if ($override) $overwritten[] = $date;
 			else $skipped[] = $date;
 		}
 	}
@@ -704,7 +705,7 @@ function nfp_import_narrowed_note(string $date, string $name, int $recorded_type
 /*
 ** Writes the plan, in one transaction: a failure anywhere leaves the account untouched.
 **
-** $overide decides what happens on a date that already has data: false skips it and reports
+** $override decides what happens on a date that already has data: false skips it and reports
 ** it, true replaces it. A replaced day is replaced whole, including its linked descriptions --
 ** same semantics as a POST to /api/day, which also carries the full state of a day, and which
 ** writes through the same data_write_day().
@@ -712,9 +713,9 @@ function nfp_import_narrowed_note(string $date, string $name, int $recorded_type
 ** $written_days, when the caller passes one, receives the [no_day, date] of each day written, for the
 ** log (nfp_import_log_fields()); the array returned, and so the API answer, does not change.
 */
-function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $overide, string $last_write_client_UTC, ?array &$written_days = null): array {
+function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $override, string $last_write_client_UTC, ?array &$written_days = null): array {
 	$written_days = [];
-	return db_transaction($db, function () use ($db, $no_user_account, $plan, $overide, $last_write_client_UTC, &$written_days) {
+	return db_transaction($db, function () use ($db, $no_user_account, $plan, $override, $last_write_client_UTC, &$written_days) {
 		db_select_user_account_for_update($db, $no_user_account);
 		$created = [];
 		$overwritten = [];
@@ -730,7 +731,7 @@ function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $ove
 			$existing = db_select_day_timeline($db, $date, $no_user_account);
 			if (!is_null($existing)) $already[] = $date;
 
-			if (!is_null($existing) && !$overide) {
+			if (!is_null($existing) && !$override) {
 				$skipped[] = $date;
 				continue;
 			}
@@ -754,7 +755,7 @@ function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $ove
 		}
 
 		// daysAlreadyInAccount is the union of the two lists above, and it is reported on its own
-		// because it is the one that does not depend on $overide: it says which days of the file
+		// because it is the one that does not depend on $override: it says which days of the file
 		// the account already had, whichever way they were treated. nfp_import_preview_plan() answers
 		// with the same keys, so a dry run and a real one report the same shape.
 		return [
@@ -775,7 +776,7 @@ function nfp_import_write_plan($db, int $no_user_account, array $plan, bool $ove
 function nfp_import_log_fields(array $report, array $written_days = []): array {
 	$fields = [
 		"dry" => $report["dryRun"],
-		"ovr" => $report["overide"],
+		"ovr" => $report["override"],
 		"rd" => $report["daysRead"],
 		"cr" => count($report["daysCreated"]),
 		"ow" => count($report["daysOverwritten"]),

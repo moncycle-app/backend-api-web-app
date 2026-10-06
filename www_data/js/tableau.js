@@ -153,9 +153,7 @@ const moncycle_app_text = {
 	sync_dismiss : "OK",
 
 	/* --- description picker (sensations / observations / autre) --------- */
-	desc_add_saving : "⏳",
 	desc_add_saved : "✅",
-	desc_add_error : "❌",
 	desc_add_duplicate : function (name) {
 		return `❌ « ${name} » existe déjà`;
 	},
@@ -378,8 +376,9 @@ moncycle_app = {
 		payload.freeMucusSensation = [];
 		// a day is posted whole: the labels with no type yet are sent back, or they would be unlinked
 		payload.freeOther = [];
-		get('description[]').forEach(id => {
-			let sdesc = moncycle_app.description.find(d => d.no_description == parseInt(id));
+		// a chip stands for a description by its name, which is what a day carries it by: a description made here has no id until the server has created it
+		get('description[]').forEach(name => {
+			let sdesc = moncycle_app.description.find(d => d.name == name);
 			if (!sdesc) return;
 			if (sdesc.type == 1) payload.freeMucusObservation.push(sdesc.name);
 			else if (sdesc.type == 2) payload.freeMucusSensation.push(sdesc.name);
@@ -479,7 +478,7 @@ moncycle_app = {
 	show_header : function () {
 		moncycle_app.constante = moncycle_app.constante_from_api(moncycle_store.account);
 		moncycle_app.timeline_asc = moncycle_app.constante.timeline_asc;
-		moncycle_app.description = moncycle_store.descriptions.map(moncycle_app.description_from_api);
+		moncycle_app.description = moncycle_store.all_descriptions().map(moncycle_app.description_from_api);
 		document.title = moncycle_app_text.page_title(moncycle_app.constante.name);
 		$("#name").html(moncycle_app.constante.name);
 		if (moncycle_app.constante.sponsor) $("#name").append(moncycle_app_text.sponsor_badge);
@@ -507,7 +506,7 @@ moncycle_app = {
 	// What happened to the copy: the days that changed are drawn again, and the cycles when their
 	// structure moved (at once, or when the day form is closed if it is open).
 	store_changed : function (change) {
-		if (change.descriptions) moncycle_app.description = moncycle_store.descriptions.map(moncycle_app.description_from_api);
+		if (change.descriptions) moncycle_app.description = moncycle_store.all_descriptions().map(moncycle_app.description_from_api);
 		if (!moncycle_store.account) return;
 		if (moncycle_app.structure === null) {
 			moncycle_app.show_account();
@@ -1059,8 +1058,13 @@ moncycle_app = {
 	},
 	// container holding the chips for each description type: 2=sensation, 1=observation, 0=autre (legacy)
 	desc_container_id : {2 : "#menu_sensation_container", 1 : "#menu_observation_container", 0 : "#menu_autre_container"},
+	desc_chip_count : 0,
+	// A chip is the description's name (see day_to_api); its id only ties the label to the box.
 	render_desc_chip : function (sdesc, active) {
-		return $(`<span class="desc_chip" id="s_desc_${sdesc.no_description}"><input type="checkbox" name="description[]" value="${sdesc.no_description}" id="i_desc_${sdesc.no_description}" class="i_desc" ${active ? 'checked' : ''} /><label for="i_desc_${sdesc.no_description}">${sdesc.name}</label></span>`);
+		let id = "i_desc_" + moncycle_app.desc_chip_count++;
+		return $("<span>", {"class": "desc_chip"})
+			.append($("<input>", {type: "checkbox", name: "description[]", value: sdesc.name, id: id, "class": "i_desc"}).prop("checked", !!active))
+			.append($("<label>", {"for": id}).text(sdesc.name));
 	},
 	// wires the "+ nouvelle sensation/observation" affordances in jour_form; there is no
 	// equivalent for "autre" since that legacy type can't be created or converted to (see open_menu)
@@ -1093,24 +1097,14 @@ moncycle_app = {
 			status.text(moncycle_app_text.desc_add_duplicate(name));
 			return;
 		}
-		status.text(moncycle_app_text.desc_add_saving);
-		form.find(".desc_add_submit").prop("disabled", true);
-		let payload = {name : name, type : moncycle_app.desc_type_from_int[desc_type], lastWriteClientUtc : moncycle_app.date.nowInUTC()};
-		$.ajax({type: "POST", url: "api/description", contentType: "application/json", data: JSON.stringify(payload)}).done(function (raw) {
-			form.find(".desc_add_submit").prop("disabled", false);
-			let desc = {no_description : raw.data.id, name : raw.data.name, type : desc_type, use_count : 0};
-			moncycle_app.description.push(desc);
-			moncycle_store.add_description({id : raw.data.id, name : raw.data.name, type : raw.data.type});
-			let chip = moncycle_app.render_desc_chip(desc, false);
-			$(moncycle_app.desc_container_id[desc_type]).append(chip);
-			chip.find(".i_desc").on("change", moncycle_app.submit_menu);
-			form.find(".desc_add_input").val("").focus();
-			status.text(moncycle_app_text.desc_add_saved);
-		}).fail(function (err) {
-			form.find(".desc_add_submit").prop("disabled", false);
-			status.text(moncycle_app_text.desc_add_error);
-			console.error(err);
-		});
+		// kept here and sent when the server can be reached (js/store.js): the chip is there at once, offline too
+		moncycle_store.queue_description(name, moncycle_app.desc_type_from_int[desc_type], moncycle_app.date.nowInUTC());
+		let desc = moncycle_app.description.find(d => d.name == name) || {no_description : null, name : name, type : desc_type, use_count : 0};
+		let chip = moncycle_app.render_desc_chip(desc, false);
+		$(moncycle_app.desc_container_id[desc_type]).append(chip);
+		chip.find(".i_desc").on("change", moncycle_app.submit_menu);
+		form.find(".desc_add_input").val("").focus();
+		status.text(moncycle_app_text.desc_add_saved);
 	},
 	menu_opened_date : null,
 	open_menu : function(e, date = null) {
@@ -1165,10 +1159,10 @@ moncycle_app = {
 		$("#menu_sensation_container").empty();
 		$("#menu_autre_container").empty();
 		let active_desc = [];
-		for (const adesc of j.description) active_desc.push(adesc.no_description);
+		for (const adesc of j.description) active_desc.push(adesc.name);
 		let has_autre = false;
 		for (const sdesc of moncycle_app.description) {
-			let active = active_desc.includes(sdesc.no_description);
+			let active = active_desc.includes(sdesc.name);
 			let container_id = moncycle_app.desc_container_id[sdesc.type];
 			if (!container_id) continue;
 			if (sdesc.type == 0) has_autre = true;
