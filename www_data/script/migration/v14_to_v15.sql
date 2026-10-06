@@ -143,8 +143,9 @@ ALGORITHM=INSTANT, LOCK=NONE;
 
 -- Addresses are stored in lower case: the app lowers what a client types (account_email_normalise) and the DB
 -- compares exactly (utf8mb4_bin), so a mixed-case account could not log in with its own address otherwise.
--- Two accounts whose email1 differ only by case would collide on the unique key. v14_to_v15.php checks before
--- it starts; if you run this file by hand, run this first on the v14 table and stop if it answers a row:
+-- Two accounts whose email1 differ only by case would collide on the unique key. v14_to_v15.php keeps one of them
+-- and deletes the others before it runs this file (and says why); if you run this file by hand, settle them first:
+-- this answers a row for each address held by several accounts, on the v14 table.
 --   SELECT LOWER(email1) AS email, COUNT(*) AS accounts FROM compte GROUP BY email HAVING COUNT(*) > 1;
 UPDATE `user_account` SET `email1` = LOWER(`email1`), `email2` = LOWER(`email2`);
 
