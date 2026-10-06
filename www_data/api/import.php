@@ -63,6 +63,7 @@ $last_write_client_UTC = http_client_timestamp($_GET['lastWriteClientUtc'] ?? nu
 // Stage 1 -- the body
 // ---------------------------------------------------------------------------
 
+http_require_json_content_type();
 $content_length = isset($_SERVER['CONTENT_LENGTH']) ? intval($_SERVER['CONTENT_LENGTH']) : null;
 $parsed = nfp_import_parse(file_get_contents('php://input'), $content_length);
 

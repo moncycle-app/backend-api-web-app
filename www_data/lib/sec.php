@@ -15,6 +15,7 @@ use BaconQrCode\Writer;
 
 require_once __DIR__ . "/../vendor/autoload.php";
 require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/http.php";
 require_once __DIR__ . "/log.php";
 
 // ---------------------------------------------------------------------------
@@ -50,13 +51,20 @@ function sec_cookie_token(): string {
 	return is_string($token) ? $token : "";
 }
 
+// The SameSite attribute of the session cookie (COOKIE_SAMESITE). None is only honoured on a Secure
+// cookie: a browser drops a SameSite=None cookie that is not, so it falls back to Lax.
+function sec_cookie_samesite(): string {
+	if (COOKIE_SAMESITE === "none") return PHP_SECURE_COOKIES ? "None" : "Lax";
+	return COOKIE_SAMESITE === "lax" ? "Lax" : "Strict";
+}
+
 function sec_set_token_cookie(string $token, string $lifetime): void {
 	setcookie(COOKIE_AUTH_TOKEN, $token, [
 		'expires' => strtotime($lifetime),
 		'path' => '/',
 		'secure' => PHP_SECURE_COOKIES,
 		'httponly' => true,
-		'samesite' => 'Lax',
+		'samesite' => sec_cookie_samesite(),
 	]);
 }
 
@@ -67,7 +75,7 @@ function sec_clear_token_cookie(): void {
 			'path' => '/',
 			'secure' => PHP_SECURE_COOKIES,
 			'httponly' => true,
-			'samesite' => 'Lax',
+			'samesite' => sec_cookie_samesite(),
 		]);
 	}
 }
@@ -144,6 +152,47 @@ function sec_obfuscate_columns(array $row, array $columns): array {
 }
 
 // ---------------------------------------------------------------------------
+// Where a write comes from (CSRF)
+// ---------------------------------------------------------------------------
+
+// "scheme://host[:port]" of a URL in lower case, or "" when it is not one.
+function sec_origin_of_url(string $url): string {
+	$parts = parse_url($url);
+	if (!is_array($parts) || empty($parts["scheme"]) || empty($parts["host"])) return "";
+	return strtolower($parts["scheme"] . "://" . $parts["host"] . (isset($parts["port"]) ? ":" . $parts["port"] : ""));
+}
+
+// May a browser at this origin write to this API? Its own origin (the host the request was sent to; the
+// scheme is not compared: behind a TLS proxy the app sees plain http), the web app's (APP_URL), and the
+// ones the operator lists (WEB_APP_ORIGINS). Nothing is assumed about the web app sharing the API's
+// origin: a staging site or a front end on a sibling subdomain is one more entry.
+function sec_origin_allowed(string $origin): bool {
+	$origin = strtolower($origin);
+	$host = $_SERVER['HTTP_HOST'] ?? "";
+	if (is_string($host) && $host !== "" && preg_match('#^https?://' . preg_quote(strtolower($host), '#') . '\z#', $origin)) return true;
+	return $origin === sec_origin_of_url(APP_URL) || in_array($origin, WEB_APP_ORIGINS, true);
+}
+
+// Ends the request with a 403 when a browser sends a write (any method but GET, HEAD, OPTIONS) from a
+// page that is not ours, whoever is logged in: the session cookie rides along on such a request, and
+// login is itself a target (login CSRF). Origin decides first: a browser sends it on every write, and
+// "Origin: null" (a sandboxed page, a redirect) is refused with the rest. Only when it is absent does
+// Sec-Fetch-Site speak: anything but same-origin or none is refused ("same-site" is a sibling subdomain:
+// a web app hosted there is listed, and its Origin says so). A request with neither header (curl, a
+// native client) is no browser's write and goes through to the authentication.
+function sec_exit_if_cross_origin(): void {
+	if (in_array($_SERVER['REQUEST_METHOD'] ?? 'GET', ['GET', 'HEAD', 'OPTIONS'], true)) return;
+
+	$origin = $_SERVER['HTTP_ORIGIN'] ?? null;
+	$fetch_site = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? null;
+	if (is_string($origin)) $refused = !sec_origin_allowed($origin);
+	elseif (is_string($fetch_site)) $refused = !in_array(strtolower($fetch_site), ['same-origin', 'none'], true);
+	else $refused = false;
+
+	if ($refused) http_error(403, "cross_origin_refused", "This request comes from a page that is not allowed to write to this API.");
+}
+
+// ---------------------------------------------------------------------------
 // Two-factor authentication
 // ---------------------------------------------------------------------------
 
@@ -173,11 +222,14 @@ function sec_totp_begin($db, array $user_account): array {
 	];
 }
 
-// does the one-time code (spaces allowed) match the account's secret?
+// does the one-time code (spaces allowed) match the account's secret? The web client sends the code as a
+// number, which loses a leading zero ("091710" arrives as 91710): it is given its zeros back first, or one
+// code in ten would be refused.
 function sec_totp_code_valid(array $user_account, $code): bool {
 	if (!is_string($code) && !is_int($code)) return false;
-	$code = intval(preg_replace('/\s+/', '', (string) $code));
-	return $code > 0 && TOTP::createFromSecret($user_account["totp_secret"])->verify($code);
+	$number = intval(preg_replace('/\s+/', '', (string) $code));
+	$totp = TOTP::createFromSecret($user_account["totp_secret"]);
+	return $number > 0 && $totp->verify(str_pad((string) $number, $totp->getDigits(), "0", STR_PAD_LEFT));
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +241,11 @@ function sec_totp_code_valid(array $user_account, $code): bool {
 function sec_captcha_issue($db, string $phrase): void {
 	$cookie_token = sec_cookie_token();
 	$known = $cookie_token !== "" && !is_null(db_select_auth_token_captcha($db, $cookie_token));
+
+	// A visitor logged in keeps their session: its cookie is not replaced by a captcha's, which would end
+	// the session in this browser. They have no use for a captcha, login and register refuse a logged-in caller.
+	// (A session is stored hashed, a captcha's token as it is: that is why $known above is false for one.)
+	if (!$known && $cookie_token !== "" && !is_null(db_select_user_account_auth_token($db, sec_hash_token($cookie_token)))) return;
 
 	if (!$known) {
 		$cookie_token = sec_random_password(64);
@@ -227,12 +284,51 @@ function sec_captcha_verify($db, $answer): bool {
 // Login and its brute-force defence
 // ---------------------------------------------------------------------------
 
-// NOTE: trusts REMOTE_ADDR only. If the app is deployed behind a reverse proxy / CDN,
-// this must be adapted to read the real client IP from a header set by that trusted edge
-// (never trust a client-supplied X-Forwarded-For directly: it can be spoofed to dodge or
-// to frame another IP for the throttling below).
+// Is the address in one of the ranges ("10.0.0.0/8", "fd00::/8", or one address)? An IPv4-mapped
+// IPv6 address ("::ffff:10.0.0.1", what a dual-stack socket gives) is read as the IPv4 one.
+function sec_ip_in_ranges(string $ip, array $ranges): bool {
+	$unmap = fn(string $packed) => strlen($packed) === 16 && str_starts_with($packed, str_repeat("\0", 10) . "\xff\xff") ? substr($packed, 12) : $packed;
+	$packed = inet_pton($ip);
+	if ($packed === false) return false;
+	$packed = $unmap($packed);
+
+	foreach ($ranges as $range) {
+		[$base, $bits] = array_pad(explode("/", $range, 2), 2, null);
+		$base_packed = inet_pton($base);
+		if ($base_packed === false) continue;
+		$base_packed = $unmap($base_packed);
+		if (strlen($base_packed) !== strlen($packed)) continue;
+
+		// a bare address is a range of one; an IPv4-mapped base keeps its prefix length in IPv4 bits
+		$bits = is_null($bits) ? strlen($base_packed) * 8 : intval($bits) - (strlen($base_packed) === 4 && str_contains($base, ":") ? 96 : 0);
+		if ($bits < 0) continue;
+		$whole_bytes = intdiv($bits, 8);
+		if (substr($packed, 0, $whole_bytes) !== substr($base_packed, 0, $whole_bytes)) continue;
+		if ($bits % 8 === 0) return true;
+		$mask = (0xFF << (8 - $bits % 8)) & 0xFF;
+		if ((ord($packed[$whole_bytes]) & $mask) === (ord($base_packed[$whole_bytes]) & $mask)) return true;
+	}
+	return false;
+}
+
+// The address the request comes from, for the login throttling and the log. It is REMOTE_ADDR, the peer
+// of the connection, unless that peer is one of TRUSTED_PROXIES: then X-Forwarded-For is read from its
+// right end, where the proxies we trust wrote, and the first address that is not one of them is the
+// client's. Never read the header of an untrusted peer: it is the client's own and can say anything, to
+// dodge the throttling or to frame another address. A header that is garbage where the client should be
+// is no help: the peer stays the answer.
 function sec_client_ip() {
-	return $_SERVER['REMOTE_ADDR'] ?? '';
+	$peer = $_SERVER['REMOTE_ADDR'] ?? '';
+	if (empty(TRUSTED_PROXIES) || !sec_ip_in_ranges($peer, TRUSTED_PROXIES)) return $peer;
+
+	$forwarded = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
+	if (!is_string($forwarded)) return $peer;
+	foreach (array_reverse(explode(",", $forwarded)) as $hop) {
+		$hop = trim($hop);
+		if (filter_var($hop, FILTER_VALIDATE_IP) === false) return $peer;
+		if (!sec_ip_in_ranges($hop, TRUSTED_PROXIES)) return $hop;
+	}
+	return $peer;
 }
 
 // number of recent failed login attempts on this account, ignoring attempts older than
@@ -264,6 +360,8 @@ function sec_login_account_locked($user_account) {
 // wrong password or TOTP code against the account (the captcha and lockout thresholds).
 // Every outcome is logged: the refusals as `auth.login_failed`, with the account when the address
 // has one and its count of failed attempts, this one included when it was counted against it.
+// The address in $body["email"] is read as it is: the endpoint has already normalised it
+// (account_email_normalise(), api/login.php), which is how it is stored.
 function sec_login($db, array $body): array {
 	$user_account = [];
 
@@ -310,10 +408,12 @@ function sec_login($db, array $body): array {
 
 	if (isset($user_account["user_enabled"]) && !boolval($user_account["user_enabled"])) return $counted(403, "account_disabled", "Account deactivated.");
 
-	$password_ok = isset($user_account["password"]) && password_verify($body["password"], $user_account["password"]);
+	// an address with no account is checked against a hash nobody can match, for the time a check takes
+	$password_ok = password_verify($body["password"], $user_account["password"] ?? AUTH_DUMMY_PASSWORD_HASH) && isset($user_account["password"]);
 
 	// hard lockout only kicks in on a WRONG password: the account owner can still log in with the
-	// correct credentials, so this can't be abused to lock a victim out
+	// correct credentials, so this can't be abused to lock a victim out (an account with a TOTP code
+	// is the exception, see below)
 	if (!$password_ok) {
 		return $account_locked
 			? $counted(403, "account_locked", "Account temporarily locked after too many failed attempts.", true)
@@ -323,6 +423,12 @@ function sec_login($db, array $body): array {
 	$totp_active = $user_account["totp_state"] == TOTP_STATE_ACTIVE;
 	$code = $body["code"] ?? "";
 	if (!is_string($code) && !is_int($code)) $code = "";
+	// With the password right, the code is the only thing left to guess: the wrong ones are counted on the
+	// account (below), and past the lockout threshold the code is no longer looked at, the right one included.
+	// The password alone can then keep a TOTP account locked: the price of a code that cannot be guessed.
+	if ($totp_active && $account_locked) {
+		return $counted(403, "account_locked", "Account temporarily locked after too many failed attempts.", true);
+	}
 	if ($totp_active && !sec_totp_code_valid($user_account, $code)) {
 		// wrong or missing code: one outcome either way
 		$given = strlen((string) $code) > 0 && intval(preg_replace('/\s+/', '', (string) $code)) > 0;

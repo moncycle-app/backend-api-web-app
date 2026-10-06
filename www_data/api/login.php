@@ -8,11 +8,14 @@
 */
 
 require_once "../config.php";
+require_once "../lib/account.php";
 require_once "../lib/api.php";
 
 [$db, $user_account] = api_start(false);
 
 $body = http_json_body();
+// the address is looked up as it is stored: trimmed, in lower case (sec_login reads it from the body)
+if (is_string($body["email"] ?? null)) $body["email"] = account_email_normalise($body["email"]);
 
 if (!is_null($user_account)) {
 	http_data(200, ["userId" => $user_account["no_user_account"], "alreadyAuthenticated" => true]);

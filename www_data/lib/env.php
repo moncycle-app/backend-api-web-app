@@ -40,3 +40,28 @@ function env_list(string $name, array $allowed): array {
 	$items = array_map(fn($item) => strtolower(trim($item)), explode(",", (string) getenv($name)));
 	return array_values(array_unique(array_intersect($items, $allowed)));
 }
+
+// The origins of a comma list, each as "scheme://host[:port]" in lower case (a trailing "/" is
+// tolerated). An item that is anything else, a path or a query included, is dropped.
+function env_origins(string $name): array {
+	$origins = [];
+	foreach (explode(",", (string) getenv($name)) as $item) {
+		$origin = strtolower(rtrim(trim($item), "/"));
+		if (preg_match('#^https?://([a-z0-9]([a-z0-9.-]*[a-z0-9])?|\[[0-9a-f:.]+\])(:[0-9]{1,5})?$#', $origin)) $origins[] = $origin;
+	}
+	return array_values(array_unique($origins));
+}
+
+// The addresses and CIDR ranges ("10.0.0.0/8", "fd00::/8") of a comma list; an item that is not
+// one is dropped.
+function env_ip_ranges(string $name): array {
+	$ranges = [];
+	foreach (explode(",", (string) getenv($name)) as $item) {
+		$parts = explode("/", trim($item));
+		if (count($parts) > 2 || filter_var($parts[0], FILTER_VALIDATE_IP) === false) continue;
+		$max_bits = str_contains($parts[0], ":") ? 128 : 32;
+		if (isset($parts[1]) && !(ctype_digit($parts[1]) && intval($parts[1]) <= $max_bits)) continue;
+		$ranges[] = implode("/", $parts);
+	}
+	return array_values(array_unique($ranges));
+}

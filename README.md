@@ -28,7 +28,21 @@ To self-host your own instance of Moncycle.app, you can use:
 - [YunoHost](https://install-app.yunohost.org/?app=moncycle)  
 - [Docker](https://hub.docker.com/r/jeanio/moncycle.app)  
 
-> **Note for Docker users:** The database must be installed manually. The SQL file is available at [www_data/script/db/table.sql](https://github.com/moncycle-app/backend-api-web-app/blob/coding/www_data/script/db/table.sql)  
+> **Note for Docker users:** The database must be installed manually. The SQL file is [www_data/script/db/table.sql](www_data/script/db/table.sql).  
+
+---
+
+### Quick start
+
+A running instance, with Docker, in five steps:
+
+1. **Database.** Create a MariaDB 11.1 database and a user for it, then load the schema: `mariadb -u <user> -p <database> < www_data/script/db/table.sql`.
+2. **Compose file.** Copy [docker-compose.exemple.yml](docker-compose.exemple.yml) and set `APP_URL` (with a trailing `/`), the `DB_*` and `SMTP_*` variables and the two secret files (`db_password`, `smtp_password`). SMTP is required: the password of a new account is sent by mail. All the settings are in [Docker Environment Variables](#docker-environment-variables).
+3. **Start it.** `docker compose up -d`, then `curl -fsS http://127.0.0.1:8080/api/health_check` must answer `{"data":{"status":"ok"}}`.
+4. **Reverse proxy.** The container serves plain HTTP on `127.0.0.1:8080`: put TLS in front, and set `TRUSTED_PROXIES` to the proxy's address, or every visitor is one address to the login throttling. See [Security](#security) and [Deployments](#deployments).
+5. **Cron, once a day:** `docker exec -u www-data <container> php /var/www/html/script/cron.php`. See [Security](#security) for what it does.
+
+Then open `APP_URL`, create an account (a captcha, then the password arrives by mail) and write a first day. Upgrading from an older version: [Upgrading](#upgrading).
 
 ---
 
@@ -40,15 +54,40 @@ Tested with:
 
 ---
 
+### API documentation
+
+The HTTP API is described in OpenAPI 3.0: [www_data/api/moncycle_app_open_api.yaml](www_data/api/moncycle_app_open_api.yaml). **The spec is the contract:** a change to an endpoint and its YAML go in the same commit.
+
+- **Interactive:** Swagger UI, served by the API itself at `<API origin>/api/`. That is `<APP_URL>api/` when the web app and the API share an origin, which is the default; for the official instance, [https://tableau.moncycle.app/api/](https://tableau.moncycle.app/api/). "Try it out" uses your session: log in on the same instance first.
+- **Raw spec:** `<API origin>/api/moncycle_app_open_api.yaml`, for code generators, Postman or Insomnia.
+
+Quick start, in three lines:
+
+1. `POST /api/login` with `{"email": "...", "password": "..."}` answers `{"data": {"token": "...", ...}}`.
+2. Send that token on every other call as `Authorization: Bearer <token>`.
+3. Answers are `{"data": ...}` or `{"error": {"code": "...", "message": "..."}}`. **Bodies must be `Content-Type: application/json`** (any other type is a 415).
+
+```
+TOKEN=$(curl -s -H 'Content-Type: application/json' -d '{"email":"you@example.org","password":"..."}' https://YOUR.HOST/api/login | jq -r .data.token)
+curl -s -H "Authorization: Bearer $TOKEN" https://YOUR.HOST/api/key_infos
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"date":"2026-09-20","stampColor":"Red"}' https://YOUR.HOST/api/day
+```
+
+---
+
 ### Security
 
 - `script/` (cron, stats, migrations) answers only to the container itself: `APP_SCRIPT_ALLOW` (default `127.0.0.1 ::1`) is the list of IPs allowed in, everyone else gets a 403. Behind a reverse proxy Apache sees the proxy's address, not the caller's, so do not open it to an IP unless Apache gets the real client address.  
-- Run `script/cron.php` **once per day**, from the host, through the container, **as the web user**: `docker exec -u www-data <container> php /var/www/html/script/cron.php`. It deletes expired session tokens and sends the cycle mails. As `www-data`, because `docker exec` runs as root otherwise, and a log file that root created first cannot be appended to by the web server (see [Logs](#logs)):  
+- Run `script/cron.php` **once per day**, from the host, through the container, **as the web user**: `docker exec -u www-data <container> php /var/www/html/script/cron.php`. It purges expired session tokens, the captchas nobody used and old login attempts, stores the numbers `/api/pub_stat` answers, sends the cycle mails, the reminders to accounts that went quiet and the deletion warnings, and **deletes the accounts that have been inactive for `ACCOUNT_INACTIVITY_DELETE_YEARS` years** (4, in [constants.php](www_data/constants.php); RGPD retention). Do not run it on a database you have not backed up. As `www-data`, because `docker exec` runs as root otherwise, and a log file that root created first cannot be appended to by the web server (see [Logs](#logs)):  
   - More than once per day → may send duplicate emails.  
   - Less than once per day → expired tokens may not be deleted on time, causing missed emails.  
   - Through the CLI it has no time limit (`max_execution_time` is 30 s over HTTP, which can cut it short with many accounts).  
 - Apache refuses (403) what is not public: `config*.php`, `constants.php`, `lib/`, `vendor/` (except the three libraries the pages load), `composer.*`, `*.sql`, `*.md`.  
 - Logs: the app writes its own (see [Logs](#logs)), to `docker logs` by default, next to Apache's and PHP's errors. There is no Apache access log in the image: it recorded query strings (a TOTP code, the dates of a read). The logs hold IP addresses and account ids: rotate them (see `docker-compose.exemple.yml`).  
+- **What stops a page of another site from writing with your session.** The session is an `HttpOnly` cookie, `SameSite=Strict` (`COOKIE_SAMESITE`). On top of it every write (`POST`, `DELETE`) that a browser sends is checked against its `Origin` header (or `Sec-Fetch-Site` when there is none): the server's own host, `APP_URL` and `WEB_APP_ORIGINS` pass, any other page gets `403 cross_origin_refused`, login and password recovery included. Bodies must be `Content-Type: application/json` (a 415 otherwise), which a form of another site cannot send. A request with none of these headers (curl, a script, a mobile app) is not a browser's and is not refused.  
+- **What stops a stored text from running in the page.** What a user can store (the account name, a comment, a label, whether typed or imported from a file) is written into the page as text, never as HTML, and the pages of the image are served with a Content-Security-Policy whose `script-src` is `'self'`: no inline script runs. The news banner is the only HTML from outside, and it is rebuilt from an allow-list of tags (`NEWS_URL`).  
+- **Two-factor authentication and the lockout.** A wrong TOTP code after a right password counts like a wrong password. Past `LOGIN_LOCKOUT_THRESHOLD` an account with a TOTP code refuses even the right password and code until the failures decay, so that the code cannot be guessed. Whoever knows the password can keep such an account locked while they keep trying.  
+- **`POST /api/recover_password` has no limit of its own.** It replaces the password of an address with a new one at once and mails it: whoever knows an address can lock its owner out until the mail is read, and each call holds one of the 30 workers for 1 to 5 seconds on purpose. Rate-limit it at the edge (below). A one-time link sent by mail, which changes nothing until it is clicked, is the planned replacement.  
 
 **Limits** (`server_conf/`):  
 - Apache: request body 256 KB (a request to `/api/` whose `Content-Length` is larger gets a 413 `file_too_large` in the API's JSON envelope before any handler runs, so PHP never starts and logs nothing; `LimitRequestBody` is the same wall for a body sent in chunks, which has no `Content-Length`), 30 s `Timeout`, 30 workers of ~21 MB each. Without that early refusal PHP starts, logs "POST Content-Length of N bytes exceeds the limit" and reads a JSON body into memory: measured, a 20 MB body is read in full and one of 33 MB ends in a `memory_limit` fatal error (500).  
@@ -57,9 +96,39 @@ Tested with:
 
 **What the reverse proxy in front must do** (the image serves plain HTTP and is made to sit behind one):  
 - TLS and an http → https redirect. The image sends `Strict-Transport-Security` itself when the request carries `X-Forwarded-Proto: https`: make the proxy set that header. If the proxy already sends HSTS, remove that line from `server_conf/zz-moncycleapp.conf` to avoid a duplicate.  
-- Rate-limit `/api/login`, `/api/register` and `/api/recover_password`. The last one sleeps 1 to 5 s on purpose and holds one of the 30 workers meanwhile.  
+- Rate-limit `/api/login`, `/api/register`, `/api/recover_password` and `/api/captcha` (each captcha is a row in the database, purged after two days). `/api/recover_password` sleeps 1 to 5 s on purpose and holds one of the 30 workers meanwhile.  
+- Tell the app the proxy's address: set `TRUSTED_PROXIES` to it (an address or a CIDR range, comma separated) and have the proxy send the real client address in `X-Forwarded-For` (`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` with nginx). Without it every visitor has the proxy's address: the login throttling (`LOGIN_IP_MAX_ATTEMPTS`, 30 failures in 15 minutes per address) becomes one limit for everyone, so 30 failed logins from anywhere answer 429 to all, and the `ip` of the log is the proxy. The header is believed only when the peer is in `TRUSTED_PROXIES`, read from its right end, skipping trusted addresses: what the client itself wrote on the left is ignored. `APP_SCRIPT_ALLOW` is unchanged, it is Apache's own `Require ip` and still sees the proxy's address.  
+- Do not log query strings: `DELETE /api/totp?code=` carries a TOTP code, and the image's own Apache log was removed for that reason.  
 - A body limit of 256 KB (`client_max_body_size 256k` with nginx): the same as Apache's, so a request that is too large is refused at the edge before it costs a worker.  
 - Block `/script/` too (defence in depth).  
+
+---
+
+### Deployments
+
+**The default: the web app and the API on one origin.** The container serves the pages and `/api/` from the same host, `APP_URL`. A reverse proxy that routes `/api` to another backend still shows the browser one origin, so it needs nothing here but `TRUSTED_PROXIES`. The session cookie is `SameSite=Strict`, which costs nothing in this setup.
+
+**What the image does not do: serve the web app from another origin than its API.** Every URL in the pages is relative (`api/...`) and the API sends no CORS header, so a browser page on another origin cannot call it. What is there is the groundwork, so that nothing assumes one origin:
+
+- `APP_URL` and `WEB_APP_ORIGINS` name the browser origins that may *write* (the `Origin` check, see [Security](#security)): the origin of `APP_URL`, plus the ones you list, plus the API's own host (the `Host` header of the request: if your proxy rewrites it, `APP_URL` is what lets your own pages through).
+- `COOKIE_SAMESITE` sets the cookie's `SameSite`. `strict` (the default) is right for the pages and the API on the same site, sibling subdomains of one domain included, for requests a script makes as well as for links. A web app on **another site** needs `lax` (page navigations only) or `none` (requests from scripts, which needs `PHP_SECURE_COOKIES=true`), and relies on the browser not blocking third-party cookies: treat that as fragile.
+- Clients that are not browsers (a mobile app, a script) send no `Origin`, use `Authorization: Bearer <token>` and work from anywhere.
+
+**The Content-Security-Policy** is sent by the image for the pages it serves (`server_conf/zz-moncycleapp.conf`): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' <NEWS_URL>; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'`. Pages served by anything else need the same policy from their own server, and a front end that calls an API on another origin adds that origin to its `connect-src`. Swagger UI is one of the image's pages and is covered by the same policy.
+
+---
+
+### Upgrading
+
+Migrations are `www_data/script/migration/vN-1_to_vN.sql`, with a `.php` runner when the data has to move too; run them in order, one version at a time.
+
+1. **Dump the database first** (`mariadb-dump`), and try the migration on a copy of it: time it, and read its output. MariaDB commits at every `ALTER TABLE`, `CREATE TABLE` and `RENAME`, so the transaction of the script protects the data steps only, not the schema ones. A run that fails half way is undone by restoring the dump, never by running the script again.
+2. Stop the old container, or point the proxy away from it.
+3. Run the migration **inside a container of the new image** (it already has the database settings): `docker exec -w /var/www/html/script/migration <container> php v14_to_v15.php`. The script reads `./v14_to_v15.sql` from its working directory, hence `-w`; `script/` answers only to `127.0.0.1` over HTTP, so run it through the CLI as above.
+4. Outside Docker, a `config.php` written by hand needs the settings the new version adds: copy them from `config.exemple.php` (v15: `COOKIE_SAMESITE`, `WEB_APP_ORIGINS`, `TRUSTED_PROXIES`, `NEWS_URL`; the login ones before them). A missing one is a fatal "Undefined constant". The Docker image reads them from its environment and needs nothing.
+5. Start the new image, log in, write a day, export it, log out, and read `docker logs` for `system.exception`.
+
+**v14 to v15** is a large one: it renames the tables and columns to English, moves the `sensation` text of each day into `description` rows linked to it, hashes the session tokens, and stores login addresses in lower case (`account_email_normalise`: `Alice@X.test` and `alice@x.test` become one account). It stops before changing anything when two accounts already differ only by the case of their address: merge or rename them, then run it again. It also gives `key_value` a primary key.
 
 ---
 
@@ -75,7 +144,7 @@ An unset or empty variable takes its default; **required** ones have none and th
 | `DB_ID` | **required** | MariaDB login. |
 | `DB_PASSWORD_FILE` | – | Path of a file holding the MariaDB password, typically a Docker secret (`/run/secrets/db_password`). Preferred over `DB_PASSWORD`, which it overrides when the file is readable. |
 | `DB_PASSWORD` | – | MariaDB password in clear; set it or `DB_PASSWORD_FILE`. |
-| `SMTP_HOST` | **required** | SMTP server hostname, used for the welcome, password-recovery, cycle, reminder and deletion-warning mails. |
+| `SMTP_HOST` | **required** | SMTP server hostname, used for the welcome, password-recovery, secondary-address notice, cycle, reminder and deletion-warning mails. |
 | `SMTP_PORT` | `465` | SMTP server port (implicit TLS only, no STARTTLS). |
 | `SMTP_MAIL` | **required** | Sender address, also used as the SMTP login. |
 | `SMTP_PASSWORD_FILE` | – | Path of a file holding the SMTP password, typically a Docker secret. Preferred over `SMTP_PASSWORD`, which it overrides when the file is readable. |
@@ -97,6 +166,10 @@ An unset or empty variable takes its default; **required** ones have none and th
 | `LOG_REQUEST_ID_HEADER` | `X-Request-Id` | Request header whose value, when it is plain (`A-Za-z0-9._:-`, 64 characters at most), is the request id of the log; otherwise one is made. Set it empty to never read one. |
 | `APP_SCRIPT_ALLOW` | `127.0.0.1 ::1` | IPs allowed to call `script/` over HTTP, space separated; everyone else gets a 403. |
 | `PHP_SECURE_COOKIES` | `true` | Send cookies over HTTPS only; turn off for plain-HTTP dev. |
+| `COOKIE_SAMESITE` | `strict` | `SameSite` of the session cookie: `strict`, `lax` or `none` (any case). `none` is honoured only with `PHP_SECURE_COOKIES=true`, otherwise it is `lax`. See [Deployments](#deployments). |
+| `WEB_APP_ORIGINS` | – | Browser origins (`https://app.example.org`, comma separated) allowed to write to the API besides its own host and `APP_URL`'s: a staging site, a dev server, another front end. A write from any other origin is a 403. |
+| `TRUSTED_PROXIES` | – | Reverse proxies in front of the app (addresses or CIDR ranges, comma separated) whose `X-Forwarded-For` is believed. Empty: the client is the peer of the connection. See [Security](#security). |
+| `NEWS_URL` | `https://www.moncycle.app/actu.html` | The https page the web app shows as its news banner (`h4`, `p`, `b`, `i`, `br`, `ul`, `li`, `a` and `time` only). **Set it empty for no banner and no request to anybody.** It goes in the CSP's `connect-src` too, so give a URL with no query or fragment. |
 | `PHP_CACHE` | `1` | `1` enables PHP OPcache and the Apache browser-cache headers; `Off` disables every cache (dev). With OPcache on, restart the container after each edit of a bind-mounted `www_data`. |
 | `PHP_SHOW_ERR` | `Off` | `On` shows PHP errors in the browser; they are always logged to `docker logs`. |
 | `PHP_ERROR_REPORTING` | `24575` | PHP `error_reporting` as **a number**: `24575` is `E_ALL` without deprecations (the QR library raises some on every `/api/totp`), `32767` is `E_ALL`. |
@@ -138,7 +211,7 @@ A string is clipped to 200 characters and a list to 20 items. A line stays under
 
 **The request id** (`rid`) is shared by every line of a request, and is sent back in the `X-Request-Id` response header. If the request carries the header named by `LOG_REQUEST_ID_HEADER` and its value is plain, that value is used (so a reverse proxy can hand its own id down: `proxy_set_header X-Request-Id $request_id;` with nginx); otherwise 12 hexadecimal characters are made. It is client-controlled, so it only serves correlation. A cron run has one id for the whole run.
 
-**The address** (`ip`) is what Apache sees (`REMOTE_ADDR`): behind a reverse proxy that is the proxy, unless Apache is given the real client address (`mod_remoteip`). `LOG_IP=truncate` keeps the network only, `none` drops it. There is no `ip` in a cron line.
+**The address** (`ip`) is the peer of the connection (`REMOTE_ADDR`), or, when that peer is one of `TRUSTED_PROXIES`, the client address it forwarded (`X-Forwarded-For`): behind a reverse proxy set `TRUSTED_PROXIES`, or it is the proxy. `LOG_IP=truncate` keeps the network only, `none` drops it. There is no `ip` in a cron line.
 
 #### Keys
 
@@ -159,7 +232,7 @@ Every key the code can write. The first block is on every line.
 | `err` | The refusal or API error code (`invalid_credentials`, `captcha_invalid`, `unauthorized`...). |
 | `why` | The reason: for `auth.token_rejected` `unknown` or `disabled`; for `account.deleted` `user_request` or `inactivity`; for `system.log_sink_failed` `open_basedir`, `permission_denied`, `read_only`, `missing_directory`, `is_directory`, `not_permitted`, `cannot_open` or `write_failed`. |
 | `nfp` | The NFP method id (1 to 4) of a new account. |
-| `act` | What was refused: `register`, `password_change`, `delete`, `totp_enable`, `totp_disable`. |
+| `act` | What was refused: `register`, `password_change`, `delete`, `secondary_email`, `totp_enable`, `totp_disable`. |
 | `out` | Number of other sessions closed by a password change. |
 | `fld` | Names of the account settings changed (the names, never the values). |
 | `ndy` | Days erased with an account. |
@@ -178,7 +251,7 @@ Every key the code can write. The first block is on every line.
 | `fmt` | Export format: `pdf`, `csv`, `nfp`. |
 | `anon` | The export was anonymous. |
 | `per` | Length of the exported period in days (not the dates). |
-| `kind` | Which mail: `welcome`, `new_password`, `cycle`, `reminder`, `deletion_warning`. |
+| `kind` | Which mail: `welcome`, `new_password`, `secondary_email`, `cycle`, `reminder`, `deletion_warning`. |
 | `to` | Number of recipients of a mail. |
 | `fil` | Number of attachments of a mail. |
 | `msg` | A scrubbed message: the mailer's error, an exception message, a fatal error. |
@@ -235,7 +308,7 @@ Every key the code can write. The first block is on every line.
 | `system.log_sink_failed` | error | `f`, `why` | The log file could not be opened or written; the lines go to `stdout`. At most once per request. |
 | `http.request` | info | `m`, `p`, `st`, `ms`, `err`, `n`, `full` | The end of every request that reached the app. A read is this line with a `GET`, the `uid`, the path and `n` / `full`: `full` is true for `GET /api/day` with no filter and `GET /api/sync` from the start. |
 
-`account.refused` and `auth.login_failed` are the only lines whose volume an attacker controls (`rate_limited`): the reverse proxy's rate limit (above) bounds it. Docker's own health check calls `/api/health_check` every 30 s; it is not logged unless it fails.
+`account.refused` and `auth.login_failed` are the only lines whose volume an attacker controls (`rate_limited`): the reverse proxy's rate limit (above) bounds it. The health check of [docker-compose.exemple.yml](docker-compose.exemple.yml) calls `/api/health_check` every 30 s; it is not logged unless it fails.
 
 #### To a file
 

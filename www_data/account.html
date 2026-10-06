@@ -28,15 +28,15 @@
 		<meta property="og:description" content="Application de suivi de cycle pour les méthodes naturelles de régulation des naissances." />
 		<link rel="stylesheet" href="css/commun.css" />
 		<link rel="stylesheet" href="css/account.css" />
-		<script type="text/javascript" src="vendor/components/jquery/jquery.min.js"></script> 
-		<script type="text/javascript" src="js/store.js"></script>
-		<script type="text/javascript" src="js/account.js"></script>
+		<script type="text/javascript" src="vendor/components/jquery/jquery.min.js" defer></script>
+		<script type="text/javascript" src="js/store.js" defer></script>
+		<script type="text/javascript" src="js/account.js" defer></script>
 	</head>
 	<body>
 		<center>
 			<h1>mon<span class="gradiant_logo">cycle</span>.app</h1>
 			<div id="name">Mon compte</div>
-			<a href="/"><button type="button" class="nav_button">👈 Revenir aux cycles</button></a> <a href="api/logout" onclick='moncycle_store.clear_storage()'><button type="button" id="mon_user_account" class="nav_button rouge">🔑 Déconnexion</button></a>
+			<a href="/"><button type="button" class="nav_button">👈 Revenir aux cycles</button></a> <a href="api/logout" id="but_logout"><button type="button" id="mon_user_account" class="nav_button rouge">🔑 Déconnexion</button></a>
 			<p id="merci_don" style="display:none">🎖️ Merci pour votre don sur <a href="https://fr.tipeee.com/moncycleapp" target="_blank">Tipeee</a>.</p>
 			<p id="warning_demo" style="font-weight:bold; display:none">&#x1F6A8; Vous visualisez actuellement le compte de démonstration.<br /><br /><a style="color:#fbca0b" href='/register'><button type='button'>&#x1F680; créer votre compte</button></a></p>
 		</center>
@@ -141,8 +141,9 @@
 			<label for="i_email1">E-mail:</label> <br /><span class="label_info">Identifiant de connexion et envoi des cycles (non modifiable).</span><br />
 			<input id="i_email1" type="email" readonly name="email1" value="" /><br />
 			<br />
-			<label for="i_email2">2e e-mail:</label> <br /><span class="label_info">Permet de recevoir les cycles sur une deuxième addresse.</span><br />
-			<input id="i_email2" class="auto_save" type="email" name="email2" value="" /><br />
+			<label for="i_email2">2e e-mail:</label> <br /><span class="label_info">Permet de recevoir les cycles sur une deuxième addresse. Pour la changer, confirmez avec votre mot de passe: un mail prévient votre adresse de connexion.</span><br />
+			<input id="i_email2" type="email" name="email2" value="" /><br />
+			<input id="i_email2_password" type="password" autocomplete="current-password" placeholder="mot de passe" /> <button type="button" id="but_email2_save">💾 enregistrer</button><span class="net_stat" id="net_stat_email2"></span><br />
 			<br />
 			<label for="i_anaissance">Année de naissance:</label><br />
 			<select id="i_anaissance" name="age" class="auto_save" required></select><br />

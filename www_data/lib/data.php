@@ -18,8 +18,8 @@ require_once __DIR__ . "/log.php";
 
 // A day as the array lib/day_format.php translates: the DB row (or just its date when the day is
 // empty), with the first day of its cycle, its position in it, and its descriptions. What the
-// caller already has -- the row, the cycle, the position -- is not read again.
-function data_construct_day($db, $date, $no_user_account, $raw_day = null, $cycle = null, $pos = null) {
+// caller already has -- the row, the cycle, the position, the descriptions -- is not read again.
+function data_construct_day($db, $date, $no_user_account, $raw_day = null, $cycle = null, $pos = null, ?array $descriptions = null) {
 	$day = ["cycle" => $cycle ?? db_select_cycle($db, $date, $no_user_account)];
 
 	if ($day["cycle"] && is_null($pos)) $pos = data_cycle_day($day["cycle"], $date);
@@ -28,7 +28,18 @@ function data_construct_day($db, $date, $no_user_account, $raw_day = null, $cycl
 	$raw_day ??= db_select_day_timeline($db, $date, $no_user_account);
 	if (empty($raw_day)) return $day + ["date_obs" => $date];
 
-	return array_merge($day, $raw_day, ["description" => db_select_all_description_for_day_timeline($db, $no_user_account, $raw_day["no_day"])]);
+	return array_merge($day, $raw_day, ["description" => $descriptions ?? db_select_all_description_for_day_timeline($db, $no_user_account, $raw_day["no_day"])]);
+}
+
+// The descriptions of a list of day rows (in date order) in one query, by no_day: the way to read many days
+// at once, where data_construct_day() asking for each would be a query per day.
+function data_descriptions_by_day($db, array $rows, int $no_user_account): array {
+	$by_day = [];
+	if (empty($rows)) return $by_day;
+	foreach (db_select_descriptions_for_day_timeline_frame($db, $rows[0]["date_obs"], end($rows)["date_obs"], $no_user_account) as $link) {
+		$by_day[$link["no_day"]][] = $link;
+	}
+	return $by_day;
 }
 
 // The position of a date in the cycle that began on $cycle: 1 for its first day.
@@ -244,10 +255,7 @@ function data_sync_days($db, int $no_user_account, string $from_timestamp): arra
 		$rows = db_select_day_timelines_range($db, $range_start, $range_end, $no_user_account);
 		if (empty($rows)) continue;
 
-		$descriptions = [];
-		foreach (db_select_descriptions_for_day_timeline_frame($db, $range_start, end($rows)["date_obs"], $no_user_account) as $link) {
-			$descriptions[$link["no_day"]][] = $link;
-		}
+		$descriptions = data_descriptions_by_day($db, $rows, $no_user_account);
 
 		$cycle = null;
 		$next_start = 0;
@@ -259,6 +267,43 @@ function data_sync_days($db, int $no_user_account, string $from_timestamp): arra
 		}
 	}
 	return $days;
+}
+
+// ---------------------------------------------------------------------------
+// The public numbers of GET /api/pub_stat
+// ---------------------------------------------------------------------------
+
+// The three numbers counted now, rounded (PUB_STAT_KEYS): a walk of day_timeline, which the cron does
+// once a day and stores (data_public_stats_store()).
+function data_public_stats_count($db): array {
+	$counts = [
+		"moncycle_app_nb_user_account" => db_count_user_accounts($db),
+		"moncycle_app_nb_cycle" => db_count_cycles($db),
+		"moncycle_app_nb_total_observation" => db_count_days($db),
+	];
+	foreach ($counts as $name => $count) $counts[$name] = round($count, PUB_STAT_KEYS[$name][1]);
+	return $counts;
+}
+
+// Counts the three numbers and keeps them where data_public_stats() reads them. Run by the cron.
+function data_public_stats_store($db): void {
+	foreach (data_public_stats_count($db) as $name => $count) {
+		[$key] = PUB_STAT_KEYS[$name];
+		if (db_select_key_value($db, $key) === false) db_insert_key_value($db, $key, intval($count));
+		else db_update_key_value($db, $key, intval($count));
+	}
+}
+
+// What GET /api/pub_stat answers: the numbers the cron stored, or counted now when it has not run yet
+// (a fresh install, an upgrade before its first night).
+function data_public_stats($db): array {
+	$stats = [];
+	foreach (PUB_STAT_KEYS as $name => [$key]) {
+		$value = db_select_key_value($db, $key);
+		if ($value === false || is_null($value)) return data_public_stats_count($db);
+		$stats[$name] = intval($value);
+	}
+	return $stats;
 }
 
 // The answer of GET /api/sync: the cursor to send next time (the database's clock, read before

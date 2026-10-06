@@ -55,12 +55,13 @@ function doc_csv_row($out, array $fields): void {
 }
 
 // A stored table for the raw data export (api/all_of_my_data_plz.php): the column names, each
-// followed by the separator, then the rows, then a blank line. Nothing at all for no rows.
+// followed by the separator, then the rows, then a blank line. Nothing at all for no rows. A text
+// cell is free text like the period CSV's: doc_csv_free_text() keeps a spreadsheet from running it.
 function doc_csv_dump($out, array $rows): void {
 	if (empty($rows)) return;
 	foreach (array_keys($rows[0]) as $column) fputs($out, $column . CSV_SEP);
 	fputs($out, PHP_EOL);
-	foreach ($rows as $row) fputcsv($out, $row, CSV_SEP, '"', '\\');
+	foreach ($rows as $row) fputcsv($out, array_map(fn($cell) => is_string($cell) ? doc_csv_free_text($cell) : $cell, $row), CSV_SEP, '"', '\\');
 	fputs($out, PHP_EOL);
 }
 

@@ -19,9 +19,10 @@ if ($_SERVER['REQUEST_METHOD'] == "GET") {
 
 	$dates = [];
 	if (isset($_GET["date"])) {
-		$dates = is_string($_GET["date"]) ? array_map('date_parse_ymd', explode(",", $_GET["date"])) : [null];
+		$given = is_string($_GET["date"]) ? explode(",", $_GET["date"]) : [];
+		$dates = count($given) >= 1 && count($given) <= DAY_LIMIT_QUERY_DATES ? array_map('date_parse_ymd', $given) : [null];
 		if (in_array(null, $dates, true)) {
-			http_error(400, "invalid_date", "'date' must be one or more YYYY-MM-DD values separated by commas.");
+			http_error(400, "invalid_date", "'date' must be one or more YYYY-MM-DD values separated by commas, at most " . DAY_LIMIT_QUERY_DATES . ".");
 		}
 	}
 
@@ -44,10 +45,11 @@ if ($_SERVER['REQUEST_METHOD'] == "GET") {
 	elseif (empty($result)) $all_days = db_select_all_day_timeline($db, $no_user_account);
 
 	// the days come in date order: the cycle is the one the last first day started
+	$descriptions = data_descriptions_by_day($db, $all_days, $no_user_account);
 	$cycle_date = null;
 	foreach ($all_days as $row) {
 		if ($row["cycle_1st_day"]) $cycle_date = $row["date_obs"];
-		$result[$row["date_obs"]] = day_format_to_json(data_construct_day($db, $row["date_obs"], $no_user_account, $row, $cycle_date));
+		$result[$row["date_obs"]] = day_format_to_json(data_construct_day($db, $row["date_obs"], $no_user_account, $row, $cycle_date, null, $descriptions[$row["no_day"]] ?? []));
 	}
 
 	log_note(["n" => count($result), "full" => empty($dates) && !$range]);

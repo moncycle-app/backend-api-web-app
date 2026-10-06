@@ -90,6 +90,11 @@ $deleted = db_delete_old_login_attempt_ip($db);
 log_cron_count("ipa", $deleted);
 echo $deleted . " old login attempts (IP) deleted" . PHP_EOL;
 
+// THE PUBLIC NUMBERS OF /api/pub_stat: counted here, once a day, and not on every visit
+
+data_public_stats_store($db);
+echo "public stats stored" . PHP_EOL;
+
 // THE VISIT COUNTERS: every day, every Sunday, the first of the month
 
 db_update_reset_key_value($db, "pub_visit_daily");

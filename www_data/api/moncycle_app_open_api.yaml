@@ -71,7 +71,9 @@ info:
 
     **Rule 3 — the HTTP status code is real.** `200` means it worked. `401` means you are not
     logged in. `409` means a conflict. `413` means the request body is over 256 KB, whichever
-    endpoint it was sent to. Check the status first, then the body.
+    endpoint it was sent to. `415` means a write was not sent as JSON, and `403` with the code
+    `cross_origin_refused` means a browser page of another origin tried to write (both in
+    section 3). Check the status first, then the body.
 
     **Every response carries an `X-Request-Id` header** (but `GET /version`, a static file, and `GET /health_check`). It is
     the id the server's own log uses for that request: quote it when you report a problem. You
@@ -80,13 +82,14 @@ info:
 
     ### Exceptions to rule 1 and 2
 
-    Four endpoints are older or serve files. They do **not** use the `data` / `error` envelope.
+    Five endpoints are older or serve files. They do **not** use the `data` / `error` envelope.
     This is the complete list, so you never have to guess:
 
     | Endpoint | What it returns instead |
     |---|---|
     | `GET /version` | a plain JSON object (a static file) |
     | `GET /pub_stat` | a plain JSON object |
+    | `GET /captcha` | a JPEG image |
     | `GET /export` | a file (`.nfp` JSON, `.csv` or `.pdf`); errors are **plain text in French** |
     | `GET /all_of_my_data_plz` | a CSV file; `401` has no body |
 
@@ -108,11 +111,26 @@ info:
 
     Good to know:
 
-    - The token **does not expire** on its own. The cookie is set for 5 years.
+    - A token lives until you destroy it (`GET /logout`) or the server purges it: the daily cron
+      deletes a token that has **not been used for 40 days**, or that is **more than a year old**,
+      whatever its use. The next call with it answers `401`: log in again. The cookie is set for
+      5 years, so it can outlive its token.
     - There is no refresh step. There are no scopes and no roles.
     - `GET /logout` destroys **one** token (the one you used), not all of them.
     - One account can hold many valid tokens at the same time (one per device).
     - Missing or wrong token on a protected endpoint → `401` with code `unauthorized`.
+    - **Every body is JSON.** Send `Content-Type: application/json` (a parameter such as
+      `; charset=utf-8` is fine) with every `POST` and every `DELETE` that has a body, and with
+      `POST /import`, whose body is the NFP file. Any other type, a form or `text/plain`, is
+      answered `415` `unsupported_media_type`.
+    - **A write from a browser page that is not ours is refused**, with `403`
+      `cross_origin_refused`, whoever is logged in. The server reads the `Origin` header of a
+      `POST` or `DELETE` (and `Sec-Fetch-Site` when there is no `Origin`): the allowed origins
+      are the server's own, the web app's (`APP_URL`) and the ones the operator lists
+      (`WEB_APP_ORIGINS`). A request with neither header, which is what curl, a script or a
+      mobile app sends, is not a browser's and is never refused for this.
+    - The session cookie is `HttpOnly` and `SameSite=Strict`, unless the operator set
+      `COOKIE_SAMESITE` to `lax` or `none`.
 
     ## 4. First run, step by step
 
@@ -310,6 +328,12 @@ info:
     The lock only applies to a **wrong** password. The real owner can still log in with the
     correct password, so a third party cannot lock someone out.
 
+    One exception: an account with **two-factor authentication on**. Once the password is known,
+    the one-time code is all that is left to guess, so a wrong code is counted like a wrong
+    password and, from the lockout threshold on, the code is no longer looked at: even the right
+    one is refused with `403` `account_locked`. Someone who knows the password can therefore keep
+    such an account locked while they keep trying.
+
     ## 10. Privacy by design
 
     This is personal data, so the API is deliberately narrow:
@@ -475,7 +499,9 @@ paths:
 
         Every number is **rounded on purpose** so that no individual can be recognised:
         accounts and cycles to the nearest 10, observations to the nearest 100. A small
-        instance can therefore report `0`.
+        instance can therefore report `0`. The numbers are counted once a day, by the cron, and
+        kept: the endpoint only reads them (before the cron has run for the first time it counts
+        them on the spot).
 
         Side effect: calling this endpoint increases the internal daily, weekly and monthly
         visit counters. Do not use it as a health check — use `GET /health_check`.
@@ -547,7 +573,7 @@ paths:
                 email:
                   type: string
                   format: email
-                  description: Login address. The generated password is sent here. Must be unique.
+                  description: Login address. The generated password is sent here. Must be unique. Spaces around it are ignored and it is stored in lower case, so `Marie@Example.org` and `marie@example.org` are one account.
                   example: marie@example.org
                 birthYear:
                   type: integer
@@ -578,6 +604,8 @@ paths:
                   default: false
                   description: Consent to share anonymous data with research programs.
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
         "201":
           description: Account created. Check `welcomeEmailSent` before telling the user to look at their mailbox.
           content:
@@ -610,6 +638,7 @@ paths:
           description: |-
             `registration_disabled` — this instance does not accept new accounts.
             `captcha_invalid` — wrong answer, no captcha stored, or the cookie was not sent back.
+            `cross_origin_refused` — a browser page of another origin sent this write (see section 3 of the introduction).
           content:
             application/json:
               schema:
@@ -651,7 +680,7 @@ paths:
           description: A new captcha image. Also sets or refreshes the `MONCYCLEAPP_TOKEN` cookie.
           headers:
             Set-Cookie:
-              description: "`MONCYCLEAPP_TOKEN=<random>`, sent only when the visitor has no valid cookie yet. HttpOnly, SameSite=Lax, 2 days."
+              description: "`MONCYCLEAPP_TOKEN=<random>`, sent only when the visitor has no valid cookie yet. HttpOnly, SameSite=Strict by default (`COOKIE_SAMESITE`), 2 days."
               schema:
                 type: string
           content:
@@ -704,6 +733,8 @@ paths:
             schema:
               $ref: '#/components/schemas/LoginRequest'
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
         "200":
           description: |-
             Authenticated. Three cases land here: password only, password + TOTP, or a request that
@@ -711,7 +742,7 @@ paths:
             apart.
           headers:
             Set-Cookie:
-              description: "`MONCYCLEAPP_TOKEN=<token>`. HttpOnly, SameSite=Lax, 5 years. Not sent when `alreadyAuthenticated` is true."
+              description: "`MONCYCLEAPP_TOKEN=<token>`. HttpOnly, SameSite=Strict by default (`COOKIE_SAMESITE`), 5 years. Not sent when `alreadyAuthenticated` is true."
               schema:
                 type: string
           content:
@@ -759,7 +790,8 @@ paths:
             `login_disabled` — this instance has logins turned off.
             `captcha_required` — send `captcha` with the answer from `GET /captcha`.
             `account_disabled` — the account was deactivated by an administrator.
-            `account_locked` — too many recent failures. Wait; it clears after 60 minutes with no new failure.
+            `account_locked` — too many recent failures. Wait; it clears after 60 minutes with no new failure. With two-factor authentication on, it also refuses the right password and code.
+            `cross_origin_refused` — a browser page of another origin sent this write (see section 3 of the introduction).
           content:
             application/json:
               schema:
@@ -786,6 +818,7 @@ paths:
         It is **idempotent**. Calling it without a token, or twice, also answers `303`.
 
         Other tokens of the same account stay valid. There is no "log out everywhere".
+      security: []
       responses:
         "303":
           description: Logged out. Also returned when you were not logged in. Redirects to `/auth`.
@@ -836,6 +869,10 @@ paths:
                     each of those devices has to log in again). The calling session stays open.
                     The password change and the sign-out happen together or not at all.
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "200":
           description: Password changed.
           content:
@@ -913,6 +950,10 @@ paths:
                   description: The login address of the account.
                   example: marie@example.org
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "200":
           description: Request accepted. This says nothing about whether the account exists.
           content:
@@ -1029,6 +1070,10 @@ paths:
                   description: The 6-digit code shown by the authenticator app right now.
                   example: 492013
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "200":
           description: Two-factor authentication is now active.
           content:
@@ -1084,6 +1129,8 @@ paths:
             type: integer
             example: 492013
       responses:
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "200":
           description: Two-factor authentication is off and the secret is erased.
           content:
@@ -1136,7 +1183,13 @@ paths:
         Things that surprise people:
 
         - `name` is ignored when it is not a string, is empty, or is longer than 255 characters.
-        - `secondaryEmail` is ignored when it is not a valid address. Send `""` to remove it.
+        - `secondaryEmail` is ignored when it is not a valid address. Send `""` to remove it. It
+          is stored in lower case. **Changing it takes the account password**, sent as `password`
+          in the same body: it receives every finished cycle by email, so a stolen session alone
+          cannot redirect them. Without `password` the answer is `400` `missing_password` and
+          with a wrong one `401` `invalid_password`, and nothing is changed. Sending the address
+          the account already has changes nothing and needs no password. Once changed, a notice
+          goes to the login address.
         - `birthYear` is ignored when it is not the current year or one of the 100 years before.
         - `method` and `temperatureTracking` are stored together as one value. If you send only
           one of the two, **the other falls back to its default** (`billings`, and `false`).
@@ -1159,8 +1212,12 @@ paths:
                   example: Marie
                 secondaryEmail:
                   type: string
-                  description: A second address, to also receive charts by email. Send `""` to remove it.
+                  description: A second address, to also receive charts by email. Send `""` to remove it. Changing it needs `password`.
                   example: partner@example.org
+                password:
+                  type: string
+                  format: password
+                  description: The current account password. Required only to change `secondaryEmail`; ignored otherwise.
                 method:
                   type: string
                   enum: [billings, fertilityCare]
@@ -1195,6 +1252,10 @@ paths:
                   description: Your own clock, ISO 8601 UTC. The server uses its own clock if this is absent or invalid.
                   example: "2026-03-10T15:30:45Z"
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "200":
           description: |-
             Request accepted. Read `fieldsUpdated` to see what really changed — it can be empty.
@@ -1221,13 +1282,21 @@ paths:
                         format: date-time
                         description: The timestamp that was stored, whether it came from you or from the server.
         "400":
-          description: "`invalid_json` — the body is not a JSON object."
+          description: |-
+            `invalid_json` — the body is not a JSON object.
+            `missing_password` — `secondaryEmail` would change and `password` is absent, empty or not a string.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         "401":
-          $ref: '#/components/responses/Unauthorized'
+          description: |-
+            `unauthorized` — no valid token.
+            `invalid_password` — `secondaryEmail` would change and the password is wrong. Nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
     delete:
       tags: [account]
@@ -1255,6 +1324,10 @@ paths:
                   type: string
                   description: The current account password, as a confirmation.
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "204":
           description: Account deleted. No body. Your token is now invalid.
         "400":
@@ -1522,6 +1595,10 @@ paths:
                   date: "2026-03-14"
                   dayNotObserved: true
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "200":
           description: |-
             The day already existed and was replaced. You also get `200` for a date you deleted
@@ -1627,6 +1704,8 @@ paths:
             format: date-time
           example: "2026-03-10T07:12:00Z"
       responses:
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "204":
           description: Cleared. No body. Also returned for a date that held nothing.
         "400":
@@ -1724,6 +1803,10 @@ paths:
                   description: Your own clock, ISO 8601 UTC. The server uses its own clock if this is absent or invalid.
                   example: "2026-03-10T15:30:45Z"
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "200":
           description: The existing label was renamed or retyped.
           content:
@@ -1790,6 +1873,8 @@ paths:
             type: integer
           example: 58
       responses:
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "204":
           description: Deleted. No body.
         "400":
@@ -2103,6 +2188,9 @@ paths:
         > `dryRun=1` replaces the old check-only behaviour with a full preview: it reports what
         > the write would do, down to which days the account already holds.
 
+        The body is the NFP file itself, which is JSON: send it with
+        `Content-Type: application/json`. Any other type is refused with `415`.
+
         ### All or nothing
 
         The file goes through four stages, and **nothing is written until every checking stage
@@ -2262,6 +2350,10 @@ paths:
             schema:
               $ref: '#/components/schemas/NfpFile'
       responses:
+        "415":
+          $ref: '#/components/responses/UnsupportedMediaType'
+        "403":
+          $ref: '#/components/responses/CrossOriginRefused'
         "200":
           description: |-
             The file was accepted. On a dry run nothing was written; otherwise the days in
@@ -2394,6 +2486,35 @@ components:
               code: unauthorized
               message: Authentication required.
 
+    UnsupportedMediaType:
+      description: |-
+        `unsupported_media_type` — the body was not sent as `Content-Type: application/json`
+        (a form and `text/plain` are what a page of another site can send without asking the
+        browser's leave). Nothing was read.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: unsupported_media_type
+              message: "The body must be sent as 'Content-Type: application/json'."
+
+    CrossOriginRefused:
+      description: |-
+        `cross_origin_refused` — a browser sent this write from a page whose origin is not the
+        server's own, `APP_URL`'s or one of `WEB_APP_ORIGINS` (the `Origin` header, or
+        `Sec-Fetch-Site` when there is none). Nothing was read or done. A client that sends
+        neither header is never refused for this.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: cross_origin_refused
+              message: This request comes from a page that is not allowed to write to this API.
+
   schemas:
 
     Error:
@@ -2439,7 +2560,7 @@ components:
         email:
           type: string
           format: email
-          description: The login address of the account.
+          description: The login address of the account. Not case-sensitive, spaces around it are ignored.
           example: demo.bill@moncycle.app
         password:
           type: string
@@ -2450,7 +2571,8 @@ components:
           type: integer
           description: |-
             The 6-digit TOTP code. Required only once a login answered `401 totp_required` — that
-            is, only for accounts where two-factor is active.
+            is, only for accounts where two-factor is active. Sent as a number or as a string: a
+            leading zero lost on the way (`91710` for `091710`) is restored.
           example: 492013
         captcha:
           type: string
@@ -2544,6 +2666,15 @@ components:
           format: date-time
           nullable: true
           description: When the account settings were last written, from the client clock. `null` if never.
+        newsUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: |-
+            The https page the web app reads its news banner from: the `NEWS_URL` setting of the instance
+            (the official instance's page unless the operator changed it). `null` when it is off, and
+            for any value that is not an https URL. Not about the account: it is the same for everyone.
+          example: https://www.moncycle.app/actu.html
 
     Day:
       type: object
@@ -3341,15 +3472,16 @@ components:
         ```
 
         Use this for apps, scripts and mobile clients. It wins over the cookie if both are sent.
-        The token does not expire. `GET /logout` destroys the one you send.
+        A token is purged after 40 days without use, or when it is a year old. `GET /logout`
+        destroys the one you send.
 
     HTTPcookie:
       type: apiKey
       in: cookie
       name: MONCYCLEAPP_TOKEN
       description: |-
-        The same token, in a cookie. `POST /login` sets it for you (HttpOnly, 5 years), so a
-        browser client has nothing to store.
+        The same token, in a cookie. `POST /login` sets it for you (HttpOnly, SameSite=Strict by default, 5 years),
+        so a browser client has nothing to store.
 
         The same cookie name also carries the **captcha** session before login, which is why
         `GET /captcha` and the call that follows it must share a cookie jar.

@@ -140,3 +140,13 @@ UPDATE `user_account` SET `language` = 'FR';
 ALTER TABLE `user_account`
 ADD `auto_mail_export` tinyint(1) unsigned NOT NULL DEFAULT 1 AFTER `research`,
 ALGORITHM=INSTANT, LOCK=NONE;
+
+-- Addresses are stored in lower case: the app lowers what a client types (account_email_normalise) and the DB
+-- compares exactly (utf8mb4_bin), so a mixed-case account could not log in with its own address otherwise.
+-- Two accounts whose email1 differ only by case would collide on the unique key. v14_to_v15.php checks before
+-- it starts; if you run this file by hand, run this first on the v14 table and stop if it answers a row:
+--   SELECT LOWER(email1) AS email, COUNT(*) AS accounts FROM compte GROUP BY email HAVING COUNT(*) > 1;
+UPDATE `user_account` SET `email1` = LOWER(`email1`), `email2` = LOWER(`email2`);
+
+-- key_value had no primary key (the visit counters and the numbers of /api/pub_stat are rows of it)
+ALTER TABLE `key_value` ADD PRIMARY KEY (`key`), ALGORITHM=INPLACE, LOCK=NONE;

@@ -134,6 +134,13 @@ function moncycle_app_error_message(jqXHR) {
 	return ((jqXHR.responseJSON || {}).error || {}).message || "erreur inconnue";
 }
 
+// "<prefix><b>label</b> message<suffix>" in the element. The label is ours; the message is the server's and
+// can quote what the user typed (duplicate_name echoes the label), so it goes in as a text node. Never
+// through append(string): jQuery reads a string with a "<" or an entity in it as HTML.
+function moncycle_app_show_error(target, label, message, prefix = "", suffix = "") {
+	target.empty().append(document.createTextNode(prefix), $("<b>").text(label), document.createTextNode(" " + message + suffix));
+}
+
 // Report lines from /api/import quote what was in the file -- a sensation name, the app that
 // wrote it -- so they are never dropped into HTML as they come.
 function moncycle_app_escape_html(text) {
@@ -165,6 +172,9 @@ function moncycle_app_description_from_api(d) {
 $(document).ready(function(){
 
 	moncycle_store.init();
+
+	// the local copy goes with the session (the link itself is the request that ends it)
+	$("#but_logout").on("click", function () { moncycle_store.clear_storage(); });
 
 	// TELECHARGEMENT DES DONNES DES UTILISATEUR
 	$.get("api/key_infos", {}).done(function(ret) {
@@ -216,22 +226,20 @@ $(document).ready(function(){
 			return
 		}
 		for (const description of data) {
-			let input_form = $(`<form
-				class="f_edit_description" id="f_edit_description_${description.no_description}">
-				<input type="hidden" name="no_description" value="${description.no_description}" />
-				<input class="i_desc_name" type="text" name="name" value="${description.name}" maxlength="256" />
-				<select class="i_desc_type" name="type">
-					<option ${description.type==2 ? 'selected' : '' } value="2">🧠 Sensations</option>
-					<option ${description.type==1 ? 'selected' : '' } value="1">👀 Observation</option>
-					<option ${description.type==0 ? 'selected' : '' } value="0" disabled>❓ à définir</option>
-				</select>
-				<span class="i_desc_count" title="Nombre de jours associés à cette description">${description.use_count}</span></form>`);
-			let input_del = $(`<form
-				class="f_delete_description" id="f_delete_description_${description.no_description}">
-				<input type="hidden" name="no_description" value="${description.no_description}" />
-				<input type="hidden" class="del_data_name" value="${description.name}" />
-				<input type="hidden" class="del_data_count" value="${description.use_count}" />
-				<input class="i_desc_del" type="submit" value="❌" /></form>`);
+			// built with the DOM, never as HTML: a name is free text and would break out of value="..."
+			let input_form = $("<form>", {class: "f_edit_description", id: "f_edit_description_" + description.no_description}).append(
+				$("<input>", {type: "hidden", name: "no_description"}).val(description.no_description),
+				$("<input>", {class: "i_desc_name", type: "text", name: "name", maxlength: 256}).val(description.name),
+				$("<select>", {class: "i_desc_type", name: "type"}).append(
+					$("<option>", {value: "2", selected: description.type == 2}).text("🧠 Sensations"),
+					$("<option>", {value: "1", selected: description.type == 1}).text("👀 Observation"),
+					$("<option>", {value: "0", selected: description.type == 0, disabled: true}).text("❓ à définir")),
+				$("<span>", {class: "i_desc_count", title: "Nombre de jours associés à cette description"}).text(description.use_count));
+			let input_del = $("<form>", {class: "f_delete_description", id: "f_delete_description_" + description.no_description}).append(
+				$("<input>", {type: "hidden", name: "no_description"}).val(description.no_description),
+				$("<input>", {type: "hidden", class: "del_data_name"}).val(description.name),
+				$("<input>", {type: "hidden", class: "del_data_count"}).val(description.use_count),
+				$("<input>", {class: "i_desc_del", type: "submit"}).val("❌"));
 			$("#desc_froms_container").append(input_form);
 			$("#desc_froms_container").append(input_del);
 		}
@@ -308,7 +316,7 @@ $(document).ready(function(){
 
 
 	// MISE A JOURS DES PARAMETTRE DU COMPTE
-	const moncycle_app_account_field_map = {name: "name", email2: "secondaryEmail", age: "birthYear", timeline_asc: "timelineAscending", research: "research", auto_mail_export: "autoMailExport"};
+	const moncycle_app_account_field_map = {name: "name", age: "birthYear", timeline_asc: "timelineAscending", research: "research", auto_mail_export: "autoMailExport"};
 	$(".auto_save").on("keyup change", function() {
 		// the status goes next to the section the field is in (data-net-stat), the settings one by default
 		let net_stat = $("#" + ($(this).data("net-stat") || "net_stat"));
@@ -344,6 +352,30 @@ $(document).ready(function(){
 	});
 
 
+	// THE SECOND ADDRESS: it receives every cycle by mail, so the password confirms a change
+	$("#but_email2_save").on("click", function() {
+		let net_stat = $("#net_stat_email2");
+		net_stat.removeClass("vert rouge").text('⏳');
+		$.ajax({
+			type: "POST",
+			url: "../api/account",
+			contentType: "application/json",
+			data: JSON.stringify({secondaryEmail: $("#i_email2").val(), password: $("#i_email2_password").val()}),
+		}).done(function() {
+			$("#i_email2_password").val('');
+			net_stat.addClass('vert').text(' ✅ enregistré');
+			moncycle_app_sync_later();
+		}).fail(function(jqXHR) {
+			console.error(jqXHR);
+			net_stat.addClass('rouge').text(" ❌ " + moncycle_app_error_message(jqXHR));
+		});
+	});
+	$("#i_email2_password").on("keydown", function(event) {
+		if (event.key !== "Enter") return;
+		event.preventDefault();
+		$("#but_email2_save").click();
+	});
+
 	// CHANGEMENT DU MOT DE PASSE
 	$("#form_mdp_change").on("submit", function(event) {
 		event.preventDefault();
@@ -363,7 +395,7 @@ $(document).ready(function(){
 		}).fail(function(jqXHR){
 			console.error(jqXHR);
 			$("#but_mdp_change").prop("disabled", false);
-			$("#mdp_ret_msg").html(`❌ <b>erreur:</b> ${moncycle_app_error_message(jqXHR)}.`);
+			moncycle_app_show_error($("#mdp_ret_msg"), "erreur:", moncycle_app_error_message(jqXHR), "❌ ", ".");
 		});
 	});
 
@@ -386,7 +418,7 @@ $(document).ready(function(){
 			});
 		}).fail(function(jqXHR) {
 			$("#i_activate_otp").prop("disabled", false);
-			$("#totp_err_msg").html("<b>❌&nbsp;erreur:</b> " + moncycle_app_error_message(jqXHR));
+			moncycle_app_show_error($("#totp_err_msg"), "❌\u00a0erreur:", moncycle_app_error_message(jqXHR));
 		});
 	});
 
@@ -401,7 +433,7 @@ $(document).ready(function(){
 				$("#totp_state").show();
 			}
 		}).fail(function(jqXHR) {
-			$("#totp_err_msg").html("<b>❌&nbsp;erreur:</b> " + moncycle_app_error_message(jqXHR));
+			moncycle_app_show_error($("#totp_err_msg"), "❌\u00a0erreur:", moncycle_app_error_message(jqXHR));
 		});
 	});
 
@@ -416,7 +448,7 @@ $(document).ready(function(){
 				$("#totp_state").hide();
 			}
 		}).fail(function(jqXHR) {
-			$("#totp_err_msg").html("<b>❌&nbsp;erreur:</b> " + moncycle_app_error_message(jqXHR));
+			moncycle_app_show_error($("#totp_err_msg"), "❌\u00a0erreur:", moncycle_app_error_message(jqXHR));
 		});
 	});
 

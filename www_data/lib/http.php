@@ -10,10 +10,25 @@
 require_once __DIR__ . "/date.php";
 require_once __DIR__ . "/log.php";
 
-// reads and JSON-decodes the raw request body. Sends a 400 error and exits if it's missing,
-// empty, or not a JSON object -- endpoints that take no body (GET, DELETE-by-query-string)
-// don't call this.
+// Whether the request says its body is JSON: "application/json" in any case, parameters
+// ("; charset=utf-8") allowed. Anything else, a form or "text/plain", is what a page of another site
+// can send without asking the browser's leave: the writes of this API do not take it.
+function http_content_type_is_json(): bool {
+	$type = $_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? '';
+	return is_string($type) && strtolower(trim(explode(';', $type, 2)[0])) === 'application/json';
+}
+
+// Sends a 415 and exits unless the body is declared JSON. The endpoints that read the body
+// themselves (api/import.php) call it; http_json_body() does.
+function http_require_json_content_type(): void {
+	if (!http_content_type_is_json()) http_error(415, "unsupported_media_type", "The body must be sent as 'Content-Type: application/json'.");
+}
+
+// reads and JSON-decodes the raw request body. Sends a 415 if it is not declared JSON and a 400
+// error and exits if it's missing, empty, or not a JSON object -- endpoints that take no body (GET,
+// DELETE-by-query-string) don't call this.
 function http_json_body(): array {
+	http_require_json_content_type();
 	$raw = file_get_contents('php://input');
 	$body = json_decode($raw, true);
 	if (!is_array($body)) http_error(400, "invalid_json", "Request body must be a valid JSON object.");

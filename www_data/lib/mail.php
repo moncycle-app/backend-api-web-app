@@ -12,8 +12,8 @@ use PHPMailer\PHPMailer\PHPMailer;
 require_once __DIR__ . "/../vendor/autoload.php";
 require_once __DIR__ . "/log.php";
 
-// Sends one mail from the app. $kind says which of the five it is (welcome, new_password, cycle,
-// reminder, deletion_warning); it is all the log keeps of it, with how many addresses and files:
+// Sends one mail from the app. $kind says which of the six it is (welcome, new_password, secondary_email,
+// cycle, reminder, deletion_warning); it is all the log keeps of it, with how many addresses and files:
 // never an address, a subject or a body (two of them hold a password). $to lists the addresses
 // (empty ones are skipped), $attachments is [file name => content]. True when the SMTP server took
 // it: the callers decide what a failure means, so nothing is thrown.
@@ -109,6 +109,22 @@ function mail_send_new_password(string $email, string $password): bool {
 	return mail_send('new_password', [$email], 'Nouveau mot de passe',
 		mail_html("Bonjour,", $content, mail_why("vous possédez un compte sur MONCYCLE.APP")),
 		'Nouveau mot de passe temporaire: ' . $password);
+}
+
+// The notice to the account's own address that its secondary address changed ("" = removed): the secondary
+// one receives every cycle, so whoever holds the account must be able to see it was changed.
+function mail_send_secondary_email_changed(string $email, string $new_email2): bool {
+	$new = htmlspecialchars($new_email2);
+	$what = $new_email2 === "" ? "La deuxième adresse de votre compte a été <b>supprimée</b>." : "La deuxième adresse de votre compte, qui reçoit vos cycles par e-mail, est maintenant <b>{$new}</b>.";
+	$login = mail_link($email, "auth", "connectez-vous");
+	$content = <<<HTML
+	{$what}<br />
+	Si ce n'est pas vous, {$login} et changez votre mot de passe depuis la page "👨‍💻 Mon compte".<br />
+	<br />
+	HTML;
+	return mail_send('secondary_email', [$email], 'La deuxième adresse de votre compte a changé',
+		mail_html("Bonjour,", $content, mail_why("vous possédez un compte sur MONCYCLE.APP")),
+		$new_email2 === "" ? 'La deuxième adresse de votre compte a été supprimée.' : 'La deuxième adresse de votre compte est maintenant ' . $new_email2 . '.');
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,24 @@ function account_method_id_from_json(array $body): int {
 }
 
 // ---------------------------------------------------------------------------
+// The addresses and the password of the account
+// ---------------------------------------------------------------------------
+
+// An email address as it is stored and looked up: trimmed and in lower case, so that Alice@X.test
+// and alice@x.test are one account. "" when it is not a string (a client can send a list or a number).
+// FILTER_VALIDATE_EMAIL refuses non-ASCII, so strtolower never meets a multibyte character.
+function account_email_normalise(mixed $email): string {
+	return is_string($email) ? strtolower(trim($email)) : "";
+}
+
+// Is this the account's password? The row sec_auth_token() reads holds no hash, so it is read again.
+function account_password_matches($db, array $user_account, mixed $password): bool {
+	if (!is_string($password) || $password === "") return false;
+	$full_account = db_select_user_account_by_email($db, $user_account["email1"]) ?? [];
+	return isset($full_account["password"]) && password_verify($password, $full_account["password"]);
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/account
 // ---------------------------------------------------------------------------
 
@@ -53,8 +71,20 @@ function account_birth_year_valid(int $year): bool {
 	return $year >= $this_year - ACCOUNT_BIRTH_YEAR_MAX_AGE && $year <= $this_year;
 }
 
+// The secondary address a body asks for when it is a change: the new address (normalised, "" to clear
+// it), or null when the body asks nothing, something unusable, or what the account already has. The
+// secondary address receives every cycle by mail, so the endpoint asks for the password before it
+// lets a session change it.
+function account_secondary_email_change(array $account, array $body): ?string {
+	if (!isset($body["secondaryEmail"]) || !is_string($body["secondaryEmail"])) return null;
+	$email = account_email_normalise($body["secondaryEmail"]);
+	if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) return null;
+	return $email === account_email_normalise($account["email2"]) ? null : $email;
+}
+
 // What a body changes of the account row: [the values db_update_user_account_settings() takes, the
 // JSON names of the fields it changes]. An absent or unusable field leaves the account as it is.
+// The password that lets a session change "secondaryEmail" is checked by the endpoint, not here.
 function account_apply_json(array $account, array $body): array {
 	$new = [
 		"name" => $account["name_user_account"], "email2" => $account["email2"], "nfp_method" => $account["nfp_method"],
@@ -69,9 +99,12 @@ function account_apply_json(array $account, array $body): array {
 		$new["name"] = $name;
 		$changed[] = "name";
 	}
-	if (isset($body["secondaryEmail"]) && is_string($body["secondaryEmail"]) && ($body["secondaryEmail"] === '' || filter_var($body["secondaryEmail"], FILTER_VALIDATE_EMAIL))) {
-		$new["email2"] = $body["secondaryEmail"];
-		$changed[] = "secondaryEmail";
+	if (isset($body["secondaryEmail"]) && is_string($body["secondaryEmail"])) {
+		$email2 = account_email_normalise($body["secondaryEmail"]);
+		if ($email2 === '' || filter_var($email2, FILTER_VALIDATE_EMAIL)) {
+			$new["email2"] = $email2;
+			$changed[] = "secondaryEmail";
+		}
 	}
 	if (isset($body["method"]) || isset($body["temperatureTracking"])) {
 		$new["nfp_method"] = account_method_id_from_json($body);
@@ -95,8 +128,8 @@ function account_apply_json(array $account, array $body): array {
 // ---------------------------------------------------------------------------
 
 // The account summary a client starts from, shared by GET /api/key_infos and GET /api/sync:
-// who the user is, their settings, the shape of their timeline. $user_account is the row
-// sec_auth_token() read. Nothing secret in it.
+// who the user is, their settings, the shape of their timeline, and where the news banner comes from
+// (NEWS_URL, null when it is off). $user_account is the row sec_auth_token() read. Nothing secret in it.
 function account_key_infos($db, array $user_account): array {
 	$nfp_method = intval($user_account["nfp_method"]);
 
@@ -117,5 +150,6 @@ function account_key_infos($db, array $user_account): array {
 		"allPregnancyDates" => db_select_pregnancies($db, $user_account["no_user_account"]),
 		"totpState" => sec_totp_state_name($user_account["totp_state"]),
 		"lastWriteClientUtc" => http_iso8601($user_account["last_write_client_UTC"]),
+		"newsUrl" => str_starts_with(NEWS_URL, "https://") ? NEWS_URL : null,
 	];
 }

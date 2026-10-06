@@ -44,7 +44,13 @@ const TOTP_STATE_NAMES = [
 const COOKIE_AUTH_TOKEN = "MONCYCLEAPP_TOKEN";
 const COOKIE_AUTH_TOKEN_LEGACY = "MONCYCLEAPP_JETTON";
 
+// The values the COOKIE_SAMESITE setting takes (the attribute is these with a capital: Strict, Lax, None).
+const COOKIE_SAMESITE_VALUES = ["strict", "lax", "none"];
+
 const PASSWORD_MIN_LENGTH = 8;
+// The hash of a password nobody knows (random, then forgotten), at the cost password_hash() uses. A login for an
+// address that has no account is checked against it, so that it takes as long as a wrong password does.
+const AUTH_DUMMY_PASSWORD_HASH = '$2y$12$fFAyg7vWBJagg2QJOymLY.Ndi.VRQtAJhChoNUW7XiAxek8JDKUju';
 const ACCOUNT_DEFAULT_LANGUAGE = "FR";    // user_account.language of a new account, until the user can choose
 const ACCOUNT_DEMO_ID = 2;      // the public demo account: never warned, never erased (see lib/db.php)
 
@@ -110,6 +116,18 @@ const EXPORT_TYPE_PDF = "pdf";
 const EXPORT_TYPE_CSV = "csv";
 const EXPORT_TYPE_NFP = "nfp";
 const EXPORT_TYPES = [EXPORT_TYPE_PDF, EXPORT_TYPE_CSV, EXPORT_TYPE_NFP];
+
+// ===========================================================================
+// PUBLIC STATISTICS -- GET /api/pub_stat (api/pub_stat.php, lib/data.php)
+// ===========================================================================
+
+// The three numbers it answers: JSON name => [the key_value row the cron keeps it in, the digits it is rounded to].
+// Counting them walks day_timeline, which a public endpoint must not do on every visit.
+const PUB_STAT_KEYS = [
+	"moncycle_app_nb_user_account" => ["pub_stat_nb_user_account", -1],
+	"moncycle_app_nb_cycle" => ["pub_stat_nb_cycle", -1],
+	"moncycle_app_nb_total_observation" => ["pub_stat_nb_total_observation", -2],
+];
 
 // ===========================================================================
 // SYNC -- GET /api/sync (api/sync.php, lib/data.php)
@@ -218,6 +236,9 @@ const DAY_FORMAT_FC_GROUPS = [
 // longer code goes first, so "10DL" is not read as "10" and a lone "L", and where two overlap
 // ("X1" and "10" in "X10") the order decides. 'R' belongs to no group: it is taken out and ignored.
 const DAY_FORMAT_FC_PARSE_ORDER = ['10DL', '10SL', '10WL', 'RAP', 'LAP', 'X1', 'X2', 'X3', 'AD', 'AP', 'VL', 'VH', '2W', '10', 'H', 'M', 'L', 'B', '0', '2', '4', '6', '8', 'C', 'G', 'K', 'P', 'Y', 'R'];
+
+// How many dates GET /api/day?date=a,b,c reads (one query each): a year of days.
+const DAY_LIMIT_QUERY_DATES = 366;
 
 // What day_timeline and description can hold: the widths of their columns.
 const DAY_LIMIT_COMMENT_CHARS = 256;        // day_timeline.comment    varchar(256)

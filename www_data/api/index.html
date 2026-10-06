@@ -6,28 +6,12 @@
 		<title>moncycle.app - API - Swagger UI</title>
 		<link rel="stylesheet" type="text/css" href="../vendor/swagger-api/swagger-ui/dist/swagger-ui.css" />
 		<link rel="stylesheet" type="text/css" href="../vendor/swagger-api/swagger-ui/dist/index.css" />
-		<script src="../vendor/swagger-api/swagger-ui/dist/swagger-ui-bundle.js" charset="UTF-8"> </script>
-		<script src="../vendor/swagger-api/swagger-ui/dist/swagger-ui-standalone-preset.js" charset="UTF-8"> </script>
+		<script src="../vendor/swagger-api/swagger-ui/dist/swagger-ui-bundle.js" charset="UTF-8" defer></script>
+		<script src="../vendor/swagger-api/swagger-ui/dist/swagger-ui-standalone-preset.js" charset="UTF-8" defer></script>
 	</head>
 
 	<body>
 		<div id="swagger-ui"></div>
-		<script charset="UTF-8">
-		window.onload = function() {
-			window.ui = SwaggerUIBundle({
-				url: "moncycle_app_open_api.yaml",
-				queryConfigEnabled: false,
-				dom_id: '#swagger-ui',
-				deepLinking: true,
-				presets: [
-					SwaggerUIBundle.presets.apis,
-					SwaggerUIStandalonePreset,
-				],
-				plugins: [
-					SwaggerUIBundle.plugins.DownloadUrl
-				]
-			});
-		}
-	</script>
+		<script src="swagger-init.js" defer></script>
 	</body>
 </html>

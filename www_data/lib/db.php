@@ -211,8 +211,13 @@ function db_insert_auth_token($db, $no_user_account, $name, $contry_code, $auth_
 	);
 }
 
+// Stamps the session as used. Every authenticated request calls it, and what reads date_use counts in days
+// (the purge below, the cron's 40 days of inactivity), so a session is written at most every 5 minutes.
 function db_update_auth_token_use($db, $no_auth_token) {
-	return db_exec($db, "UPDATE auth_token SET date_use = NOW() WHERE no_auth_token = :no_auth_token", ["no_auth_token" => $no_auth_token]);
+	return db_exec($db,
+		"UPDATE auth_token SET date_use = NOW() WHERE no_auth_token = :no_auth_token AND (date_use IS NULL OR date_use < NOW() - INTERVAL 5 MINUTE)",
+		["no_auth_token" => $no_auth_token]
+	);
 }
 
 function db_delete_auth_token($db, $no_auth_token, $no_user_account) {
@@ -224,9 +229,14 @@ function db_delete_auth_tokens_other($db, $no_user_account, $no_auth_token_kept)
 	return db_exec($db, "DELETE FROM auth_token WHERE no_user_account = :no_user_account AND no_auth_token <> :no_auth_token", ["no_user_account" => $no_user_account, "no_auth_token" => $no_auth_token_kept]);
 }
 
-// sessions not used for 40 days, or older than a year (those that expire: a captcha's does)
+// sessions not used for 40 days, or older than a year (those that expire: a captcha's does), and the
+// captchas of visitors who never logged in (no account), whose cookie lasts 2 days
 function db_delete_old_auth_token($db) {
-	return db_exec($db, "DELETE FROM auth_token WHERE (date_creation < CURDATE() - INTERVAL 365 DAY OR date_use < CURDATE() - INTERVAL 40 DAY) AND expire > 0");
+	return db_exec($db,
+		"DELETE FROM auth_token
+		WHERE ((date_creation < CURDATE() - INTERVAL 365 DAY OR date_use < CURDATE() - INTERVAL 40 DAY) AND expire > 0)
+		OR (no_user_account IS NULL AND date_creation < NOW() - INTERVAL 2 DAY)"
+	);
 }
 
 function db_select_auth_token_captcha($db, $auth_token_str): ?array {
@@ -608,6 +618,14 @@ function db_count_days_since($db, $nb_days) {
 
 function db_select_key_value($db, $key) {
 	return db_value($db, "SELECT `value` FROM key_value WHERE `key` = :key", ["key" => $key]);
+}
+
+function db_insert_key_value($db, $key, $value) {
+	return db_exec($db, "INSERT INTO key_value (`key`, `value`) VALUES (:key, :value)", ["key" => $key, "value" => $value]);
+}
+
+function db_update_key_value($db, $key, $value) {
+	return db_exec($db, "UPDATE key_value SET `value` = :value WHERE `key` = :key", ["key" => $key, "value" => $value]);
 }
 
 function db_update_increment_key_value($db, $key) {

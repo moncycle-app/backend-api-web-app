@@ -47,6 +47,26 @@ define("PDF_BILLINGS_BORDERS", env_bool("PDF_BILLINGS_BORDERS", true));
 
 define("PHP_SECURE_COOKIES", env_bool("PHP_SECURE_COOKIES", true));
 
+// The SameSite attribute of the session cookie: strict, lax or none (any case). Strict costs nothing while the
+// web app and the API share an origin or sit on sibling subdomains of one site. A web app on another site needs
+// lax (page navigations) or none (requests from scripts; only with PHP_SECURE_COOKIES, else it is lax).
+define("COOKIE_SAMESITE", env_choice("COOKIE_SAMESITE", COOKIE_SAMESITE_VALUES, "strict"));
+
+// The browser origins ("https://app.example.org", comma list) that may write to the API besides its own
+// and APP_URL's: a staging site, a dev server, another front end. A write from any other origin is
+// refused (403 cross_origin_refused). Empty: none.
+define("WEB_APP_ORIGINS", env_origins("WEB_APP_ORIGINS"));
+
+// The reverse proxies in front of the app (addresses or CIDR ranges, comma list). Only a request that
+// comes from one of them has its X-Forwarded-For believed, to find the real client address (the login
+// throttling and the log use it). Empty: every request is a client, whatever it sends.
+define("TRUSTED_PROXIES", env_ip_ranges("TRUSTED_PROXIES"));
+
+// The news banner of the web app: the https page whose h4, p, b, i, br, ul, li, a and time it shows (nothing else
+// gets through). Unset: the official instance's. Set empty: no banner and no request to anybody. The Docker
+// image also reads it for the CSP (connect-src, server_conf/zz-moncycleapp.conf): a URL with no query or fragment.
+define("NEWS_URL", getenv("NEWS_URL") === false ? "https://www.moncycle.app/actu.html" : trim(getenv("NEWS_URL")));
+
 // Login brute-force defense. A value of 0 turns the feature it sets off.
 // Failed attempts on an account older than this many minutes restart at 1 (0: they are not
 // counted at all, so there is no captcha and no lockout); db_update_login_failure() binds it too.

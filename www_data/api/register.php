@@ -16,6 +16,8 @@ require_once "../lib/mail.php";
 [$db, $user_account] = api_start(false);
 
 $body = http_json_body();
+// the address is stored as it is looked up: trimmed, in lower case (anything but a string is refused below)
+if (is_string($body["email"] ?? null)) $body["email"] = account_email_normalise($body["email"]);
 
 if (!is_null($user_account)) {
 	http_error(409, "already_authenticated", "Account already logged in.", ["userId" => $user_account["no_user_account"]]);

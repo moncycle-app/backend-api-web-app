@@ -28,6 +28,23 @@ print(PHP_EOL);
 $db = db_open();
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
+// Addresses are stored in lower case from v15 on (the file lowers the stored ones). Two accounts whose email1
+// differ only by case would become one, and the unique key would refuse: so none may exist. This reads the v14
+// table, before anything is changed.
+$collisions = $db->query("SELECT LOWER(email1) AS email, COUNT(*) AS accounts FROM compte GROUP BY email HAVING COUNT(*) > 1")->fetchAll(PDO::FETCH_ASSOC);
+if (!empty($collisions)) {
+    print("STOP: these addresses are held by several accounts that differ only by case. Merge or rename them, nothing has been changed:");
+    print(PHP_EOL);
+    foreach ($collisions as $collision) {
+        print("  " . $collision["email"] . " (" . $collision["accounts"] . " accounts)");
+        print(PHP_EOL);
+    }
+    exit(1);
+}
+
+// NOTE: MariaDB commits at every ALTER TABLE / CREATE TABLE / RENAME, so the transaction below protects the
+// data steps only, not the schema ones. A run that stops half way leaves a half migrated database: restore the
+// dump taken before (README, "Upgrading"), do not run the script again on it.
 try {
 
     $db->exec("START TRANSACTION");
@@ -51,7 +68,7 @@ try {
     print(PHP_EOL);
 
 	$statement_select_obs  = $db->prepare("SELECT no_day, no_user_account, date_obs, sensation, stamp FROM day_timeline");
-    $statement_select_desc = $db->prepare("SELECT * FROM description WHERE name LIKE :desc_name AND no_user_account=:account_no LIMIT 1");
+    $statement_select_desc = $db->prepare("SELECT no_description FROM description WHERE name = :desc_name AND no_user_account=:account_no LIMIT 1");
     $statement_insert_desc = $db->prepare("INSERT INTO `description` (`no_user_account`, `name`, `type`) VALUES (:no_user_account, :name, 0)");
     $statement_insert_link = $db->prepare("INSERT INTO `link_day_timeline_description` (`no_day`, `no_description`) VALUES (:observation_no, :description_no)");
     $statement_remove_old_desc = $db->prepare("UPDATE `day_timeline` SET `sensation` = NULL WHERE `no_day` = :no_day");
@@ -129,7 +146,7 @@ try {
                         print(" cached "); // DESC NO PRESENT IN CACHE
                         $no_desc = $cached_descriptions[$obs["no_user_account"]][$sens];
                     }
-                    elseif (!isset($description["no_description"]) || isset($description["no_description"])<0) {
+                    elseif (!isset($description["no_description"])) {
                         print(" inserting "); // INSERTING A NEW DESC FOR THIS ACCOUNT
                         $statement_insert_desc->bindValue(":no_user_account", $obs["no_user_account"], PDO::PARAM_INT);
                         $statement_insert_desc->bindValue(":name", $sens, PDO::PARAM_STR);

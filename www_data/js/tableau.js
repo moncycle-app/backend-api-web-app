@@ -463,7 +463,6 @@ moncycle_app = {
 		}, false);
 		if (moncycle_store.account) moncycle_app.show_account();
 		moncycle_store.sync().catch(function () { });
-		moncycle_app.charger_actu();
 	},
 	// what decides how the cycles are laid out: when it changes in the copy, they have to be drawn again
 	structure_of : function (account) {
@@ -480,8 +479,10 @@ moncycle_app = {
 		moncycle_app.timeline_asc = moncycle_app.constante.timeline_asc;
 		moncycle_app.description = moncycle_store.all_descriptions().map(moncycle_app.description_from_api);
 		document.title = moncycle_app_text.page_title(moncycle_app.constante.name);
-		$("#name").html(moncycle_app.constante.name);
+		// the name is free text: text first, then the badge (markup of ours)
+		$("#name").text(moncycle_app.constante.name);
 		if (moncycle_app.constante.sponsor) $("#name").append(moncycle_app_text.sponsor_badge);
+		moncycle_app.charger_actu();
 		$(".main_button").css("display","inline-block");
 		if (moncycle_app.timeline_asc) $("#charger_cycle").hide();
 		else $("#charger_cycle").show();
@@ -594,10 +595,43 @@ moncycle_app = {
 		}
 		else moncycle_app.charger_cycle();
 	},
+	// The news banner: the HTML of the instance's NEWS_URL (the server says it in the account, null when it
+	// is off), once per page. What comes back is another site's markup: it is parsed in an inert document and
+	// rebuilt from the tags below, no attribute copied but an https href.
+	news_requested : false,
+	news_tags : ["h4", "p", "b", "i", "br", "ul", "li", "a", "time"],
+	news_node : function (node) {
+		if (node.nodeType == Node.TEXT_NODE) return document.createTextNode(node.textContent);
+		if (node.nodeType != Node.ELEMENT_NODE) return null;
+		let tag = node.tagName.toLowerCase();
+		if (["script", "style", "template"].includes(tag)) return null;
+		// a tag outside the list is dropped but its text stays
+		let copy = moncycle_app.news_tags.includes(tag) ? document.createElement(tag) : document.createDocumentFragment();
+		if (tag == "a") {
+			let href = node.getAttribute("href") || "";
+			if (/^https:\/\//i.test(href)) {
+				copy.setAttribute("href", href);
+				copy.setAttribute("target", "_blank");
+				copy.setAttribute("rel", "noopener noreferrer");
+			}
+		}
+		node.childNodes.forEach(function (child) {
+			let child_copy = moncycle_app.news_node(child);
+			if (child_copy) copy.appendChild(child_copy);
+		});
+		return copy;
+	},
 	charger_actu : function() {
-		$.get("https://www.moncycle.app/actu.html", function(data) {
-			let html = $.parseHTML(data);
-			$("#actu_contenu").html(html);
+		let url = moncycle_store.account ? moncycle_store.account.newsUrl : null;
+		if (!url || moncycle_app.news_requested) return;
+		moncycle_app.news_requested = true;
+		$.get(url, function(data) {
+			let news = new DOMParser().parseFromString(String(data), "text/html");
+			$("#actu_contenu").empty();
+			news.body.childNodes.forEach(function (node) {
+				let copy = moncycle_app.news_node(node);
+				if (copy) $("#actu_contenu")[0].appendChild(copy);
+			});
 			let titre = $("#actu_contenu").find("h4").text();
 			if (titre && localStorage.actu_lu != titre) $("#actu").show();
 			$("#fermer_actu").click(function () {
@@ -937,10 +971,10 @@ moncycle_app = {
 			recap_note = recap_note.replace('X1','').replace('X2','').replace('X3','');
 			let fc_glaire = recap_note.match(/\d+/);
 			if (fc_glaire) recap_note = recap_note.replace(fc_glaire[0], '');
-			day_timeline.append(`<span class='fc'>${fc_glaire? fc_glaire[0] : ""}</span>`);
+			day_timeline.append($("<span>", {class: "fc"}).text(fc_glaire? fc_glaire[0] : ""));
 			recap_note = recap_note.trim().replace(/\s+/g, '')
 			if (recap_note.length>2) recap_note = moncycle_app_text.fc_note_overflow;
-			day_timeline.append(`<span class='fc'>${recap_note}</span>`);
+			day_timeline.append($("<span>", {class: "fc"}).text(recap_note));
 		}
 		else if (moncycle_app.constante.nfp_method==3 || moncycle_app.constante.nfp_method==4) {
 			day_timeline.append(`<span class='fc'></span>`);
@@ -1044,11 +1078,13 @@ moncycle_app = {
 			day_timeline.append(`<span class='u'>${j.union_sex ? moncycle_app_text.union : ""}</span>`);
 		}
 		if (j.comment) {
-			let comment = j.comment.trim();
-			while (comment.includes('\n')) {
-				comment = comment.replace('\n', "<br />");
-			}
-			day_timeline.append(`<span class='c'>${comment}</span>`);
+			// free text: one text node per line, a <br> between, never HTML
+			let cell = $("<span>", {class: "c"});
+			j.comment.trim().split("\n").forEach((line, i) => {
+				if (i > 0) cell.append($("<br>"));
+				cell.append(document.createTextNode(line));
+			});
+			day_timeline.append(cell);
 		}
 		return day_timeline;
 	},
@@ -1295,10 +1331,16 @@ moncycle_app = {
 		$("#form_fc").val(note.trim());
 		return note;
 	},
+	// A text as HTML, for the one place that still builds markup out of a stored value: the server only
+	// stores FertilityCare notes made of the notation's codes, so this is a second wall, not the first.
+	escape_html (text) {
+		return $("<span>").text(text).html();
+	},
 	fc_note2html (note) {
 		const should_be_red = ['VL', 'VH', 'H', 'M', 'B'];
 		const less_important = ['RAP', 'LAP', 'AP', 'X1', 'X2', 'X3', 'AD',];
-		note = note.toUpperCase();
+		// escaped after the upper-casing: the entities are lower case, so no code below can match inside one
+		note = moncycle_app.escape_html(note.toUpperCase());
 		less_important.forEach(c => {
 			note = note.replace(c,`<span class='note_not_imp'>${c}</span>`);
 		});
@@ -1374,3 +1416,6 @@ moncycle_app = {
 		}
 	}
 }
+
+// start once the page is loaded (no inline script: the CSP is script-src 'self')
+window.addEventListener("load", moncycle_app.letsgo);

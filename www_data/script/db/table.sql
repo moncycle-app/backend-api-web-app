@@ -106,7 +106,8 @@ CREATE TABLE `link_day_timeline_description` (
 
 CREATE TABLE `key_value` (
   `key` varchar(255) NOT NULL,
-  `value` bigint(20) unsigned DEFAULT NULL
+  `value` bigint(20) unsigned DEFAULT NULL,
+  PRIMARY KEY (`key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 INSERT INTO `key_value` (`key`, `value`) VALUES

@@ -29,6 +29,9 @@ RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
 
 # the scripts of script/ answer to this machine only (Require ip, see zz-moncycleapp.conf)
 ENV APP_SCRIPT_ALLOW="127.0.0.1 ::1"
+# the news page of the web app: the app reads it as the NEWS_URL setting, and Apache puts it in the CSP's
+# connect-src (zz-moncycleapp.conf). Same default as config.docker.php; set it empty to turn the banner off.
+ENV NEWS_URL="https://www.moncycle.app/actu.html"
 ENV COMPOSER_ALLOW_SUPERUSER=1
 
 COPY --from=composer/composer:latest-bin /composer /usr/bin/composer

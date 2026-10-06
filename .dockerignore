@@ -1,16 +1,19 @@
 .git
 .gitignore
 .vscode
-.DS_Store
-*.pw
-*.bak
-*.bak.*
-*.swp
 CLAUDE.md
 TODO.md
 gitignore
 docker-compose*.yml
 dev.env
+# at any depth: a bare "*.bak" only matches the root of the build context
+**/*.pw
+**/*.bak
+**/*.bak.*
+**/*.swp
+**/.DS_Store
+**/htpasswd
+**/sessions
 www_data/config.php
 www_data/test.php
 www_data/info.php

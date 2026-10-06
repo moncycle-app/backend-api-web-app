@@ -8,15 +8,14 @@
 */
 
 require_once "../config.php";
+require_once "../lib/account.php";
 require_once "../lib/api.php";
 require_once "../lib/mail.php";
 
-log_start(sec_client_ip());
-header('Content-Type: application/json');
-$db = db_open();
+[$db] = api_start(false);
 
 $body = http_json_body();
-$email = is_string($body["email"] ?? null) ? trim($body["email"]) : "";
+$email = account_email_normalise($body["email"] ?? null);
 
 if (empty($email)) {
 	http_error(400, "missing_email", "'email' is required.");
