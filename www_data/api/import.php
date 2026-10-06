@@ -73,12 +73,13 @@ if (!$parsed["ok"]) {
 }
 
 $nfp_file = $parsed["file"];
+$warnings = $parsed["warnings"];
 
 // ---------------------------------------------------------------------------
 // Stage 2 -- structure and types
 // ---------------------------------------------------------------------------
 
-$schema_errors = nfp_import_schema_errors($nfp_file);
+$schema_errors = nfp_import_schema_errors($nfp_file, $warnings);
 if (!empty($schema_errors)) {
 	http_error(400, "invalid_nfp_structure", "The file does not match the NFP schema.", ["issues" => $schema_errors]);
 }
@@ -87,7 +88,7 @@ if (!empty($schema_errors)) {
 // Stage 3 -- semantics and consistency
 // ---------------------------------------------------------------------------
 
-$checked = nfp_import_build_plan($nfp_file, $user_account);
+$checked = nfp_import_build_plan($nfp_file, $user_account, $warnings);
 
 if (!empty($checked["issues"])) {
 	$details = [

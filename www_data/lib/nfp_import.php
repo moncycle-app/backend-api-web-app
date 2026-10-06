@@ -34,9 +34,10 @@ require_once __DIR__ . "/nfp_format.php";
 // IMPORT -- stage 1: the request body
 // ===========================================================================
 
-// Returns ["ok" => true, "file" => object] or ["ok" => false, "code" =>, "message" =>,
-// "details" => []]. Everything here is a transport-level refusal: too big, not UTF-8, not
-// JSON, or a schema version this build does not implement.
+// Returns ["ok" => true, "file" => object, "warnings" => []] or ["ok" => false, "code" =>,
+// "message" =>, "details" => []]. Everything refused here is a transport-level refusal: too big,
+// not UTF-8, not JSON, or a schema version this build does not implement. The warnings are what
+// was made of the file on the way in (its nulls); they go on to stage 3's report.
 function nfp_import_parse(string $raw, ?int $content_length = null): array {
 	$refuse = fn(string $code, string $message, array $details = []) =>
 		["ok" => false, "code" => $code, "message" => $message, "details" => $details];
@@ -92,7 +93,21 @@ function nfp_import_parse(string $raw, ?int $content_length = null): array {
 		));
 	}
 
-	return ["ok" => true, "file" => nfp_format_normalize($decoded)];
+	$nulls = [];
+	$file = nfp_format_drop_nulls(nfp_format_normalize($decoded), '', $nulls);
+	return ["ok" => true, "file" => $file, "warnings" => nfp_import_null_warnings($nulls)];
+}
+
+// The nulls nfp_format_drop_nulls() took out of the file -> one warning per field.
+function nfp_import_null_warnings(array $nulls): array {
+	$warnings = [];
+	foreach ($nulls as $where => $count) {
+		$warnings[] = sprintf(
+			"[%s] null%s: read as %s.",
+			$where, $count > 1 ? sprintf(" on %d entries", $count) : "", $where === 'cycles[].days[]' ? "a day with nothing on it" : "not set"
+		);
+	}
+	return $warnings;
 }
 
 // ===========================================================================
@@ -101,7 +116,10 @@ function nfp_import_parse(string $raw, ?int $content_length = null): array {
 
 // Each error reads "[where] what is wrong", with "where" the path inside the file
 // (cycles[0].days[7].temperature). Expects the canonical shape, so run nfp_import_parse() first.
-function nfp_import_schema_errors(object $file): array {
+//
+// A wrong value in a field this app never stores cannot break anything, so it is not an error:
+// its message is added to $warnings and the file goes on (stage 3 reports the field as ignored).
+function nfp_import_schema_errors(object $file, array &$warnings = []): array {
 	$schema = json_decode(NFP_FILE_SCHEMA);
 
 	$storage = new \JsonSchema\SchemaStorage();
@@ -114,6 +132,10 @@ function nfp_import_schema_errors(object $file): array {
 	$errors = [];
 	foreach ($validator->getErrors() as $error) {
 		$where = $error['property'] !== '' ? $error['property'] : '(file)';
+		if (nfp_import_is_unstored_field($where)) {
+			$warnings[] = sprintf("[%s] %s. This app does not store that field: it was ignored.", $where, $error['message']);
+			continue;
+		}
 		$errors[] = sprintf("[%s] %s", $where, $error['message']);
 	}
 	// a file wrong in one structural way is wrong on every day; keep the answer readable
@@ -123,6 +145,15 @@ function nfp_import_schema_errors(object $file): array {
 		$errors[] = sprintf("... and %d more.", $remaining);
 	}
 	return $errors;
+}
+
+// Is $where (a path the schema reported) inside a field this app never stores: the two blocks about
+// the user, or a day or cycle field of the NOT_STORED lists of constants.php?
+function nfp_import_is_unstored_field(string $where): bool {
+	if (preg_match('/^(?:userInformation|userMethodPreferences)(?:[.\[]|$)/', $where)) return true;
+	if (preg_match('/^cycles\[\d+\]\.days\[\d+\]\.(\w+)(?:[.\[]|$)/', $where, $m)) return isset(NFP_DAY_FIELDS_NOT_STORED[$m[1]]);
+	if (preg_match('/^cycles\[\d+\]\.(\w+)(?:[.\[]|$)/', $where, $m)) return isset(NFP_CYCLE_FIELDS_NOT_STORED[$m[1]]);
+	return false;
 }
 
 // ===========================================================================
@@ -154,11 +185,15 @@ function nfp_import_report(): array {
 **   plan[]    one entry per day to write, already encoded for db_update_day_timeline()
 **   cyclesRead, daysRead   what the file holds
 **
+** $warnings are the ones the stages before this one made (parse, schema): they open the report's
+** list, so the caller reads one list.
+**
 ** Nothing here touches the DB.
 */
-function nfp_import_build_plan(object $file, array $user_account): array {
+function nfp_import_build_plan(object $file, array $user_account, array $warnings = []): array {
 	$account_method = account_method_name(intval($user_account["nfp_method"]));
 	$report = nfp_import_report();
+	$report["warnings"] = $warnings;
 	$plan = [];
 	$days_read = 0;
 

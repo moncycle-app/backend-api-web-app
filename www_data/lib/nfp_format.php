@@ -202,6 +202,11 @@ function nfp_format_is_object(mixed $value): bool {
 	return is_object($value) || (is_array($value) && empty($value));
 }
 
+// An int, or a float with nothing after the point (JSON's 2.0), small enough to be a note.
+function nfp_format_is_whole_number(mixed $value): bool {
+	return (is_int($value) || is_float($value)) && $value == floor($value) && abs($value) < 1000000;
+}
+
 // ---------------------------------------------------------------------------
 // Legacy -> canonical.
 //
@@ -355,6 +360,18 @@ function nfp_format_normalize_day(mixed $raw_day): mixed {
 	$counter = nfp_format_get($day, "counterStart");
 	if (is_string($counter) && preg_match('/^\s*\d{1,3}\s*$/', $counter)) $day->counterStart = intval($counter);
 
+	// Two FertilityCare notes that read as numbers, and that some apps write as numbers: the mucus
+	// sensation (0, 2, 4 ... 10) as is, and the number of observations as 1, 2, 3 for "x1", "x2", "x3".
+	// A number that is no code of the note ("x7") is left to be reported as ignored, like any other.
+	$sensation = nfp_format_get($day, "codifiedMucusSensation");
+	if (nfp_format_is_whole_number($sensation)) $day->codifiedMucusSensation = (string) intval($sensation);
+	$observations = nfp_format_get($day, "codifiedNumberObservations");
+	if (nfp_format_is_whole_number($observations)) {
+		$observations = intval($observations);
+		$day->codifiedNumberObservations = in_array($observations, [1, 2, 3], true) ? "x" . $observations : (string) $observations;
+	}
+	elseif (is_string($observations) && preg_match('/^\s*([1-3])\s*$/', $observations, $m)) $day->codifiedNumberObservations = "x" . $m[1];
+
 	// a temperature sent as "36.45"
 	$temperature = nfp_format_get($day, "temperature");
 	if (is_string($temperature) && is_numeric(trim($temperature))) $day->temperature = floatval(trim($temperature));
@@ -369,4 +386,44 @@ function nfp_format_normalize_day(mixed $raw_day): mixed {
 	if (is_string($time)) $day->temperatureTime = trim($time);
 
 	return $day;
+}
+
+// ---------------------------------------------------------------------------
+// Nulls.
+//
+// An explicit null is a field that is not set (see the reading helpers above), so it leaves the
+// file before the schema sees it: the format marks almost everything optional, and an app that
+// writes every unset field as null would otherwise be refused on all of them. Run it after
+// nfp_format_normalize(), which reads the early draft's positional userInformation, where a null
+// holds a place.
+//
+// $found receives how many nulls were dropped, by field, with the indexes of the lists left out
+// ("cycles[].days[].temperature"): one line per field, not one per day. A null in a list of days
+// is a day with nothing on it, since the day's place in the list is its date; in any other list it
+// is a null item, and goes.
+// ---------------------------------------------------------------------------
+
+function nfp_format_drop_nulls(mixed $node, string $path, array &$found): mixed {
+	if (is_object($node)) {
+		$kept = new stdClass();
+		foreach (get_object_vars($node) as $key => $value) {
+			$here = $path === '' ? (string) $key : $path . '.' . $key;
+			if (is_null($value)) $found[$here] = ($found[$here] ?? 0) + 1;
+			else $kept->$key = nfp_format_drop_nulls($value, $here, $found);
+		}
+		return $kept;
+	}
+	if (is_array($node)) {
+		$item_path = $path . '[]';
+		$kept = [];
+		foreach ($node as $item) {
+			if (!is_null($item)) $kept[] = nfp_format_drop_nulls($item, $item_path, $found);
+			else {
+				$found[$item_path] = ($found[$item_path] ?? 0) + 1;
+				if ($path === 'cycles[].days') $kept[] = new stdClass();
+			}
+		}
+		return $kept;
+	}
+	return $node;
 }

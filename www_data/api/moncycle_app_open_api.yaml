@@ -2208,7 +2208,7 @@ paths:
         | Stage | What it checks | Failure |
         |---|---|---|
         | 1 | size, UTF-8, JSON, nesting depth, `schemaVersion` | `413`, or `400` |
-        | 2 | structure and types, against `NfpFile` | `400` `invalid_nfp_structure` |
+        | 2 | structure and types, against `NfpFile` (a wrong value in a field this app never stores is only a warning) | `400` `invalid_nfp_structure` |
         | 3 | real calendar dates, value ranges, text lengths, overlapping cycles | `400` `inconsistent_nfp_data` |
         | 4 | the write, inside one transaction | `500`, nothing committed |
 
@@ -2243,6 +2243,28 @@ paths:
 
         A cycle of **any** `method` imports, `symptothermic_fr` included: the fields every
         method shares are kept, and the rest is reported.
+
+        ### A file is read kindly
+
+        The aim is that a file imports whenever nothing it holds can break the account, so the
+        following are read, never refused, and the first two are reported in `warnings`:
+
+        - **`null`** is a field that is not set, wherever it is written. One warning per field
+          (`[cycles[].days[].temperature] null on 41 entries: read as not set.`), not one per day.
+          A `null` in the list of `days` is a day with nothing on it: it keeps its place, so
+          the days after it keep their dates.
+        - **A wrong value in a field this app never stores** (`userInformation`,
+          `userMethodPreferences`, and the day and cycle fields listed in `ignoredFields`): an
+          identifier written as a number, a birth date as a year, `babyFeedCount` as text. The
+          schema's message is the warning, and the field is ignored.
+        - **FertilityCare notes written as numbers**: `codifiedNumberObservations` `1`, `2`,
+          `3` (or `"1"`...) is read as `x1`, `x2`, `x3`, and `codifiedMucusSensation` `0`, `2`,
+          `4` ... `10` as the string of the same number. A number that is no code of the note
+          (`7`) goes to `ignoredFields`, like any other code this app does not store.
+
+        What is still refused: a wrong value in a field this app **does** store (`temperature`
+        as text, a `stampColor` outside the enumeration), a missing `schemaVersion`,
+        `fileInformation`, `cycles`, or a cycle's `method`, `cycleStartDate` and `days`.
 
         ### What an import never changes
 
@@ -3265,7 +3287,8 @@ components:
           type: string
           maxLength: 32
           description: |-
-            **FertilityCare:** `0`, `2`, `2W`, `4`, `6`, `8`, `10`, `10DL`, `10SL`, `10WL`.
+            **FertilityCare:** `0`, `2`, `2W`, `4`, `6`, `8`, `10`, `10DL`, `10SL`, `10WL`. A number
+            (`2`, `10`) is read as the string of the same number.
 
             *Not stored for other methods*: the same key holds a different vocabulary under
             `symptothermic_fr` (`Dry`/`Humid`/`Wet`/`Lubricated`), which has no equivalent here.
@@ -3280,7 +3303,9 @@ components:
         codifiedNumberObservations:
           type: string
           maxLength: 16
-          description: "**FertilityCare:** `x1`, `x2`, `x3`, `AD`. Stored and exported uppercase (`X1`)."
+          description: |-
+            **FertilityCare:** `x1`, `x2`, `x3`, `AD`. Stored and exported uppercase (`X1`).
+            The numbers `1`, `2`, `3` are read as `x1`, `x2`, `x3`.
           example: X2
         codifiedPainObservations:
           type: string
@@ -3439,7 +3464,8 @@ components:
           type: array
           description: |-
             Accepted, but worth telling the user — typically a cycle whose `method` differs from
-            the account's, or a method this app does not record.
+            the account's, a method this app does not record, a `null` read as not set, or a
+            wrong value in a field this app does not store (see "A file is read kindly").
           items:
             type: string
           example:
