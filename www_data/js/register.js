@@ -8,7 +8,9 @@
 
 // The sign-up page (register.html), as a file of its own: the CSP is script-src 'self', so no inline script.
 
-if (parseInt(localStorage.auth)>0) {
+// Someone on a demo account can sign up: they stay on this page, and what the browser keeps of the demo goes (its
+// session ends on the server with the captcha this page asks for, which replaces its cookie).
+if (parseInt(localStorage.auth)>0 && !moncycle_store.is_demo(localStorage.auth)) {
 	window.location.replace('..');
 }
 else {
@@ -19,6 +21,12 @@ else {
 		for (let yy = year-100; yy < year; yy+=5) {
 			$("#i_anaissance").append(`<option value="${yy}">entre ${yy} et ${yy+4}</option>`);
 		}
+		// a new picture, for one that is hard to read or that was refused (each answer is good once)
+		let reload_captcha = function() {
+			$("#r_captcha").attr("src", "api/captcha.php?v=" + new Date().getTime());
+			$("#i_captcha").val('');
+		}
+		$("#r_captcha").on("click", reload_captcha);
 		$("#f_registration").on("submit", function(event) {
 			event.preventDefault();
 			$("#register_error_msg").text("");
@@ -31,8 +39,7 @@ else {
 			let reactivate_form = function() {
 				$("#but_register").prop("disabled", false);
 				$("#but_register").val("Créer mon compte 🥳");
-				$("#r_captcha").attr("src", $("#r_captcha").attr("src") + "?v=" + new Date().getTime());
-				$("#i_captcha").val('');
+				reload_captcha();
 			}
 			var method = $('input[name="method"]:checked').val() == "3" ? "fertilityCare" : "billings";
 			var payload = {

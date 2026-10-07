@@ -8,6 +8,8 @@
 */
 
 use OTPHP\TOTP;
+use Gregwar\Captcha\CaptchaBuilder;
+use Gregwar\Captcha\PhraseBuilder;
 use BaconQrCode\Renderer\ImageRenderer;
 use BaconQrCode\Renderer\Image\SvgImageBackEnd;
 use BaconQrCode\Renderer\RendererStyle\RendererStyle;
@@ -107,6 +109,12 @@ function sec_exit_if_logged_out($user_account) {
 		echo json_encode(["error" => ["code" => "unauthorized", "message" => "Authentication required."]]);
 		exit;
 	}
+}
+
+// Is the caller logged in as one of the public demo accounts? Its password is written on the sign-in page, so it is
+// no session to protect: register treats whoever holds one as a visitor, who can then sign up.
+function sec_session_is_demo(?array $user_account): bool {
+	return !is_null($user_account) && in_array(intval($user_account["no_user_account"] ?? 0), ACCOUNT_DEMO_IDS, true);
 }
 
 function sec_redirect_if_logged_out($user_account) {
@@ -236,6 +244,14 @@ function sec_totp_code_valid(array $user_account, $code): bool {
 // Captcha: the answer is stored on the visitor's token, burnt as soon as it is read
 // ---------------------------------------------------------------------------
 
+// The picture and its phrase, from the CAPTCHA_* constants. The library's own defaults (a wave distortion, and
+// an alphabet of both cases with i, l, o, 0, 1...) make a picture that few visitors read: this one is medium.
+function sec_captcha_build(): CaptchaBuilder {
+	$captcha = new CaptchaBuilder(null, new PhraseBuilder(CAPTCHA_LENGTH, CAPTCHA_CHARSET));
+	$captcha->setDistortion(false)->setMaxBehindLines(2)->setMaxFrontLines(1)->setMaxAngle(6)->setMaxOffset(3);
+	return $captcha->build(CAPTCHA_WIDTH, CAPTCHA_HEIGHT);
+}
+
 // Stores the answer of the captcha shown to the visitor, giving them a token to hang it on when
 // they have none (or one that has been purged).
 function sec_captcha_issue($db, string $phrase): void {
@@ -245,7 +261,12 @@ function sec_captcha_issue($db, string $phrase): void {
 	// A visitor logged in keeps their session: its cookie is not replaced by a captcha's, which would end
 	// the session in this browser. They have no use for a captcha, login and register refuse a logged-in caller.
 	// (A session is stored hashed, a captcha's token as it is: that is why $known above is false for one.)
-	if (!$known && $cookie_token !== "" && !is_null(db_select_user_account_auth_token($db, sec_hash_token($cookie_token)))) return;
+	// A demo session is the exception: whoever is on it and asks for a captcha is signing up, and the cookie of the
+	// captcha replaces the demo's (register does not refuse a demo session either, sec_session_is_demo()).
+	if (!$known && $cookie_token !== "") {
+		$session = db_select_user_account_auth_token($db, sec_hash_token($cookie_token));
+		if (!is_null($session) && !sec_session_is_demo($session)) return;
+	}
 
 	if (!$known) {
 		$cookie_token = sec_random_password(64);
@@ -271,9 +292,13 @@ function sec_captcha_take($db): ?string {
 	return db_update_auth_token_captcha_burn($db, sec_cookie_token()) ? $stored["captcha"] : null;
 }
 
+// Does the answer read the picture? Case and spaces do not count: a phone capitalises the first letter, and a
+// space slips in; neither is a mistake in the reading. (The phrase is lower-cased too: one made with an older
+// alphabet, which had capitals, may still wait for its answer.)
 function sec_captcha_matches(?string $expected, $answer): bool {
 	if (!is_string($answer) && !is_int($answer)) return false;
-	return !is_null($expected) && strlen(trim((string) $answer)) > 0 && trim((string) $answer) === $expected;
+	$answer = strtolower(preg_replace('/\s+/', '', (string) $answer));
+	return !is_null($expected) && $answer !== "" && hash_equals(strtolower($expected), $answer);
 }
 
 function sec_captcha_verify($db, $answer): bool {

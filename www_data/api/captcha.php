@@ -7,9 +7,6 @@
 ** https://github.com/moncycle-app/backend-api-web-app
 */
 
-use Gregwar\Captcha\CaptchaBuilder;
-
-require_once "../vendor/autoload.php";
 require_once "../config.php";
 require_once "../lib/db.php";
 require_once "../lib/log.php";
@@ -17,8 +14,7 @@ require_once "../lib/sec.php";
 
 log_start(sec_client_ip());
 http_exit_if_maintenance();
-$captcha = new CaptchaBuilder;
-$captcha->build();
+$captcha = sec_captcha_build();
 
 sec_captcha_issue(db_open(), $captcha->getPhrase());
 log_event("auth.captcha_issued");

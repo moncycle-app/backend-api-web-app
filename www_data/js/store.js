@@ -29,6 +29,10 @@ const moncycle_store = {
 
 	// Bump it when what is kept in localStorage changes shape: the copy of the versions before is dropped.
 	schema : 2,
+	// The public demo accounts: ACCOUNT_DEMO_IDS of constants.php, change both. Whoever is on one is no one who has an
+	// account yet: the sign-up and the sign-in pages do not send them back to the app.
+	demo_user_ids : [2, 3],
+	is_demo : function (user_id) { return moncycle_store.demo_user_ids.includes(parseInt(user_id)); },
 	keys : {version : "data_version", last_sync : "data_last_sync", account : "data_account", descriptions : "data_descriptions", pending : "data_pending", pending_descriptions : "data_pending_descriptions", stale : "data_stale", day : "data_day_"},
 	// what the versions before this one kept in localStorage, and nobody reads any more
 	legacy_keys : ["description", "constante", "day_timeline", "timeline_asc"],

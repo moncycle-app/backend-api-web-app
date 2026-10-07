@@ -592,8 +592,8 @@ paths:
                   example: 1994
                 captcha:
                   type: string
-                  description: The text read in the image from `GET /captcha`. Case-sensitive.
-                  example: a7k2f
+                  description: The text read in the image from `GET /captcha`. Upper or lower case, and spaces, make no difference.
+                  example: ak7fp
                 method:
                   type: string
                   enum: [billings, fertilityCare]
@@ -654,7 +654,8 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         "409":
           description: |-
-            `already_authenticated` — you sent a valid token; log out first.
+            `already_authenticated` — you sent a valid token; log out first. A token of one of the two public
+            demo accounts does not count: the caller is a visitor, who can sign up.
             `account_exists` — this email already has an account. Also the answer to a registration that
             lost a race: two requests for the same address sent at the same time, only one creates it.
           content:
@@ -671,7 +672,12 @@ paths:
 
         The challenge is stored on the server against the `MONCYCLEAPP_TOKEN` cookie. The
         endpoint sets that cookie if you do not have one yet (valid 2 days), so your client
-        must keep cookies for this flow to work.
+        must keep cookies for this flow to work. A session cookie of a real account is kept as it
+        is (and no challenge is stored: such a caller has no use for one); the session cookie of a
+        public demo account is replaced by the captcha's, so that whoever looks at the demo can sign up.
+
+        The text is five characters, letters and digits that do not look alike, in lower case
+        (`adefhkmnprtwxy3467`). The answer is matched without regard to case.
 
         One image = one single use. The server erases the stored answer as soon as it is
         checked, right or wrong. Call this endpoint again for every new attempt.
@@ -2611,8 +2617,8 @@ components:
           description: |-
             The answer to the image from `GET /captcha`. Required only once a login answered
             `403 captcha_required`, or once a response carried `captchaRequired: true`. The same
-            cookie must be sent with both calls.
-          example: a7k2f
+            cookie must be sent with both calls. Upper or lower case, and spaces, make no difference.
+          example: ak7fp
 
     KeyInfos:
       type: object

@@ -241,7 +241,7 @@ $(document).ready(function(){
 		$("#i_name").val(moncycle_app_usr.name);
 		$("#tech_info_no").text(moncycle_app_usr.userId);
 		if(moncycle_app_usr.sponsor) $("#merci_don").show();
-		if(moncycle_app_usr.userId == 2 || moncycle_app_usr.userId == 3) $("#warning_demo").show();
+		if (moncycle_store.is_demo(moncycle_app_usr.userId)) $("#warning_demo").show();
 		if(moncycle_app_usr.method == "fertilityCare") $("#description_section").hide();
 		$("#tech_info_id").text(moncycle_app_usr.email);
 		$("#i_email1").val(moncycle_app_usr.email);

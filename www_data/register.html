@@ -77,8 +77,9 @@
 			</select><br />
 			<br />
 			<label for="i_captcha">Captcha:</label><br />
-			<input name="captcha" id="i_captcha" type="text" maxlength="6" required placeholder="Entrer les lettres ou chiffres affichés ci-dessous." /><br />
-			<img src="api/captcha.php" class="captcha" id="r_captcha" /><br />
+			<input name="captcha" id="i_captcha" type="text" maxlength="6" required autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Entrer les lettres ou chiffres affichés ci-dessous." /><br />
+			<img src="api/captcha.php" class="captcha" id="r_captcha" title="Cliquer pour obtenir une autre image" alt="captcha" /><br />
+			<span class="label_info">Majuscules ou minuscules, peu importe. Image difficile à lire ? Cliquez dessus pour en obtenir une autre.</span><br />
 			<br />
 			<label for="i_comment">Comment avez-vous découvert moncycle.app? Un commentaire?</label><br />
 			<textarea required id="i_comment" name="discovered_comment" maxlength="255" placeholder="Dites nous tout!"></textarea>

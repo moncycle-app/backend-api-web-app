@@ -88,8 +88,15 @@ else {
 				console.error(jqXHR);
 			});
 		});
+		// The address of the link in a mail. A "+" that reaches the page as itself (a mail reader or a link checker that
+		// decodes %2B) is read as a space by URLSearchParams, and an address never holds a space: it is a "+".
 		const email1 = (new URLSearchParams(window.location.search)).get("email1");
-		$("#i_email1").val(email1);
+		$("#i_email1").val(email1 === null ? "" : email1.trim().replace(/ /g, "+"));
+		// a new picture, for one that is hard to read
+		$("#l_captcha").on("click", function() {
+			$("#l_captcha").attr("src", "api/captcha.php?v=" + new Date().getTime());
+			$("#i_captcha").val('');
+		});
 		$("#but_demo_bill").on("click", function(event) {
 			event.preventDefault();
 			$("#i_email1").val("demo.bill@moncycle.app");

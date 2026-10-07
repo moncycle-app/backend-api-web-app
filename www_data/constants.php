@@ -51,10 +51,21 @@ const PASSWORD_MIN_LENGTH = 8;
 // The hash of a password nobody knows (random, then forgotten), at the cost password_hash() uses. A login for an
 // address that has no account is checked against it, so that it takes as long as a wrong password does.
 const AUTH_DUMMY_PASSWORD_HASH = '$2y$12$fFAyg7vWBJagg2QJOymLY.Ndi.VRQtAJhChoNUW7XiAxek8JDKUju';
+
+// The captcha picture (lib/sec.php). Medium on purpose: the characters are not distorted and there are a few
+// lines, and the alphabet leaves out the glyphs that look alike (o 0, i l j 1, s 5, z 2, b 6 8, g q 9, u v, c e).
+// What the visitor types is matched without regard to case.
+const CAPTCHA_CHARSET = "adefhkmnprtwxy3467";
+const CAPTCHA_LENGTH = 5;
+const CAPTCHA_WIDTH = 180;
+const CAPTCHA_HEIGHT = 60;
+
 const ACCOUNT_DEFAULT_LANGUAGE = "FR";    // user_account.language of a new account, until the user can choose
 // The two public demo accounts (script/db/demo.sql): never reminded, never warned, never erased, left out of the statistics (lib/db.php).
+// Whoever is logged in as one of them is not kept out of the sign-up (lib/sec.php, sec_session_is_demo()).
 const ACCOUNT_DEMO_ID_BILLINGS = 2;
 const ACCOUNT_DEMO_ID_FERTILITYCARE = 3;
+const ACCOUNT_DEMO_IDS = [ACCOUNT_DEMO_ID_BILLINGS, ACCOUNT_DEMO_ID_FERTILITYCARE];
 const ACCOUNT_DEMO_IDS_SQL = ACCOUNT_DEMO_ID_BILLINGS . ", " . ACCOUNT_DEMO_ID_FERTILITYCARE;   // for NOT IN (...): a constant expression cannot implode()
 
 // What user_account and auth_token can hold: the widths of their columns, and the birth years a person can give.

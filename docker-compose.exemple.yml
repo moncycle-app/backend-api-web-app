@@ -22,6 +22,10 @@ services:
       SMTP_MAIL: smtp_email_and_mogin_id
       SMTP_PASSWORD_FILE: /run/secrets/smtp_password
       PHP_CACHE: 1
+      # The reverse proxy in front, as the container sees it (an address or a CIDR range, comma separated): the
+      # X-Forwarded-For of its requests is then the visitor's address, for the log and the login throttling. Left
+      # empty, every visitor has the proxy's address (README, "What the reverse proxy in front must do").
+      TRUSTED_PROXIES: 'ADDRESS.OR.RANGE.OF.YOUR.REVERSE.PROXY'
       # the app log goes to `docker logs` (stdout) by default; to keep it in a file, mount a volume on
       # /var/log/moncycle (below), name the file in it, and run the cron as www-data (README, "Logs")
       # LOG_OUTPUT: /var/log/moncycle/app.log
