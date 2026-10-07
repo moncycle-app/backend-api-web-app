@@ -639,6 +639,11 @@ function db_count_days($db) {
 	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")");
 }
 
+// How many days each account holds, the biggest first (script/db_perf.php): list of rows no_user_account, nb_days.
+function db_select_day_counts_by_account($db): array {
+	return db_rows($db, "SELECT dt.no_user_account, COUNT(dt.no_day) AS nb_days FROM day_timeline AS dt GROUP BY dt.no_user_account ORDER BY nb_days DESC, dt.no_user_account");
+}
+
 function db_count_days_today($db) {
 	return db_value($db, "SELECT COUNT(no_day) FROM day_timeline WHERE date_obs = CURDATE() AND no_user_account NOT IN (" . ACCOUNT_DEMO_IDS_SQL . ")");
 }
