@@ -10,10 +10,10 @@
 require_once "../config.php";
 require_once "../lib/db.php";
 
-// php db_perf.php [--n=200] [--socket=/run/mysqld/mysqld.sock]
+// php db_perf.php [--n=200] [--socket=/run/mysqld/mysqld.sock] [--account=ID | --largest]
 //
 // Diagnoses the link between the app and MariaDB. It only reads (SELECT, SHOW): no row is written, and the
-// connections it opens are the only load. Four parts:
+// connections it opens are the only load. Five parts:
 //   1. the server: version, the settings that matter, what the counters say since it started, the size of
 //      the data against the buffer pool;
 //   2. a connection per request, in each way: the old one (SET NAMES), db_open(false) (charset in the DSN),
@@ -21,7 +21,12 @@ require_once "../lib/db.php";
 //      given. "connect" = open + one SELECT 1; "request" = connect + the three reads a typical request makes
 //      (session token, account row, a month of days);
 //   3. what a query costs once the connection is open: the round trip alone (SELECT 1), then the app's own
-//      reads on the demo account (ACCOUNT_DEMO_ID_*), through db_*();
+//      reads through db_*(), on the demo account (ACCOUNT_DEMO_ID_BILLINGS) or, with --account=ID, on that account
+//      or, with --largest, on each of the 10 accounts that hold the most days (a read of all the days of an account
+//      grows with it, and the demo account holds 50). Section 1 always says how the days are spread over the
+//      accounts. Nothing an account holds is printed, nor its id: only its rank and its number of days. The reads
+//      do load the rows of those accounts in memory, as the app does when it serves them. Section 2's
+//      "request" reads are on the first of these accounts;
 //   4. emulated prepares (PDO's default, what db_open() uses) against native ones;
 //   5. whether a persistent connection is safe: it is reused, a dead one is replaced, a request that died inside
 //      a transaction leaves neither the transaction nor its locks to the next one, and the code holds no
@@ -38,9 +43,15 @@ if (PHP_SAPI !== "cli") {
 	exit;
 }
 
-$options = getopt("", ["n:", "socket:"]);
+$options = getopt("", ["n:", "socket:", "account:", "largest"]);
 $n = max(10, intval($options["n"] ?? 200));
 $socket = is_string($options["socket"] ?? null) ? $options["socket"] : null;
+$largest = isset($options["largest"]);
+$account_option = is_string($options["account"] ?? null) && ctype_digit($options["account"]) && intval($options["account"]) > 0 ? intval($options["account"]) : null;
+if ($largest && isset($options["account"]) || isset($options["account"]) && $account_option === null) {
+	fwrite(STDERR, "usage: php db_perf.php [--n=200] [--socket=/path/to/mysqld.sock] [--account=ID | --largest]" . PHP_EOL);
+	exit(2);
+}
 $warmup = 3;
 
 $charset = ";charset=utf8mb4";
@@ -89,6 +100,16 @@ foreach ($tables as $table) {
 $pool_bytes = intval($variables["innodb_buffer_pool_size"] ?? 0);
 echo sprintf("data + indexes %.2f MB, buffer pool %.0f MB", $data_bytes / 1048576, $pool_bytes / 1048576) . PHP_EOL;
 
+// how the days are spread over the accounts (the demo accounts are in it)
+$day_counts = db_select_day_counts_by_account($db);   // the biggest first
+$sizes = array_map("intval", array_column($day_counts, "nb_days"));
+sort($sizes);
+if ($sizes) {
+	echo sprintf("days per account: %d accounts hold %d days; smallest %d, median %d, 90th percentile %d, biggest %d; %d over 365 days, %d over 1000",
+		count($sizes), array_sum($sizes), $sizes[0], $sizes[intdiv(count($sizes), 2)], $sizes[intval(floor(0.9 * (count($sizes) - 1)))], end($sizes),
+		count(array_filter($sizes, fn($size) => $size > 365)), count(array_filter($sizes, fn($size) => $size > 1000))) . PHP_EOL;
+}
+
 echo "to look at:" . PHP_EOL;
 $notes = [];
 $pool_requests = intval($status["Innodb_buffer_pool_read_requests"] ?? 0);
@@ -112,6 +133,43 @@ foreach ($notes as $note) echo "  - $note" . PHP_EOL;
 echo PHP_EOL;
 
 // ---------------------------------------------------------------------------
+// The accounts the reads are made on: the demo one, --account, or the 10 biggest (--largest).
+// A month of days is the last one the account has a day in.
+// ---------------------------------------------------------------------------
+
+$picked = [];   // [name, no_user_account]
+if ($largest) {
+	foreach (array_slice($day_counts, 0, 10) as $rank => $row) $picked[] = ["#" . ($rank + 1), intval($row["no_user_account"])];
+}
+elseif ($account_option !== null) {
+	if (db_select_user_account($db, $account_option) === null) {
+		fwrite(STDERR, "--account: no such account" . PHP_EOL);
+		exit(2);
+	}
+	$picked[] = ["account", $account_option];
+}
+else $picked[] = ["demo", ACCOUNT_DEMO_ID_BILLINGS];
+if (!$picked) {
+	fwrite(STDERR, "--largest: no account holds a day" . PHP_EOL);
+	exit(2);
+}
+
+$targets = [];   // each: label, id, days, start and end of the month
+foreach ($picked as [$name, $no_user_account]) {
+	$all_days = db_select_all_day_timeline($db, $no_user_account);
+	$start = substr($all_days ? end($all_days)["date_obs"] : date("Y-m-d"), 0, 8) . "01";
+	$targets[] = [
+		"label" => "$name, " . count($all_days) . " days",
+		"id" => $no_user_account,
+		"days" => count($all_days),
+		"start" => $start,
+		"end" => (new DateTimeImmutable($start))->modify("+1 month")->format("Y-m-d"),
+	];
+}
+$all_days = null;
+echo "reads are made on: " . implode("; ", array_column($targets, "label")) . PHP_EOL . PHP_EOL;
+
+// ---------------------------------------------------------------------------
 // 2. One connection per request, in each way
 // ---------------------------------------------------------------------------
 
@@ -127,7 +185,7 @@ if ($socket !== null) {
 	$series["socket, charset in DSN, persistent"] = [$socket_dsn, [PDO::ATTR_PERSISTENT => true], false, null];
 }
 
-echo "== 2. a connection per request ($n runs each) ==" . PHP_EOL;
+echo "== 2. a connection per request ($n runs each; the three reads are on " . $targets[0]["label"] . ") ==" . PHP_EOL;
 foreach ($series as $label => [$dsn, $pdo_options, $set_names, $through_db_open]) {
 	try {
 		for ($i = -$warmup; $i < $n; $i++) {
@@ -142,11 +200,11 @@ foreach ($series as $label => [$dsn, $pdo_options, $set_names, $through_db_open]
 			$st->fetch();
 			$st->closeCursor();
 			$st = $c->prepare("SELECT C.no_user_account, C.name, C.nfp_method FROM user_account AS C WHERE C.no_user_account = :id");
-			$st->execute(["id" => ACCOUNT_DEMO_ID_BILLINGS]);
+			$st->execute(["id" => $targets[0]["id"]]);
 			$st->fetch();
 			$st->closeCursor();
 			$st = $c->prepare("SELECT D.no_day, D.date_obs, D.stamp, D.comment FROM day_timeline AS D WHERE D.no_user_account = :id AND D.date_obs >= :start AND D.date_obs < :end ORDER BY D.date_obs, D.no_day");
-			$st->execute(["id" => ACCOUNT_DEMO_ID_BILLINGS, "start" => "2026-01-01", "end" => "2026-02-01"]);
+			$st->execute(["id" => $targets[0]["id"], "start" => $targets[0]["start"], "end" => $targets[0]["end"]]);
 			$st->fetchAll();
 			$st = null;
 			$t2 = hrtime(true);
@@ -168,13 +226,8 @@ foreach ($series as $label => [$dsn, $pdo_options, $set_names, $through_db_open]
 // ---------------------------------------------------------------------------
 
 echo "== 3. queries on an open connection ($n runs each) ==" . PHP_EOL;
-$reads = [
-	"round trip alone: SELECT 1",
-	"db_select_user_account_auth_token (miss)",
-	"db_select_user_account (demo)",
-	"db_select_day_timelines_range (a month)",
-	"db_select_all_day_timeline (demo, all days)",
-];
+$reads = ["round trip alone: SELECT 1", "db_select_user_account_auth_token (miss)"];
+$account_reads = ["db_select_user_account", "db_select_day_timelines_range (the last month)", "db_select_all_day_timeline (all days)"];
 $db = db_open();
 foreach ($reads as $label) {
 	for ($i = -$warmup; $i < $n; $i++) {
@@ -182,14 +235,26 @@ foreach ($reads as $label) {
 		match ($label) {
 			$reads[0] => db_value($db, "SELECT 1"),
 			$reads[1] => db_select_user_account_auth_token($db, str_repeat("0", 64)),
-			$reads[2] => db_select_user_account($db, ACCOUNT_DEMO_ID_BILLINGS),
-			$reads[3] => db_select_day_timelines_range($db, "2026-01-01", "2026-02-01", ACCOUNT_DEMO_ID_BILLINGS),
-			$reads[4] => db_select_all_day_timeline($db, ACCOUNT_DEMO_ID_BILLINGS),
 		};
 		if ($i >= 0) $results["query: $label"][] = (hrtime(true) - $t0) / 1000;
 	}
 }
-echo "  demo account " . ACCOUNT_DEMO_ID_BILLINGS . " holds " . db_value($db, "SELECT COUNT(D.no_day) FROM day_timeline AS D WHERE D.no_user_account = :id", ["id" => ACCOUNT_DEMO_ID_BILLINGS]) . " days" . PHP_EOL;
+$all_days_series = [];   // result key => number of days, for the cost per day
+foreach ($targets as $target) {
+	foreach ($account_reads as $label) {
+		$key = "query: $label | " . $target["label"];
+		if ($label === $account_reads[2]) $all_days_series[$key] = $target["days"];
+		for ($i = -$warmup; $i < $n; $i++) {
+			$t0 = hrtime(true);
+			match ($label) {
+				$account_reads[0] => db_select_user_account($db, $target["id"]),
+				$account_reads[1] => db_select_day_timelines_range($db, $target["start"], $target["end"], $target["id"]),
+				$account_reads[2] => db_select_all_day_timeline($db, $target["id"]),
+			};
+			if ($i >= 0) $results[$key][] = (hrtime(true) - $t0) / 1000;
+		}
+	}
+}
 $db = null;
 
 // ---------------------------------------------------------------------------
@@ -218,11 +283,21 @@ echo PHP_EOL;
 // The numbers
 // ---------------------------------------------------------------------------
 
-echo sprintf("%-62s %8s %8s %8s %8s %8s", "microseconds", "min", "median", "mean", "p95", "max") . PHP_EOL;
+echo sprintf("%-78s %8s %8s %8s %8s %8s", "microseconds", "min", "median", "mean", "p95", "max") . PHP_EOL;
 foreach ($results as $label => $samples) {
 	sort($samples);
 	$count = count($samples);
-	echo sprintf("%-62s %8.0f %8.0f %8.0f %8.0f %8.0f", $label, $samples[0], $samples[intdiv($count, 2)], array_sum($samples) / $count, $samples[intval(floor(0.95 * ($count - 1)))], $samples[$count - 1]) . PHP_EOL;
+	echo sprintf("%-78s %8.0f %8.0f %8.0f %8.0f %8.0f", $label, $samples[0], $samples[intdiv($count, 2)], array_sum($samples) / $count, $samples[intval(floor(0.95 * ($count - 1)))], $samples[$count - 1]) . PHP_EOL;
+}
+
+if ($all_days_series) {
+	echo PHP_EOL . "a read of all the days of an account, by its size (median):" . PHP_EOL;
+	foreach ($all_days_series as $key => $days) {
+		$samples = $results[$key];
+		sort($samples);
+		$median = $samples[intdiv(count($samples), 2)];
+		echo sprintf("  %-26s %6d days %9.0f us %7.1f us per day", substr($key, strrpos($key, "| ") + 2), $days, $median, $days > 0 ? $median / $days : 0) . PHP_EOL;
+	}
 }
 
 echo PHP_EOL . "Reading it: 'connect' is what opening the link costs every request; 'request' adds the three reads, so" . PHP_EOL;
