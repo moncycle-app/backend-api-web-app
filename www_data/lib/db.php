@@ -19,9 +19,25 @@
 // sent" flag to maintain: any real activity bumps last_activity (db_select_user_account_to_warn_before_deletion()
 // / _to_delete()) and drops the account out of both queries.
 
-function db_open() {
-	$db = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME, DB_ID, DB_PASSWORD);
-	$db->exec("SET NAMES utf8mb4;");
+// The DSN of the database. The charset is in it: PDO then knows it, and the server hears it in the handshake
+// (no SET NAMES round trip).
+function db_dsn(): string {
+	return "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+}
+
+// Opens the connection. In a web request it is persistent: the Apache worker keeps it after the answer and the
+// next request it serves takes it back, which saves the connect and the login (about 250 us of 650 a request,
+// measured by script/db_perf.php, which also checks what follows). The CLI (cron, scripts, tools) opens its own, as
+// it has nothing to save. $persistent forces one or the other (script/db_perf.php).
+//
+// Why it is safe: nothing in the app leaves a state on a connection (no SET, no GET_LOCK, no temporary table, no
+// autocommit change: db_perf.php scans the code for them); PDO checks that a kept connection is alive and opens
+// a new one if not (a MariaDB restart, wait_timeout); and a request that died inside db_transaction() leaves a
+// transaction open, whose locks the next request would inherit: it is rolled back here, before anything runs.
+// Each worker holds one connection: max_connections must cover the workers of every app container plus the cron.
+function db_open(?bool $persistent = null) {
+	$db = new PDO(db_dsn(), DB_ID, DB_PASSWORD, [PDO::ATTR_PERSISTENT => $persistent ?? PHP_SAPI !== "cli"]);
+	if ($db->inTransaction()) $db->exec("ROLLBACK");
 	return $db;
 }
 

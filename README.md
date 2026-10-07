@@ -52,6 +52,8 @@ Tested with:
 - **PHP 8.4**  
 - **MariaDB 11.1.3**  
 
+The web app keeps its database connection open between requests (one per Apache worker, 30 at most per container, see `MaxRequestWorkers` in `server_conf/zz-moncycleapp.conf`): MariaDB's `max_connections` (151 by default) must cover the workers of every app container plus the cron. `php script/db_perf.php` (command line, read-only) measures the link and checks that this is safe.
+
 ---
 
 ### API documentation
