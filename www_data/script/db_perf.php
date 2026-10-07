@@ -122,6 +122,7 @@ $day_counts = db_select_day_counts_by_account($db);   // the biggest first
 $sizes = array_map("intval", array_column($day_counts, "nb_days"));
 sort($sizes);
 if ($sizes) {
+<<<<<<< HEAD
 	$over_a_year = $over_1000_days = 0;
 	foreach ($sizes as $size) {
 		if ($size > 365) $over_a_year++;
@@ -130,6 +131,11 @@ if ($sizes) {
 	echo sprintf("days per account: %d accounts hold %d days in all; smallest %d days, median %d days, 90th percentile %d days, biggest %d days; %d accounts over 365 days, %d over 1000 days",
 		count($sizes), array_sum($sizes), $sizes[0], $sizes[intdiv(count($sizes), 2)], $sizes[intval(floor(0.9 * (count($sizes) - 1)))], end($sizes),
 		$over_a_year, $over_1000_days) . PHP_EOL;
+=======
+	echo sprintf("days per account: %d accounts hold %d days; smallest %d, median %d, 90th percentile %d, biggest %d; %d over 365 days, %d over 1000",
+		count($sizes), array_sum($sizes), $sizes[0], $sizes[intdiv(count($sizes), 2)], $sizes[intval(floor(0.9 * (count($sizes) - 1)))], end($sizes),
+		count(array_filter($sizes, fn($size) => $size > 365)), count(array_filter($sizes, fn($size) => $size > 1000))) . PHP_EOL;
+>>>>>>> 9394607147533d3cb1bbf4814c725d945c432534
 }
 
 echo "to look at:" . PHP_EOL;
