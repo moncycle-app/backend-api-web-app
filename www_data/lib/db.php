@@ -114,6 +114,23 @@ function db_transaction($db, callable $work) {
 	}
 }
 
+// Runs a script of several statements (the SQL files of script/db/). It is sent as it is, so it holds no
+// parameter, and every statement is checked: a failure in one after the first only shows when its result is read.
+function db_exec_script($db, string $sql): void {
+	$statement = $db->query($sql);
+	do {
+	} while ($statement->nextRowset());
+}
+
+// ---------------------------------------------------------------------------
+// The database itself
+// ---------------------------------------------------------------------------
+
+// How many tables the database holds (none: nothing has been made in it yet)
+function db_count_tables($db): int {
+	return intval(db_value($db, "SELECT COUNT(T.TABLE_NAME) FROM information_schema.TABLES AS T WHERE T.TABLE_SCHEMA = DATABASE()"));
+}
+
 // ---------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------

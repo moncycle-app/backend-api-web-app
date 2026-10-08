@@ -1,0 +1,3 @@
+# Added to moncycle.crontab by the entrypoint when DEMO_ENABLED is on: the demo accounts are put back as
+# script/db/demo.sql makes them, every hour on the hour (the container's time zone, TZ).
+0 * * * * cd /var/www/html/script && php demo_reset.php

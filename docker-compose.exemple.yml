@@ -22,6 +22,12 @@ services:
       SMTP_MAIL: smtp_email_and_mogin_id
       SMTP_PASSWORD_FILE: /run/secrets/smtp_password
       PHP_CACHE: 1
+      # The container runs the daily job (script/cron.php, 3:30 in TZ) itself. Set it to 'false' if you run the cron
+      # from the host instead: both would send every mail twice (README, "Security")
+      # CRON_ENABLED: 'true'
+      # The two public demo accounts (password "demo", README "Demo accounts"). Off by default; on, they can sign in
+      # and script/demo_reset.php loads script/db/demo.sql every hour, which puts them back as it makes them
+      # DEMO_ENABLED: 'false'
       # The reverse proxy in front, as the container sees it (an address or a CIDR range, comma separated): the
       # X-Forwarded-For of its requests is then the visitor's address, for the log and the login throttling. Left
       # empty, every visitor has the proxy's address (README, "What the reverse proxy in front must do").

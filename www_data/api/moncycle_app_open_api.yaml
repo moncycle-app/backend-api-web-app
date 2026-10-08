@@ -804,7 +804,7 @@ paths:
           description: |-
             `login_disabled` — this instance has logins turned off.
             `captcha_required` — send `captcha` with the answer from `GET /captcha`.
-            `account_disabled` — the account was deactivated by an administrator.
+            `account_disabled` — the account was deactivated by an administrator, or it is one of the two public demo accounts and this instance has them turned off (`DEMO_ENABLED`).
             `account_locked` — too many recent failures. Wait; it clears after 60 minutes with no new failure. With two-factor authentication on, it also refuses the right password and code.
             `cross_origin_refused` — a browser page of another origin sent this write (see section 3 of the introduction).
           content:

@@ -1,0 +1,4 @@
+# The daily job of the image (CRON_ENABLED, README "Security"), run by supercronic as the web user. Fields: minute
+# hour day-of-month month day-of-week. The hour is the container's time zone (TZ, UTC when it is not set).
+# script/cron.php opens its relative requires from its own directory.
+30 3 * * * cd /var/www/html/script && php cron.php

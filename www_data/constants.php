@@ -63,6 +63,7 @@ const CAPTCHA_HEIGHT = 60;
 const ACCOUNT_DEFAULT_LANGUAGE = "FR";    // user_account.language of a new account, until the user can choose
 // The two public demo accounts (script/db/demo.sql): never reminded, never warned, never erased, left out of the statistics (lib/db.php).
 // Whoever is logged in as one of them is not kept out of the sign-up (lib/sec.php, sec_session_is_demo()).
+// DEMO_ENABLED (config.php) decides whether they can sign in (sec_account_enabled()) and whether script/demo_reset.php (hourly) puts them back as demo.sql makes them.
 const ACCOUNT_DEMO_ID_BILLINGS = 2;
 const ACCOUNT_DEMO_ID_FERTILITYCARE = 3;
 const ACCOUNT_DEMO_IDS = [ACCOUNT_DEMO_ID_BILLINGS, ACCOUNT_DEMO_ID_FERTILITYCARE];
@@ -79,6 +80,15 @@ const AUTH_TOKEN_USER_AGENT_BYTES = 200;            // auth_token.name varchar(2
 const ACCOUNT_INACTIVITY_DELETE_YEARS = 4;
 // ... and gets a warning email this many days before that deletion.
 const ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE = 10;
+
+// ===========================================================================
+// DATABASE SCRIPTS -- the SQL files that make the database (lib/data.php)
+// ===========================================================================
+
+// The schema: loaded once, by script/db_init.php, into a database that has no table.
+const DB_SCRIPT_TABLES = __DIR__ . "/script/db/table.sql";
+// The two demo accounts and their days (dated from today): loaded by script/demo_reset.php every hour when DEMO_ENABLED.
+const DB_SCRIPT_DEMO = __DIR__ . "/script/db/demo.sql";
 
 // ===========================================================================
 // NFP METHODS -- what an account follows, and how it is stored and exposed

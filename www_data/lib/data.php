@@ -161,6 +161,31 @@ function data_delete_account($db, array $account, string $why): void {
 	log_event("account.deleted", ["uid" => $no_user_account, "why" => $why, "ndy" => $days, "nds" => $descriptions]);
 }
 
+// The text of one of the SQL files of script/db/ (DB_SCRIPT_TABLES, DB_SCRIPT_DEMO).
+function data_read_sql_file(string $path): string {
+	$sql = is_readable($path) ? file_get_contents($path) : false;
+	if ($sql === false || trim($sql) === "") throw new RuntimeException("The SQL file " . basename($path) . " cannot be read.");
+	return $sql;
+}
+
+// The first launch: a database with no table gets the schema (script/db/table.sql), and the demo accounts
+// (script/db/demo.sql) when DEMO_ENABLED. One that has tables is left as it is, whatever it holds. Answers whether the
+// schema was made. A schema is DDL, which MariaDB commits as it goes: it cannot be rolled back, and a failure after the
+// first table leaves a database that is no longer empty (script/demo_reset.php then loads the demo accounts at its next run).
+function data_init_database($db): bool {
+	if (db_count_tables($db) > 0) return false;
+	db_exec_script($db, data_read_sql_file(DB_SCRIPT_TABLES));
+	if (DEMO_ENABLED) data_reload_demo_accounts($db);
+	return true;
+}
+
+// The two public demo accounts back as script/db/demo.sql makes them, their days dated from today: what a visitor
+// wrote in them is gone, and so are their sessions (cascade). One transaction, so that nobody finds them half made.
+function data_reload_demo_accounts($db): void {
+	$sql = data_read_sql_file(DB_SCRIPT_DEMO);
+	db_transaction($db, fn() => db_exec_script($db, $sql));
+}
+
 // ---------------------------------------------------------------------------
 // Clearing a day, and changing a description a day carries
 // ---------------------------------------------------------------------------

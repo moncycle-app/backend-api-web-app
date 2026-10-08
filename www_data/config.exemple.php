@@ -26,6 +26,13 @@ define("SMTP_PASSWORD", "");
 define("REGISTRATION_ENABLED", false);
 define("LOGIN_ENABLED", false);
 
+// The two public demo accounts (ids 2 and 3, script/db/demo.sql; the sign-in page has a button for each, and their
+// password is "demo"). On: they can sign in, and script/demo_reset.php loads demo.sql every hour, which puts them back
+// as it makes them (what a visitor wrote in them is lost). Off: nobody can sign in to them, their sessions stop
+// working, and the cron leaves them alone. Off by default: an instance that is not the public one has no use for
+// an account whose password is published.
+define("DEMO_ENABLED", false);
+
 // Maintenance: every endpoint of the API answers 503 "maintenance" before it reads or writes anything (the
 // health check excepted: a container stuck "unhealthy" would be restarted), and script/cron.php refuses to run
 // (exit status 1, `system.cron_ended` with ok:false and msg "maintenance"). The migration scripts do not look at it:

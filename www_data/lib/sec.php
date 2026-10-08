@@ -92,7 +92,7 @@ function sec_auth_token($db) {
 	if (isset($head["Authorization"]) && str_contains($head["Authorization"], "Bearer ")) $auth_token = explode(' ', trim($head["Authorization"]), 2)[1];
 	if (strlen($auth_token) > 0) {
 		$user_account = db_select_user_account_auth_token($db, sec_hash_token($auth_token));
-		if (!is_null($user_account) && boolval($user_account["user_enabled"] ?? false)) {
+		if (!is_null($user_account) && sec_account_enabled($user_account)) {
 			db_update_auth_token_use($db, $user_account["no_auth_token"]);
 			log_context(["uid" => intval($user_account["no_user_account"]), "sid" => intval($user_account["no_auth_token"])]);
 			return $user_account;
@@ -115,6 +115,14 @@ function sec_exit_if_logged_out($user_account) {
 // no session to protect: register treats whoever holds one as a visitor, who can then sign up.
 function sec_session_is_demo(?array $user_account): bool {
 	return !is_null($user_account) && in_array(intval($user_account["no_user_account"] ?? 0), ACCOUNT_DEMO_IDS, true);
+}
+
+// May this account sign in, and does its session still count? Not when it is deactivated (user_enabled), nor when it is
+// one of the demo accounts and DEMO_ENABLED is off: their sessions then stop working at once, and their sign-in is
+// refused like a deactivated account's.
+function sec_account_enabled(array $user_account): bool {
+	if (!boolval($user_account["user_enabled"] ?? false)) return false;
+	return DEMO_ENABLED || !sec_session_is_demo($user_account);
 }
 
 function sec_redirect_if_logged_out($user_account) {
@@ -431,7 +439,7 @@ function sec_login($db, array $body): array {
 
 	if ($captcha_required && !sec_captcha_verify($db, $body["captcha"] ?? "")) return $counted(403, "captcha_required", "Missing or incorrect captcha.");
 
-	if (isset($user_account["user_enabled"]) && !boolval($user_account["user_enabled"])) return $counted(403, "account_disabled", "Account deactivated.");
+	if (isset($user_account["user_enabled"]) && !sec_account_enabled($user_account)) return $counted(403, "account_disabled", "Account deactivated.");
 
 	// an address with no account is checked against a hash nobody can match, for the time a check takes
 	$password_ok = password_verify($body["password"], $user_account["password"] ?? AUTH_DUMMY_PASSWORD_HASH) && isset($user_account["password"]);
