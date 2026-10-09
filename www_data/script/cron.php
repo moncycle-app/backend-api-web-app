@@ -44,6 +44,7 @@ $db = db_open();
 // THE EXPORT OF A CYCLE THAT ENDED, by mail: PDF, CSV and NFP (cycles of at least 5 days, accounts that
 // have not turned auto_mail_export off)
 
+$handled = $failed = 0;
 foreach (db_select_cycles_finished($db) as $account) {
 	log_context(["uid" => intval($account["no_user_account"])]);
 
@@ -53,6 +54,7 @@ foreach (db_select_cycles_finished($db) as $account) {
 	$days = doc_export_days($db, $cycle_start, $account["cycle_complet"], $account);
 	if (count($days) < 5) continue;
 
+	$handled++;
 	if ($dry_run) {
 		echo "[dry run] would send the cycle of " . count($days) . " days to {$account["email1"]} (and {$account["email2"]})." . PHP_EOL;
 		continue;
@@ -73,39 +75,51 @@ foreach (db_select_cycles_finished($db) as $account) {
 	);
 	fclose($csv);
 	log_cron_count($sent ? "sent" : "ko");
+	if (!$sent) $failed++;
 
 	echo ($sent ? "cycle of " . count($days) . " days sent to " : "COULD NOT send the cycle of " . count($days) . " days to ") . "{$account["email1"]} (and {$account["email2"]})." . PHP_EOL;
 }
+log_cron_step("cycle_mails", $handled, $failed);
 
 // A REMINDER TO THE ACCOUNTS THAT HAVE GONE QUIET
 
+$handled = $failed = 0;
 foreach (db_select_user_account_inactive($db) as $account) {
 	log_context(["uid" => intval($account["no_user_account"])]);
+	$handled++;
 	if ($dry_run) {
 		echo "[dry run] would send a reminder to {$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
 		continue;
 	}
 	$sent = mail_send_reminder($account);
 	log_cron_count($sent ? "sent" : "ko");
+	if (!$sent) $failed++;
 	if ($sent) db_update_is_inactive($db, $account["no_user_account"], 1);
 	echo ($sent ? "reminder sent to " : "COULD NOT send a reminder to ") . "{$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
 }
+log_cron_step("reminders", $handled, $failed);
 
 // RGPD: WARN, THEN DELETE, THE ACCOUNTS INACTIVE FOR ACCOUNT_INACTIVITY_DELETE_YEARS
 
+$handled = $failed = 0;
 foreach (db_select_user_account_to_warn_before_deletion($db, ACCOUNT_INACTIVITY_DELETE_YEARS, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE) as $account) {
 	log_context(["uid" => intval($account["no_user_account"])]);
+	$handled++;
 	if ($dry_run) {
 		echo "[dry run] would send a deletion warning to {$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
 		continue;
 	}
 	$sent = mail_send_deletion_warning($account, ACCOUNT_INACTIVITY_WARNING_DAYS_BEFORE);
 	log_cron_count($sent ? "sent" : "ko");
+	if (!$sent) $failed++;
 	echo ($sent ? "deletion warning sent to " : "COULD NOT send a deletion warning to ") . "{$account["email1"]} (and {$account["email2"]})" . PHP_EOL;
 }
+log_cron_step("deletion_warnings", $handled, $failed);
 
+$handled = 0;
 foreach (db_select_user_account_to_delete($db, ACCOUNT_INACTIVITY_DELETE_YEARS) as $account) {
 	log_context(["uid" => intval($account["no_user_account"])]);
+	$handled++;
 	if ($dry_run) {
 		echo "[dry run] would delete account {$account["email1"]} (" . ACCOUNT_INACTIVITY_DELETE_YEARS . " years without activity, RGPD)" . PHP_EOL;
 		continue;
@@ -114,32 +128,41 @@ foreach (db_select_user_account_to_delete($db, ACCOUNT_INACTIVITY_DELETE_YEARS) 
 	log_cron_count("del");
 	echo "account {$account["email1"]} deleted (" . ACCOUNT_INACTIVITY_DELETE_YEARS . " years without activity, RGPD)" . PHP_EOL;
 }
+log_cron_step("account_deletions", $handled);
 
 // EXPIRED TOKENS
 
 log_context(["uid" => null]);
 if ($dry_run) {
-	echo "[dry run] " . db_count_old_auth_token($db) . " old tokens would be deleted" . PHP_EOL;
-	echo "[dry run] " . db_count_old_login_attempt_ip($db) . " old login attempts (IP) would be deleted" . PHP_EOL;
+	$count = db_count_old_auth_token($db);
+	echo "[dry run] $count old tokens would be deleted" . PHP_EOL;
+	log_cron_step("tokens", $count);
+	$count = db_count_old_login_attempt_ip($db);
+	echo "[dry run] $count old login attempts (IP) would be deleted" . PHP_EOL;
+	log_cron_step("login_attempts", $count);
 }
 else {
 	$deleted = db_delete_old_auth_token($db);
 	log_cron_count("tok", $deleted);
 	echo $deleted . " old tokens deleted" . PHP_EOL;
+	log_cron_step("tokens", $deleted);
 	$deleted = db_delete_old_login_attempt_ip($db);
 	log_cron_count("ipa", $deleted);
 	echo $deleted . " old login attempts (IP) deleted" . PHP_EOL;
+	log_cron_step("login_attempts", $deleted);
 }
 
 // THE PUBLIC NUMBERS OF /api/pub_stat: counted here, once a day, and not on every visit
 
 if (!$dry_run) data_public_stats_store($db);
 echo ($dry_run ? "[dry run] public stats would be stored" : "public stats stored") . PHP_EOL;
+log_cron_step("public_stats");
 
 // THE VISIT COUNTERS: every day, every Sunday, the first of the month
 
 $reset = $dry_run ? "would be reset" : "reset";
 $today = getdate();
+$counters = 1;
 
 if (!$dry_run) db_update_reset_key_value($db, "pub_visit_daily");
 echo ($dry_run ? "[dry run] " : "") . "daily stats " . $reset;
@@ -147,13 +170,16 @@ echo ($dry_run ? "[dry run] " : "") . "daily stats " . $reset;
 if ($today["wday"] == 0) {
 	if (!$dry_run) db_update_reset_key_value($db, "pub_visit_weekly");
 	echo ", weekly stats " . $reset;
+	$counters++;
 }
 
 if ($today["mday"] == 1) {
 	if (!$dry_run) db_update_reset_key_value($db, "pub_visit_monthly");
 	echo ", monthly stats " . $reset;
+	$counters++;
 }
 
 echo PHP_EOL;
+log_cron_step("visit_counters", $counters);
 
 log_cron_end();

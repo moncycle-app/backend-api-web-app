@@ -334,6 +334,16 @@ function log_cron_count(string $counter, int $by = 1): void {
 	if (isset($state["cron"]["count"][$counter])) $state["cron"]["count"][$counter] += $by;
 }
 
+// `system.cron_step`: a step of the run is done, written even when it had nothing to do ($handled 0), so
+// that the lines between `system.cron_started` and `system.cron_ended` tell how far a run that died got.
+// $handled is what the step took care of (accounts, rows purged, counters reset), $failed the mails among
+// them that could not be sent; a dry run says what it would have done. The line belongs to no account.
+function log_cron_step(string $step, ?int $handled = null, ?int $failed = null): void {
+	$state = &log_state();
+	log_context(["uid" => null]);
+	log_event("system.cron_step", ["step" => $step, "dry" => $state["cron"]["dry"] ?? null, "n" => $handled, "ko" => $failed]);
+}
+
 // The run reached its end.
 function log_cron_end(): void {
 	log_cron_finish(true, null);

@@ -229,6 +229,7 @@ const LOG_EVENTS = [
 	"mail.failed" => "error",
 	"system.exception" => "error",
 	"system.cron_started" => "info",
+	"system.cron_step" => "info",
 	"system.cron_ended" => "info",     // "error" when the run did not reach its end
 	"system.log_sink_failed" => "error",
 	"http.request" => "info",

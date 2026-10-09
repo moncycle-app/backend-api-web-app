@@ -80,7 +80,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d
 ### Security
 
 - `script/` (cron, stats, migrations) answers only to the container itself: `APP_SCRIPT_ALLOW` (default `127.0.0.1 ::1`) is the list of IPs allowed in, everyone else gets a 403. Behind a reverse proxy Apache sees the proxy's address, not the caller's, so do not open it to an IP unless Apache gets the real client address.  
-- `script/cron.php` runs **once per day**. The Docker image does it: its entrypoint starts [supercronic](https://github.com/aptible/supercronic) as the web user, with the schedule of [server_conf/moncycle.crontab](server_conf/moncycle.crontab) (`30 3 * * *`, in the container's time zone, `TZ`), and its output goes to `docker logs`. `CRON_ENABLED=false` does not schedule it; **do that if you run it from the host** (below), or it runs twice a day and sends duplicate emails. Run by hand, from the host, through the container, **as the web user**: `docker exec -u www-data <container> php /var/www/html/script/cron.php`. It purges expired session tokens, the captchas nobody used and old login attempts, stores the numbers `/api/pub_stat` answers, sends the cycle mails, the reminders to accounts that went quiet and the deletion warnings, and **deletes the accounts that have been inactive for `ACCOUNT_INACTIVITY_DELETE_YEARS` years** (4, in [constants.php](www_data/constants.php); RGPD retention). Do not run it on a database you have not backed up (**`php /var/www/html/script/cron.php --dry-run`** reads and prints what a run would do, who would be mailed, which accounts and how many tokens would be deleted, and sends, deletes and writes nothing; any other argument is refused with exit status 2; it is off over HTTP). It fails in [maintenance mode](#maintenance-mode). The demo accounts have a job of their own, every hour (see [Demo accounts](#demo-accounts)). As `www-data`, because `docker exec` runs as root otherwise, and a log file that root created first cannot be appended to by the web server (see [Logs](#logs)):  
+- `script/cron.php` runs **once per day**. The Docker image does it: its entrypoint starts [supercronic](https://github.com/aptible/supercronic) as the web user, with the schedule of [server_conf/moncycle.crontab](server_conf/moncycle.crontab) (`30 3 * * *`, in the container's time zone, `TZ`), and its output goes to `docker logs`, with the app's own lines for the run: `system.cron_started`, one `system.cron_step` per step, `system.cron_ended` with its counters and `ok` (see [Logs](#logs)). `CRON_ENABLED=false` does not schedule it; **do that if you run it from the host** (below), or it runs twice a day and sends duplicate emails. Run by hand, from the host, through the container, **as the web user**: `docker exec -u www-data <container> php /var/www/html/script/cron.php`. It purges expired session tokens, the captchas nobody used and old login attempts, stores the numbers `/api/pub_stat` answers, sends the cycle mails, the reminders to accounts that went quiet and the deletion warnings, and **deletes the accounts that have been inactive for `ACCOUNT_INACTIVITY_DELETE_YEARS` years** (4, in [constants.php](www_data/constants.php); RGPD retention). Do not run it on a database you have not backed up (**`php /var/www/html/script/cron.php --dry-run`** reads and prints what a run would do, who would be mailed, which accounts and how many tokens would be deleted, and sends, deletes and writes nothing; any other argument is refused with exit status 2; it is off over HTTP). It fails in [maintenance mode](#maintenance-mode). The demo accounts have a job of their own, every hour (see [Demo accounts](#demo-accounts)). As `www-data`, because `docker exec` runs as root otherwise, and a log file that root created first cannot be appended to by the web server (see [Logs](#logs)):  
   - More than once per day → may send duplicate emails.  
   - Less than once per day → expired tokens may not be deleted on time, causing missed emails.  
   - Through the CLI it has no time limit (`max_execution_time` is 30 s over HTTP, which can cut it short with many accounts).  
@@ -265,7 +265,7 @@ Every key the code can write. The first block is on every line.
 | `dt` | The `date_obs` of a day. |
 | `new` | The row was created by this write. |
 | `dsc` | Description id (`no_description`), or the ids of the descriptions a day save created. |
-| `dry` | The import, or the cron run, was a dry run (the cron's lines carry it only when it is). |
+| `dry` | The import, or the cron run, was a dry run (the cron's lines carry it only when it is): the counts of a step are then what it would do. |
 | `ovr` | The import was allowed to overwrite days (`override`). |
 | `rd` | Days the import file holds. |
 | `cr` | Days the import created (or would). |
@@ -282,10 +282,11 @@ Every key the code can write. The first block is on every line.
 | `cls` | Class of an exception. |
 | `sql` | SQLSTATE of a database exception. |
 | `at` | Where an exception was thrown, `file:line`. |
+| `step` | Which step of a cron run is done: `cycle_mails`, `reminders`, `deletion_warnings`, `account_deletions`, `tokens`, `login_attempts`, `public_stats`, `visit_counters`, in the order the run takes them. |
 | `ok` | The cron run reached its end. |
 | `ms` | Duration in milliseconds. |
 | `sent` | Mails the cron run sent. |
-| `ko` | Mails the cron run could not send. |
+| `ko` | Mails the cron run, or one of its steps, could not send. |
 | `del` | Accounts the cron run deleted. |
 | `tok` | Session tokens the cron run purged. |
 | `ipa` | Login attempts (IP) the cron run purged. |
@@ -293,7 +294,7 @@ Every key the code can write. The first block is on every line.
 | `m` | HTTP method. |
 | `p` | URL path, never the query string. |
 | `st` | HTTP status. |
-| `n` | Rows a read returned (days, descriptions). |
+| `n` | Rows a read returned (days, descriptions); for `system.cron_step`, what the step took care of (accounts mailed or deleted, rows purged, counters reset). |
 | `full` | The read was the whole history. |
 | `cut` | The line was shortened to fit. |
 
@@ -328,7 +329,8 @@ Every key the code can write. The first block is on every line.
 | `mail.failed` | error | `kind`, `to`, `msg` | |
 | `system.exception` | error | `cls`, `sql`, `at`, `msg` | An uncaught exception (the client gets a 500 `unexpected_error`). A database exception has `sql` and no `msg`. |
 | `system.cron_started` | info | `dry` | |
-| `system.cron_ended` | info, **error** if it failed | `ok`, `dry`, `ms`, `sent`, `ko`, `del`, `tok`, `ipa`, `msg` | `ok:false` when the run died before its end (uncaught exception, fatal error, timeout), or was refused: `msg` is `maintenance` when `MAINTENANCE_MODE` is on and nothing was done. The counters are what had been done by then, so all 0 for a dry run. A mail that could not be sent is `ko` and a `mail.failed` line, and the run is still `ok:true`. |
+| `system.cron_step` | info | `step`, `dry`, `n`, `ko` | One line when each step of the daily cron is done, even when it had nothing to do (`n` 0): the lines between `system.cron_started` and `system.cron_ended` say how far a run that died got, and the step after the last one is the one that failed. `ko` is on the three mail steps (`cycle_mails`, `reminders`, `deletion_warnings`); `public_stats` has no `n`. |
+| `system.cron_ended` | info, **error** if it failed | `ok`, `dry`, `ms`, `sent`, `ko`, `del`, `tok`, `ipa`, `msg` | `ok:false` when the run died before its end (uncaught exception, fatal error, timeout), or was refused: `msg` is `maintenance` when `MAINTENANCE_MODE` is on and nothing was done. The counters are what had been done by then, so all 0 for a dry run. A mail that could not be sent is `ko` and a `mail.failed` line, and the run is still `ok:true`. The steps in between are the `system.cron_step` lines. |
 | `system.log_sink_failed` | error | `f`, `why` | The log file could not be opened or written; the lines go to `stdout`. At most once per request. |
 | `http.request` | info | `m`, `p`, `st`, `ms`, `err`, `n`, `full` | The end of every request that reached the app. A read is this line with a `GET`, the `uid`, the path and `n` / `full`: `full` is true for `GET /api/day` with no filter and `GET /api/sync` from the start. |
 
